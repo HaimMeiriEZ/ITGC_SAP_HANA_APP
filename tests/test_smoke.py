@@ -6,6 +6,7 @@ from openpyxl import Workbook, load_workbook
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
+from src.models.validation_result import ValidationIssue, ValidationResult
 from src.pipeline import process_file
 from src.ui.desktop_app import ValidationDesktopApp, get_qt_app
 from src.validators.engine import ValidationEngine
@@ -79,6 +80,46 @@ class TestSmoke(unittest.TestCase):
             self.assertEqual(workbook["שגיאות"]["B2"].value, "email")
             self.assertEqual(workbook["שגיאות"]["C2"].value, "ערך חובה חסר")
 
+    def test_process_file_accepts_multiple_files_for_slot(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            first_path = Path(temp_dir) / "usr02_part1.txt"
+            second_path = Path(temp_dir) / "usr02_part2.txt"
+            first_path.write_text("BNAME;UFLAG;TRDAT;LTIME\nUSER_A;0;20260101;080000\n", encoding="utf-8")
+            second_path.write_text("BNAME;UFLAG;TRDAT;LTIME\nUSER_B;0;20260102;090000\n", encoding="utf-8")
+
+            result = process_file(
+                [first_path, second_path],
+                required_columns=["BNAME", "UFLAG"],
+                source_name_override="USR02",
+            )
+
+            self.assertEqual(result.summary.total_rows, 2)
+            self.assertTrue(result.summary.is_valid)
+            self.assertEqual(sorted(result.source_files), sorted([first_path.name, second_path.name]))
+
+    def test_sap_usr02_export_with_metadata_and_hash_is_parsed(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "usr02.txt"
+            output_dir = Path(temp_dir) / "output"
+            input_path.write_text(
+                "Table:\t\t\tUSR02\n"
+                "Displayed Fields:\t\t\t44\tof\t44\n\n"
+                "\tMANDT\tBNAME\tUFLAG\tTRDAT\tLTIME\tPWDSALTEDHASH\n"
+                "\t100\tAROMI\t0\t17.11.2025\t11:10:44\t{x-isSHA512, 15000}ABCDEF\n",
+                encoding="utf-8",
+            )
+
+            result = process_file(
+                input_path,
+                required_columns=["BNAME", "UFLAG", "TRDAT", "LTIME"],
+                output_dir=output_dir,
+                source_name_override="USR02",
+            )
+
+            self.assertEqual(result.summary.total_rows, 1)
+            self.assertIsNotNone(result.report_path)
+            self.assertTrue(result.report_path.exists())
+
     def test_desktop_gui_initializes_with_hebrew_labels(self) -> None:
         qt_app = get_qt_app()
         self.assertIsInstance(qt_app, QApplication)
@@ -86,14 +127,62 @@ class TestSmoke(unittest.TestCase):
         window = ValidationDesktopApp()
         try:
             self.assertEqual(window.run_button.text(), "הרץ בדיקה")
-            self.assertEqual(window.select_button.text(), "בחירת קובץ")
             self.assertEqual(window.summary_labels["status"].text(), "ממתין להרצה")
-            self.assertEqual(window.source_group.title(), "קובץ ופרמטרים")
+            self.assertEqual(window.slots_group.title(), "מקורות קלט לבדיקת SAP HANA APP")
             self.assertEqual(window.summary_group.title(), "סיכום בדיקה")
             self.assertEqual(window.results_group.title(), "רשימת שגיאות")
-            self.assertTrue(window.source_group.alignment() & Qt.AlignRight)
+            self.assertTrue(window.slots_group.alignment() & Qt.AlignRight)
             self.assertTrue(window.summary_group.alignment() & Qt.AlignRight)
             self.assertTrue(window.results_group.alignment() & Qt.AlignRight)
+            self.assertIn("USR02", window.slot_widgets)
+            self.assertIn("AGR_USERS", window.slot_widgets)
+            self.assertIn("RSPARAM", window.slot_widgets)
+        finally:
+            window.close()
+
+    def test_slot_controls_are_visibly_rendered(self) -> None:
+        qt_app = get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            window.show()
+            qt_app.processEvents()
+            self.assertGreater(window.slot_widgets["USR02"]["button"].height(), 20)
+            self.assertGreater(window.slot_widgets["USR02"]["path_label"].height(), 20)
+            self.assertGreater(
+                window.slots_scroll.widget().minimumSizeHint().height(),
+                window.slots_scroll.viewport().height(),
+            )
+        finally:
+            window.close()
+
+    def test_run_log_is_recorded_per_file_and_exposes_details(self) -> None:
+        window = ValidationDesktopApp()
+        try:
+            result = ValidationResult(
+                rows=[
+                    {"BNAME": "USER_A", "__source_file": "usr02_a.txt"},
+                    {"BNAME": "USER_B", "__source_file": "usr02_b.txt"},
+                ],
+                issues=[
+                    ValidationIssue(
+                        row_number=1,
+                        column_name="BNAME",
+                        message="ערך חריג",
+                        source_file="usr02_a.txt",
+                    )
+                ],
+                source_files=["usr02_a.txt", "usr02_b.txt"],
+            )
+
+            window._append_run_log_entries("USR02", ["C:/temp/usr02_a.txt", "C:/temp/usr02_b.txt"], result)
+
+            self.assertEqual(window.run_log_table.rowCount(), 2)
+            self.assertEqual(window.run_log_table.item(0, 0).text(), "USR02")
+            self.assertEqual(window.run_log_table.item(0, 2).text(), "שגוי")
+            self.assertEqual(window.run_log_table.item(1, 2).text(), "תקין")
+            details = window._build_log_details(0)
+            self.assertIn("usr02_a.txt", details)
+            self.assertIn("ערך חריג", details)
         finally:
             window.close()
 
@@ -104,6 +193,66 @@ class TestSmoke(unittest.TestCase):
         self.assertNotIn("\u2066", value)
         self.assertNotIn("\u2067", value)
         self.assertNotIn("\u2069", value)
+
+    def test_hana_app_slot_catalog_contains_expected_sources(self) -> None:
+        self.assertEqual(ValidationDesktopApp.SLOT_DEFINITIONS["USR02"]["category"], "טבלאות משתמשים")
+        self.assertEqual(ValidationDesktopApp.SLOT_DEFINITIONS["AGR_USERS"]["category"], "טבלאות הרשאות כלליות")
+        self.assertEqual(ValidationDesktopApp.SLOT_DEFINITIONS["E070"]["category"], "טבלאות שינויים")
+        self.assertEqual(ValidationDesktopApp.SLOT_DEFINITIONS["RSPARAM"]["category"], "מדיניות סיסמאות")
+        self.assertIn("משתמשים", ValidationDesktopApp.SLOT_DEFINITIONS["USR02"]["description"])
+
+    def test_password_policy_profile_detects_security_gaps(self) -> None:
+        rows = [
+            {"PROPERTY": "minimal_password_length", "VALUE": "6"},
+            {"PROPERTY": "force_first_password_change", "VALUE": "FALSE"},
+            {"PROPERTY": "maximum_invalid_connect_attempts", "VALUE": "10"},
+        ]
+
+        result = ValidationEngine().validate(rows, source_name="password_policy.csv")
+        messages = {issue.message for issue in result.issues}
+
+        self.assertIn("אורך סיסמה מינימלי חייב להיות לפחות 8", messages)
+        self.assertIn("חובת החלפת סיסמה ראשונית חייבת להיות פעילה", messages)
+        self.assertIn("מספר ניסיונות התחברות שגויים חייב להיות מוגבל", messages)
+
+    def test_audit_policies_profile_requires_active_policy(self) -> None:
+        rows = [
+            {"AUDIT_POLICY_NAME": "USER_CHANGES", "IS_AUDIT_POLICY_ACTIVE": "FALSE"},
+        ]
+
+        result = ValidationEngine().validate(rows, source_name="audit_policies.csv")
+
+        self.assertFalse(result.summary.is_valid)
+        self.assertTrue(any(issue.message == "לפחות מדיניות Audit אחת חייבת להיות פעילה" for issue in result.issues))
+
+    def test_users_profile_requires_last_login_field(self) -> None:
+        rows = [
+            {"USER_NAME": "DANA"},
+        ]
+
+        result = ValidationEngine().validate(rows, source_name="users_export.csv")
+
+        self.assertFalse(result.summary.is_valid)
+        self.assertTrue(any(issue.message == "נדרשת לפחות אחת מהעמודות: LAST_SUCCESSFUL_CONNECT / LAST_SUCCESSFUL_CONNECT_DATE" for issue in result.issues))
+
+    def test_adr6_usr21_slot_accepts_adr6_only_structure(self) -> None:
+        rows = [
+            {"ADDRNUMBER": "1001", "PERSNUMBER": "2001", "SMTP_ADDR": "user@example.com"},
+        ]
+
+        result = ValidationEngine().validate(rows, source_name="ADR6_USR21")
+
+        self.assertFalse(any(issue.column_name == "BNAME" and issue.message == "עמודת חובה חסרה" for issue in result.issues))
+
+    def test_usr02_slot_blocks_wrong_rsparam_structure(self) -> None:
+        rows = [
+            {"PARAMETER": "login/min_password_lng", "VALUE": "8"},
+        ]
+
+        result = ValidationEngine().validate(rows, source_name="USR02")
+
+        self.assertFalse(result.summary.is_valid)
+        self.assertTrue(any("אינו תואם למבנה המצופה עבור הסלוט USR02" in issue.message for issue in result.issues))
 
 
 if __name__ == "__main__":

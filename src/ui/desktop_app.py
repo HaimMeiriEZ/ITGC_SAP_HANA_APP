@@ -2,23 +2,29 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QDialog,
+    QDialogButtonBox,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
     QHeaderView,
@@ -41,14 +47,104 @@ def get_qt_app() -> QApplication:
 
 
 class ValidationDesktopApp(QMainWindow):
+    MULTI_FILE_SLOTS = {
+        "USR02",
+        "ADR6_USR21",
+        "AGR_USERS",
+        "AGR_1251",
+        "AGR_1252",
+        "AGR_DEFINE",
+        "UST04",
+        "E070",
+        "STMS",
+    }
+
+    SLOT_DEFINITIONS = {
+        "USR02": {
+            "category": "טבלאות משתמשים",
+            "description": "משתמשים - מקור חובה לבדיקות גישה, סטטוס ותאריכי התחברות.",
+            "expected_file": "usr02_100.txt",
+            "required": True,
+        },
+        "ADR6_USR21": {
+            "label": "ADR6 / USR21",
+            "category": "טבלאות משתמשים",
+            "description": "ניתן להזין קובצי ADR6 או קובצי USR21 או את שניהם יחד לצורך הצלבת פרטי משתמש ואימייל.",
+            "expected_file": "adr6.txt או usr21.txt",
+            "required": False,
+        },
+        "AGR_USERS": {
+            "category": "טבלאות הרשאות כלליות",
+            "description": "רולים-משתמשים - מיפוי המשתמשים לרולים במערכת.",
+            "expected_file": "agr_users_100.txt",
+            "required": True,
+        },
+        "AGR_1251": {
+            "category": "טבלאות הרשאות כלליות",
+            "description": "רולים-אובייקטי הרשאה - זיהוי אובייקטי הרשאות רגישים.",
+            "expected_file": "agr_1251_100.txt",
+            "required": True,
+        },
+        "AGR_1252": {
+            "category": "טבלאות הרשאות כלליות",
+            "description": "רולים-טרנזקציות - זיהוי גישות עסקיות וטרנזקציות.",
+            "expected_file": "agr_1252_100.txt",
+            "required": False,
+        },
+        "AGR_DEFINE": {
+            "category": "טבלאות הרשאות כלליות",
+            "description": "רולים מורחב - מידע כללי על הגדרת הרול.",
+            "expected_file": "agr_define.txt",
+            "required": False,
+        },
+        "UST04": {
+            "category": "טבלאות הרשאות כלליות",
+            "description": "פרופילים-משתמשים - שיוך פרופילים ישיר למשתמשים.",
+            "expected_file": "ust04.txt",
+            "required": False,
+        },
+        "E070": {
+            "category": "טבלאות שינויים",
+            "description": "רשימת שינויים - נתוני transport requests ושינויים בסביבה.",
+            "expected_file": "e070_100.txt",
+            "required": True,
+        },
+        "T000": {
+            "category": "טבלאות שינויים",
+            "description": "לוג פעילות שינוי SCC4 - בקרות שינוי ברמת client.",
+            "expected_file": "t000.txt",
+            "required": False,
+        },
+        "STMS": {
+            "category": "טבלאות שינויים",
+            "description": "רשימת שינויים שהועברה דרך SCC4 או STMS.",
+            "expected_file": "stms.txt",
+            "required": False,
+        },
+        "RSPARAM": {
+            "category": "מדיניות סיסמאות",
+            "description": "פרמטרים סיסטמאיים - פרמטרי אבטחה והקשחת מערכת.",
+            "expected_file": "rsparam.xlsx",
+            "required": True,
+        },
+        "TPFET": {
+            "category": "מדיניות סיסמאות",
+            "description": "פרמטרים סיסטמאיים נוספים, כולל פרופילי login כגון RZ10.",
+            "expected_file": "rz10.txt",
+            "required": False,
+        },
+    }
+
     def __init__(self, base_dir: Path | None = None) -> None:
         super().__init__()
         self.config = AppConfig.default(base_dir or Path.cwd())
         self.config.input_dir.mkdir(parents=True, exist_ok=True)
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         self.report_path: Path | None = None
-
+        self.slot_widgets: dict[str, dict[str, object]] = {}
+        self.selected_slot_key: str | None = None
         self.summary_labels: dict[str, QLabel] = {}
+        self.run_log_records: list[dict[str, object]] = []
 
         self._configure_window()
         self._build_ui()
@@ -59,30 +155,37 @@ class ValidationDesktopApp(QMainWindow):
         return re.sub(r"[\u2066\u2067\u2068\u2069\u200e\u200f]", "", raw_text)
 
     def _configure_window(self) -> None:
-        self.setWindowTitle(self.format_rtl_text("מערכת בדיקות קבצים - ITGC"))
-        self.setMinimumSize(980, 680)
-        self.resize(1100, 760)
+        self.setWindowTitle(self.format_rtl_text("מערכת בדיקות SAP HANA APP - ITGC"))
+        self.setMinimumSize(1180, 760)
+        self.resize(1280, 860)
         self.setLayoutDirection(Qt.RightToLeft)
 
     def _build_ui(self) -> None:
+        self.page_scroll = QScrollArea()
+        self.page_scroll.setWidgetResizable(True)
+        self.page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setCentralWidget(self.page_scroll)
+
         central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        self.page_scroll.setWidget(central_widget)
 
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(12)
 
-        header_label = QLabel(self.format_rtl_text("מסך בדיקת קבצי TXT ו-Excel"))
+        header_label = QLabel(self.format_rtl_text("מסך בדיקת קלטי SAP HANA APP"))
         header_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         header_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #16325c;")
         main_layout.addWidget(header_label)
 
+        hint_label = QLabel("בחר קבצים לפי הסלוט המתאים. כוכבית מציינת סלוט חובה. בחלק מהסלוטים ניתן לבחור כמה קבצים יחד לצורך בדיקה מאוחדת.")
+        hint_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        hint_label.setWordWrap(True)
+        hint_label.setStyleSheet("color: #4f5d73;")
+        main_layout.addWidget(hint_label)
+
         buttons_layout = QHBoxLayout()
         buttons_layout.setSpacing(8)
-
-        self.select_button = QPushButton("בחירת קובץ")
-        self.select_button.clicked.connect(self.choose_file)
-        buttons_layout.addWidget(self.select_button)
 
         self.run_button = QPushButton("הרץ בדיקה")
         self.run_button.clicked.connect(self.run_validation)
@@ -101,28 +204,128 @@ class ValidationDesktopApp(QMainWindow):
         self.clear_button.clicked.connect(self.clear_results)
         buttons_layout.addWidget(self.clear_button)
 
+        buttons_layout.addStretch()
         main_layout.addLayout(buttons_layout)
 
-        self.source_group = QGroupBox("קובץ ופרמטרים")
-        self.source_group.setAlignment(Qt.AlignRight)
-        source_layout = QGridLayout(self.source_group)
-        source_layout.setContentsMargins(12, 18, 12, 12)
-        source_layout.setHorizontalSpacing(10)
-        source_layout.setVerticalSpacing(10)
+        self.slots_group = QGroupBox("מקורות קלט לבדיקת SAP HANA APP")
+        self.slots_group.setAlignment(Qt.AlignRight)
+        slots_group_layout = QVBoxLayout(self.slots_group)
+        slots_group_layout.setContentsMargins(8, 18, 8, 8)
 
-        source_layout.addWidget(QLabel("נתיב הקובץ הנבחר:"), 0, 1)
-        self.file_display_label = QLabel("טרם נבחר קובץ")
-        self.file_display_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.file_display_label.setWordWrap(True)
-        self.file_display_label.setStyleSheet("padding: 6px; background: #ffffff; border: 1px solid #cfd6e4;")
-        source_layout.addWidget(self.file_display_label, 0, 0)
+        self.slots_scroll = QScrollArea()
+        self.slots_scroll.setWidgetResizable(True)
+        self.slots_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.slots_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.slots_scroll.setMinimumHeight(520)
+        self.slots_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        source_layout.addWidget(QLabel("עמודות חובה:"), 1, 1)
-        self.required_columns_edit = QLineEdit("user_id,name,email")
+        slots_container = QWidget()
+        slots_layout = QGridLayout(slots_container)
+        slots_layout.setContentsMargins(12, 12, 12, 12)
+        slots_layout.setHorizontalSpacing(12)
+        slots_layout.setVerticalSpacing(10)
+        slots_layout.setColumnStretch(0, 0)
+        slots_layout.setColumnStretch(1, 0)
+        slots_layout.setColumnStretch(2, 1)
+        slots_layout.setColumnStretch(3, 0)
+
+        current_row = 0
+        for category in self._ordered_categories():
+            category_label = QLabel(category)
+            category_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            category_label.setStyleSheet("font-weight: bold; color: #16325c; margin-top: 8px;")
+            slots_layout.addWidget(category_label, current_row, 0, 1, 4)
+            current_row += 1
+
+            for slot_key, metadata in self.SLOT_DEFINITIONS.items():
+                if metadata["category"] != category:
+                    continue
+
+                display_name = metadata.get("label", slot_key)
+                slot_title = QLabel(f"{display_name}{' *' if metadata['required'] else ''}")
+                slot_title.setAlignment(Qt.AlignRight | Qt.AlignTop)
+                slot_title.setStyleSheet("font-weight: bold;")
+                slot_title.setMinimumWidth(110)
+
+                description = QLabel(metadata["description"])
+                description.setAlignment(Qt.AlignRight | Qt.AlignTop)
+                description.setWordWrap(True)
+                description.setMinimumHeight(34)
+                description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+                sample = QLabel(f"קובץ צפוי: {metadata['expected_file']}")
+                sample.setAlignment(Qt.AlignRight | Qt.AlignTop)
+                sample.setStyleSheet("color: #5b6573;")
+                sample.setMinimumWidth(180)
+
+                status_label = QLabel("טרם נבחר קובץ")
+                status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                status_label.setWordWrap(True)
+                status_label.setMinimumHeight(32)
+                status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                status_label.setStyleSheet("padding: 6px; background: #ffffff; border: 1px solid #cfd6e4;")
+
+                select_button = QPushButton("בחירת קבצים" if slot_key in self.MULTI_FILE_SLOTS else "בחירת קובץ")
+                select_button.setMinimumHeight(34)
+                select_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+                select_button.clicked.connect(lambda _checked=False, sk=slot_key: self.choose_file(sk))
+
+                slots_layout.setRowMinimumHeight(current_row, 42)
+                slots_layout.addWidget(slot_title, current_row, 3)
+                slots_layout.addWidget(description, current_row, 2)
+                slots_layout.addWidget(sample, current_row, 1)
+                slots_layout.addWidget(select_button, current_row, 0)
+                current_row += 1
+                slots_layout.setRowMinimumHeight(current_row, 36)
+                slots_layout.addWidget(status_label, current_row, 0, 1, 4)
+                current_row += 1
+
+                self.slot_widgets[slot_key] = {
+                    "path_label": status_label,
+                    "button": select_button,
+                    "metadata": metadata,
+                    "selected_paths": [],
+                }
+
+        bottom_spacer = QLabel("")
+        bottom_spacer.setMinimumHeight(120)
+        slots_layout.addWidget(bottom_spacer, current_row, 0, 1, 4)
+        current_row += 1
+        slots_layout.setRowStretch(current_row, 1)
+        slots_layout.setRowMinimumHeight(current_row, 20)
+        self.slots_scroll.setWidget(slots_container)
+        slots_group_layout.addWidget(self.slots_scroll)
+
+        main_layout.addWidget(self.slots_group)
+
+        self.run_log_group = QGroupBox("לוג קבצים שנבדקו")
+        self.run_log_group.setAlignment(Qt.AlignRight)
+        run_log_layout = QVBoxLayout(self.run_log_group)
+        run_log_layout.setContentsMargins(12, 18, 12, 12)
+        self.run_log_table = QTableWidget(0, 5)
+        self.run_log_table.setHorizontalHeaderLabels(["סלוט", "קובץ", "סטטוס", "מספר שגיאות", "שעת בדיקה"])
+        self.run_log_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.run_log_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.run_log_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.run_log_table.setAlternatingRowColors(True)
+        self.run_log_table.setMinimumHeight(160)
+        self.run_log_table.setToolTip("לחיצה על שורה שגויה תפתח פירוט שגיאות")
+        self.run_log_table.cellClicked.connect(self.show_log_details)
+        run_log_layout.addWidget(self.run_log_table)
+        main_layout.addWidget(self.run_log_group)
+
+        self.required_columns_group = QGroupBox("עמודות חובה לבדיקה")
+        self.required_columns_group.setAlignment(Qt.AlignRight)
+        required_layout = QHBoxLayout(self.required_columns_group)
+        self.required_columns_edit = QLineEdit("")
         self.required_columns_edit.setAlignment(Qt.AlignRight)
-        source_layout.addWidget(self.required_columns_edit, 1, 0)
-
-        main_layout.addWidget(self.source_group)
+        self.required_columns_edit.setPlaceholderText("יוזן אוטומטית לפי הסלוט שנבחר")
+        required_layout.addWidget(self.required_columns_edit)
+        main_layout.addWidget(self.required_columns_group)
 
         self.summary_group = QGroupBox("סיכום בדיקה")
         self.summary_group.setAlignment(Qt.AlignRight)
@@ -146,14 +349,12 @@ class ValidationDesktopApp(QMainWindow):
             summary_layout.addWidget(title_label, 0, column)
             summary_layout.addWidget(value_label, 1, column)
             self.summary_labels[key] = value_label
-
         main_layout.addWidget(self.summary_group)
 
         self.results_group = QGroupBox("רשימת שגיאות")
         self.results_group.setAlignment(Qt.AlignRight)
         results_layout = QVBoxLayout(self.results_group)
         results_layout.setContentsMargins(12, 18, 12, 12)
-        results_layout.setSpacing(10)
         self.issues_table = QTableWidget(0, 3)
         self.issues_table.setHorizontalHeaderLabels(["מספר שורה", "שם עמודה", "הודעת שגיאה"])
         self.issues_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -163,7 +364,7 @@ class ValidationDesktopApp(QMainWindow):
         self.issues_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.issues_table.setAlternatingRowColors(True)
         results_layout.addWidget(self.issues_table)
-
+        self.issues_table.setMinimumHeight(180)
         main_layout.addWidget(self.results_group)
 
         central_widget.setStyleSheet(
@@ -194,6 +395,7 @@ class ValidationDesktopApp(QMainWindow):
                 border-radius: 6px;
                 padding: 8px 14px;
                 font-weight: bold;
+                min-width: 120px;
             }
             QPushButton:hover {
                 background-color: #dbe7f8;
@@ -211,35 +413,88 @@ class ValidationDesktopApp(QMainWindow):
             """
         )
 
-    def choose_file(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "בחירת קובץ לבדיקה",
-            str(self.config.input_dir),
-            "Supported files (*.txt *.csv *.xlsx *.xlsm);;All files (*.*)",
-        )
-        if file_path:
-            self.file_display_label.setText(self.format_rtl_text(file_path))
+    def _ordered_categories(self) -> list[str]:
+        categories: list[str] = []
+        for metadata in self.SLOT_DEFINITIONS.values():
+            if metadata["category"] not in categories:
+                categories.append(metadata["category"])
+        return categories
+
+    def choose_file(self, slot_key: str) -> None:
+        if slot_key in self.MULTI_FILE_SLOTS:
+            file_paths, _ = QFileDialog.getOpenFileNames(
+                self,
+                f"בחירת קבצים עבור {slot_key}",
+                str(self.config.input_dir),
+                "Supported files (*.txt *.csv *.xlsx *.xlsm);;All files (*.*)",
+            )
+        else:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                f"בחירת קובץ עבור {slot_key}",
+                str(self.config.input_dir),
+                "Supported files (*.txt *.csv *.xlsx *.xlsm);;All files (*.*)",
+            )
+            file_paths = [file_path] if file_path else []
+
+        if file_paths:
+            self.selected_slot_key = slot_key
+            self.slot_widgets[slot_key]["selected_paths"] = file_paths
+            self.slot_widgets[slot_key]["path_label"].setText(self._format_selected_files(file_paths))
+            self.required_columns_edit.setText(self._suggest_required_columns(slot_key))
 
     def _parse_required_columns(self) -> list[str]:
         raw_value = self.required_columns_edit.text().replace(";", ",").replace("\n", ",")
         return [item.strip() for item in raw_value.split(",") if item.strip()]
 
-    def _current_file_path(self) -> str:
-        displayed = self.file_display_label.text().strip()
-        return "" if displayed == "טרם נבחר קובץ" else displayed
+    def _current_file_paths(self) -> list[str]:
+        if not self.selected_slot_key:
+            return []
+        return list(self.slot_widgets[self.selected_slot_key].get("selected_paths", []))
+
+    def _format_selected_files(self, file_paths: list[str]) -> str:
+        if len(file_paths) == 1:
+            return self.format_rtl_text(file_paths[0])
+
+        preview_names = [Path(path).name for path in file_paths[:3]]
+        suffix = "" if len(file_paths) <= 3 else " ..."
+        return self.format_rtl_text(
+            f"נבחרו {len(file_paths)} קבצים: {', '.join(preview_names)}{suffix}"
+        )
+
+    def _suggest_required_columns(self, slot_key: str) -> str:
+        suggestions = {
+            "USR02": "BNAME,UFLAG,TRDAT,LTIME",
+            "ADR6_USR21": "",
+            "AGR_USERS": "AGR_NAME,UNAME",
+            "AGR_1251": "AGR_NAME,OBJECT,FIELD,LOW,HIGH",
+            "AGR_1252": "AGR_NAME,LOW,HIGH",
+            "AGR_DEFINE": "AGR_NAME,PARENT_AGR",
+            "UST04": "BNAME,PROFILE",
+            "E070": "TRKORR,AS4USER,TRFUNCTION",
+            "T000": "MANDT,CCCATEGORY",
+            "STMS": "TRKORR,STATUS",
+            "RSPARAM": "PARAMETER,VALUE",
+            "TPFET": "PARAMETER,VALUE",
+        }
+        return suggestions.get(slot_key, "")
 
     def run_validation(self) -> None:
-        file_path = self._current_file_path()
-        if not file_path:
-            QMessageBox.warning(self, "חסר קובץ", "יש לבחור קובץ לפני הרצת הבדיקה.")
+        file_paths = self._current_file_paths()
+        if not file_paths or not self.selected_slot_key:
+            QMessageBox.warning(self, "חסר קובץ", "יש לבחור קובץ מתוך אחד מסלוטי הקלט לפני הרצת הבדיקה.")
             return
+
+        if self.selected_slot_key == "AGR_1251":
+            self.summary_labels["status"].setText("מעבד קובצי הרשאות גדולים במנות...")
+            QApplication.processEvents()
 
         try:
             result = process_file(
-                Path(file_path),
+                file_paths,
                 required_columns=self._parse_required_columns(),
                 output_dir=self.config.output_dir,
+                source_name_override=self.selected_slot_key,
             )
         except Exception as error:
             QMessageBox.critical(self, "שגיאה", f"אירעה שגיאה במהלך העיבוד:\n{error}")
@@ -248,7 +503,8 @@ class ValidationDesktopApp(QMainWindow):
         self.summary_labels["total"].setText(str(result.summary.total_rows))
         self.summary_labels["valid"].setText(str(result.summary.valid_rows))
         self.summary_labels["invalid"].setText(str(result.summary.invalid_rows))
-        self.summary_labels["status"].setText("תקין" if result.summary.is_valid else "נמצאו שגיאות")
+        status_text = "תקין" if result.summary.is_valid else f"נמצאו שגיאות - {self.selected_slot_key}"
+        self.summary_labels["status"].setText(status_text)
 
         self.issues_table.setRowCount(0)
         if result.issues:
@@ -271,13 +527,128 @@ class ValidationDesktopApp(QMainWindow):
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.issues_table.setItem(0, column, item)
 
+        self._append_run_log_entries(self.selected_slot_key, file_paths, result)
         self.report_path = result.report_path
         self.report_button.setEnabled(self.report_path is not None)
-        QMessageBox.information(self, "הבדיקה הושלמה", "הקובץ נבדק בהצלחה ודוח האקסל נוצר בתיקיית הפלט.")
+        file_count = len(result.source_files) if result.source_files else len(file_paths)
+
+        if result.summary.is_valid:
+            QMessageBox.information(
+                self,
+                "הבדיקה הושלמה",
+                f"בדיקת הסלוט {self.selected_slot_key} הסתיימה ללא שגיאות. נקלטו {file_count} קבצים.",
+            )
+        else:
+            ordered_messages = []
+            structure_messages = [issue.message for issue in result.issues if "אינו תואם למבנה" in issue.message]
+            other_messages = [issue.message for issue in result.issues if "אינו תואם למבנה" not in issue.message]
+            for message in structure_messages + other_messages:
+                if message not in ordered_messages:
+                    ordered_messages.append(message)
+                if len(ordered_messages) == 3:
+                    break
+            summary_text = "\n".join(f"• {message}" for message in ordered_messages)
+            QMessageBox.warning(
+                self,
+                "נמצאו שגיאות בבדיקה",
+                f"בדיקת הסלוט {self.selected_slot_key} הסתיימה עם שגיאות.\n\n{summary_text}\n\nניתן ללחוץ על הרשומה השגויה בלוג לצפייה בפירוט.",
+            )
+
+    def _append_run_log_entries(self, slot_key: str, file_paths: list[str], result) -> None:
+        issues_by_file: dict[str, list] = {Path(path).name: [] for path in file_paths}
+        for issue in result.issues:
+            if issue.source_file:
+                issue_name = Path(issue.source_file).name
+                issues_by_file.setdefault(issue_name, []).append(issue)
+            else:
+                for issue_list in issues_by_file.values():
+                    issue_list.append(issue)
+
+        for path in file_paths:
+            file_name = Path(path).name
+            file_issues = issues_by_file.get(file_name, [])
+            status_text = "שגוי" if file_issues else "תקין"
+            record = {
+                "slot_key": slot_key,
+                "file_name": file_name,
+                "status": status_text,
+                "error_count": len(file_issues),
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "issues": list(file_issues),
+            }
+            self.run_log_records.append(record)
+
+            row_index = self.run_log_table.rowCount()
+            self.run_log_table.insertRow(row_index)
+            values = [
+                slot_key,
+                file_name,
+                status_text,
+                str(len(file_issues)),
+                str(record["timestamp"]),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(self.format_rtl_text(value))
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                if column == 2:
+                    item.setBackground(QColor("#fdecec") if status_text == "שגוי" else QColor("#eaf7ea"))
+                self.run_log_table.setItem(row_index, column, item)
+
+    def _build_log_details(self, row_index: int) -> str:
+        if row_index < 0 or row_index >= len(self.run_log_records):
+            return "לא נמצא פירוט עבור הרשומה שנבחרה."
+
+        record = self.run_log_records[row_index]
+        lines = [
+            f"סלוט: {record['slot_key']}",
+            f"קובץ: {record['file_name']}",
+            f"סטטוס: {record['status']}",
+            f"מספר שגיאות: {record['error_count']}",
+            f"שעת בדיקה: {record['timestamp']}",
+            "",
+            "פירוט:",
+        ]
+
+        issues = record.get("issues", [])
+        if not issues:
+            lines.append("לא נמצאו שגיאות בקובץ זה.")
+        else:
+            for issue in issues:
+                row_label = issue.row_number if issue.row_number > 0 else "מבנה"
+                lines.append(f"- שורה {row_label} / {issue.column_name}: {issue.message}")
+
+        return self.format_rtl_text("\n".join(lines))
+
+    def show_log_details(self, row_index: int, _column: int) -> None:
+        if row_index < 0 or row_index >= len(self.run_log_records):
+            return
+
+        record = self.run_log_records[row_index]
+        if record.get("status") != "שגוי":
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("פירוט שגיאות לקובץ")
+        dialog.setLayoutDirection(Qt.RightToLeft)
+        dialog.resize(760, 420)
+
+        layout = QVBoxLayout(dialog)
+        details_box = QTextEdit()
+        details_box.setReadOnly(True)
+        details_box.setPlainText(self._build_log_details(row_index))
+        layout.addWidget(details_box)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def clear_results(self) -> None:
-        self.file_display_label.setText("טרם נבחר קובץ")
-        self.required_columns_edit.setText("user_id,name,email")
+        self.selected_slot_key = None
+        for widget_data in self.slot_widgets.values():
+            widget_data["selected_paths"] = []
+            widget_data["path_label"].setText("טרם נבחר קובץ")
+        self.required_columns_edit.setText("")
         self.summary_labels["total"].setText("0")
         self.summary_labels["valid"].setText("0")
         self.summary_labels["invalid"].setText("0")
@@ -285,6 +656,8 @@ class ValidationDesktopApp(QMainWindow):
         self.report_path = None
         self.report_button.setEnabled(False)
         self.issues_table.setRowCount(0)
+        self.run_log_records = []
+        self.run_log_table.setRowCount(0)
 
     def open_output_folder(self) -> None:
         self._open_path(self.config.output_dir)

@@ -8,6 +8,7 @@ class ValidationIssue:
     row_number: int
     column_name: str
     message: str
+    source_file: str = ""
 
 
 @dataclass
@@ -23,10 +24,13 @@ class ValidationResult:
     rows: list[dict[str, Any]]
     issues: list[ValidationIssue] = field(default_factory=list)
     report_path: Path | None = None
+    detected_profile: str | None = None
+    source_files: list[str] = field(default_factory=list)
+    total_rows_override: int | None = None
 
     @property
     def summary(self) -> ValidationSummary:
-        total_rows = len(self.rows)
+        total_rows = self.total_rows_override if self.total_rows_override is not None else len(self.rows)
         row_level_issues = {issue.row_number for issue in self.issues if issue.row_number > 0}
         invalid_rows = len(row_level_issues)
 

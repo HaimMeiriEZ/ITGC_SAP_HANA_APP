@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from openpyxl import Workbook
 
@@ -43,23 +43,38 @@ class ExcelReportWriter:
         sheet["A5"] = "הקובץ תקין"
         sheet["B5"] = result.summary.is_valid
         sheet["A6"] = "קובץ מקור"
-        sheet["B6"] = source_file.name
+        if result.source_files:
+            sheet["B6"] = result.source_files[0] if len(result.source_files) == 1 else f"{result.source_files[0]} ועוד {len(result.source_files) - 1}"
+        else:
+            sheet["B6"] = source_file.name
+        sheet["A7"] = "פרופיל בדיקה"
+        sheet["B7"] = result.detected_profile or "GENERIC"
+        sheet["A8"] = "מספר קבצים שנבחרו"
+        sheet["B8"] = max(len(result.source_files), 1)
 
     @staticmethod
     def _write_issues(sheet, issues: Iterable[ValidationIssue]) -> None:
-        sheet.append(["מספר שורה", "שם עמודה", "הודעת שגיאה"])
+        sheet.append(["מספר שורה", "שם עמודה", "הודעת שגיאה", "קובץ מקור"])
         for issue in issues:
-            sheet.append([issue.row_number, issue.column_name, issue.message])
+            sheet.append([
+                ExcelReportWriter._safe_excel_value(issue.row_number),
+                ExcelReportWriter._safe_excel_value(issue.column_name),
+                ExcelReportWriter._safe_excel_value(issue.message),
+                ExcelReportWriter._safe_excel_value(issue.source_file),
+            ])
 
     @staticmethod
     def _write_data(sheet, result: ValidationResult) -> None:
         all_columns: list[str] = []
+        include_source_column = any(row.get("__source_file") for row in result.rows)
         for row in result.rows:
             for column in row.keys():
+                if str(column).startswith("__"):
+                    continue
                 if column not in all_columns:
                     all_columns.append(column)
 
-        headers = all_columns + ["סטטוס בדיקה", "פירוט שגיאות"]
+        headers = all_columns + (["קובץ מקור"] if include_source_column else []) + ["סטטוס בדיקה", "פירוט שגיאות"]
         sheet.append(headers)
 
         issues_by_row: dict[int, list[str]] = {}
@@ -71,7 +86,19 @@ class ExcelReportWriter:
 
         for index, row in enumerate(result.rows, start=1):
             row_issues = issues_by_row.get(index, [])
-            values = [row.get(column) for column in all_columns]
+            values = [ExcelReportWriter._safe_excel_value(row.get(column)) for column in all_columns]
+            if include_source_column:
+                values.append(ExcelReportWriter._safe_excel_value(row.get("__source_file", "")))
             values.append("תקין" if not row_issues else "שגוי")
-            values.append(" | ".join(row_issues))
+            values.append(ExcelReportWriter._safe_excel_value(" | ".join(row_issues)))
             sheet.append(values)
+
+    @staticmethod
+    def _safe_excel_value(value: Any) -> Any:
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            return " | ".join(str(item) for item in value)
+        if isinstance(value, dict):
+            return " | ".join(f"{key}={item}" for key, item in value.items())
+        return value

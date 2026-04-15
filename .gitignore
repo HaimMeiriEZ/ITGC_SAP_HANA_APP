@@ -17,3 +17,5 @@ venv/
 # App outputs
 /data/output/*.xlsx
 /data/input/20*.txt
+/output/
+
