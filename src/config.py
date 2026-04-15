@@ -1,21 +1,18 @@
-import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
 class AppConfig:
-    sap_system: str
-    hana_host: str
-    hana_port: int
-    hana_user: str
-    hana_password: str
+    input_dir: Path
+    output_dir: Path
+    supported_extensions: tuple[str, ...] = (".txt", ".csv", ".xlsx", ".xlsm")
 
     @classmethod
-    def from_env(cls) -> "AppConfig":
+    def default(cls, base_dir: Path | None = None) -> "AppConfig":
+        root_dir = base_dir or Path.cwd()
+        data_dir = root_dir / "data"
         return cls(
-            sap_system=os.getenv("SAP_SYSTEM", "DEV"),
-            hana_host=os.getenv("HANA_HOST", "localhost"),
-            hana_port=int(os.getenv("HANA_PORT", "30015")),
-            hana_user=os.getenv("HANA_USER", "SYSTEM"),
-            hana_password=os.getenv("HANA_PASSWORD", ""),
+            input_dir=data_dir / "input",
+            output_dir=data_dir / "output",
         )

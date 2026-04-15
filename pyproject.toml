@@ -1,7 +1,7 @@
 [project]
 name = "itgc-sap-hana-app"
 version = "0.1.0"
-description = "SAP HANA automation starter project"
+description = "Initial MVP for Excel/TXT intake and integrity checks"
 requires-python = ">=3.10"
 
 [tool.pytest.ini_options]
