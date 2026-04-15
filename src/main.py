@@ -7,23 +7,23 @@ from src.pipeline import process_file
 
 def run() -> None:
     parser = argparse.ArgumentParser(
-        description="Load TXT/CSV/XLSX files and run basic integrity checks.",
+        description="טעינת קבצי TXT/CSV/XLSX והרצת בדיקות תקינות.",
     )
-    parser.add_argument("file_path", nargs="?", help="Path to the input file")
+    parser.add_argument("file_path", nargs="?", help="נתיב לקובץ הקלט")
     parser.add_argument(
         "--required",
         nargs="*",
         default=["user_id", "name"],
-        help="Required columns to validate",
+        help="עמודות חובה לבדיקה",
     )
     args = parser.parse_args()
 
     if not args.file_path:
         config = AppConfig.default()
-        print("Project initialized for file intake validation.")
-        print(f"Input folder: {config.input_dir}")
-        print(f"Output folder: {config.output_dir}")
-        print(f"Supported files: {', '.join(config.supported_extensions)}")
+        print("הפרויקט מוכן לקליטת קבצים ולבדיקות תקינות.")
+        print(f"תיקיית קלט: {config.input_dir}")
+        print(f"תיקיית פלט: {config.output_dir}")
+        print(f"סיומות נתמכות: {', '.join(config.supported_extensions)}")
         return
 
     config = AppConfig.default()
@@ -32,17 +32,17 @@ def run() -> None:
         required_columns=args.required,
         output_dir=config.output_dir,
     )
-    print(f"Rows checked: {result.summary.total_rows}")
-    print(f"Valid rows: {result.summary.valid_rows}")
-    print(f"Invalid rows: {result.summary.invalid_rows}")
-    print(f"Overall valid: {result.summary.is_valid}")
+    print(f"שורות שנבדקו: {result.summary.total_rows}")
+    print(f"שורות תקינות: {result.summary.valid_rows}")
+    print(f"שורות שגויות: {result.summary.invalid_rows}")
+    print(f"הקובץ תקין: {result.summary.is_valid}")
 
     for issue in result.issues:
-        row_label = issue.row_number if issue.row_number > 0 else "schema"
-        print(f"- Row {row_label} / {issue.column_name}: {issue.message}")
+        row_label = issue.row_number if issue.row_number > 0 else "מבנה"
+        print(f"- שורה {row_label} / {issue.column_name}: {issue.message}")
 
     if result.report_path is not None:
-        print(f"Excel report: {result.report_path}")
+        print(f"דוח אקסל: {result.report_path}")
 
 
 if __name__ == "__main__":

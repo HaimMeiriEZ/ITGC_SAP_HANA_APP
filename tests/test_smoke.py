@@ -65,12 +65,16 @@ class TestSmoke(unittest.TestCase):
             self.assertTrue(result.report_path.exists())
 
             workbook = load_workbook(result.report_path)
-            self.assertIn("Summary", workbook.sheetnames)
-            self.assertIn("Issues", workbook.sheetnames)
-            self.assertEqual(workbook["Summary"]["B2"].value, 2)
-            self.assertEqual(workbook["Summary"]["B5"].value, False)
-            self.assertEqual(workbook["Issues"]["A2"].value, 2)
-            self.assertEqual(workbook["Issues"]["B2"].value, "email")
+            self.assertIn("סיכום", workbook.sheetnames)
+            self.assertIn("שגיאות", workbook.sheetnames)
+            self.assertEqual(workbook["סיכום"]["A2"].value, "שורות שנבדקו")
+            self.assertEqual(workbook["סיכום"]["B2"].value, 2)
+            self.assertEqual(workbook["סיכום"]["A5"].value, "הקובץ תקין")
+            self.assertEqual(workbook["סיכום"]["B5"].value, False)
+            self.assertEqual(workbook["שגיאות"]["A1"].value, "מספר שורה")
+            self.assertEqual(workbook["שגיאות"]["A2"].value, 2)
+            self.assertEqual(workbook["שגיאות"]["B2"].value, "email")
+            self.assertEqual(workbook["שגיאות"]["C2"].value, "ערך חובה חסר")
 
 
 if __name__ == "__main__":

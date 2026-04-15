@@ -17,7 +17,7 @@ class ValidationEngine:
                     ValidationIssue(
                         row_number=0,
                         column_name=column,
-                        message="Missing required column",
+                        message="עמודת חובה חסרה",
                     )
                 )
 
@@ -29,7 +29,7 @@ class ValidationEngine:
                         ValidationIssue(
                             row_number=row_number,
                             column_name=column,
-                            message="Missing required value",
+                            message="ערך חובה חסר",
                         )
                     )
 
