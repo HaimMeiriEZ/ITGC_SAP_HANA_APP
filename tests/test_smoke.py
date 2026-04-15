@@ -2,7 +2,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from src.pipeline import process_file
 from src.validators.engine import ValidationEngine
@@ -45,6 +45,32 @@ class TestSmoke(unittest.TestCase):
 
         self.assertFalse(result.summary.is_valid)
         self.assertEqual(result.issues[0].column_name, "email")
+
+    def test_excel_report_is_created_with_summary_and_issues(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "users.txt"
+            output_dir = Path(temp_dir) / "output"
+            input_path.write_text(
+                "user_id;name;email\n1;Dana;dana@example.com\n2;Noam;\n",
+                encoding="utf-8",
+            )
+
+            result = process_file(
+                input_path,
+                required_columns=["user_id", "name", "email"],
+                output_dir=output_dir,
+            )
+
+            self.assertIsNotNone(result.report_path)
+            self.assertTrue(result.report_path.exists())
+
+            workbook = load_workbook(result.report_path)
+            self.assertIn("Summary", workbook.sheetnames)
+            self.assertIn("Issues", workbook.sheetnames)
+            self.assertEqual(workbook["Summary"]["B2"].value, 2)
+            self.assertEqual(workbook["Summary"]["B5"].value, False)
+            self.assertEqual(workbook["Issues"]["A2"].value, 2)
+            self.assertEqual(workbook["Issues"]["B2"].value, "email")
 
 
 if __name__ == "__main__":

@@ -26,7 +26,12 @@ def run() -> None:
         print(f"Supported files: {', '.join(config.supported_extensions)}")
         return
 
-    result = process_file(Path(args.file_path), required_columns=args.required)
+    config = AppConfig.default()
+    result = process_file(
+        Path(args.file_path),
+        required_columns=args.required,
+        output_dir=config.output_dir,
+    )
     print(f"Rows checked: {result.summary.total_rows}")
     print(f"Valid rows: {result.summary.valid_rows}")
     print(f"Invalid rows: {result.summary.invalid_rows}")
@@ -35,6 +40,9 @@ def run() -> None:
     for issue in result.issues:
         row_label = issue.row_number if issue.row_number > 0 else "schema"
         print(f"- Row {row_label} / {issue.column_name}: {issue.message}")
+
+    if result.report_path is not None:
+        print(f"Excel report: {result.report_path}")
 
 
 if __name__ == "__main__":

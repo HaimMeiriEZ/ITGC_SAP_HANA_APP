@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -21,6 +22,7 @@ class ValidationSummary:
 class ValidationResult:
     rows: list[dict[str, Any]]
     issues: list[ValidationIssue] = field(default_factory=list)
+    report_path: Path | None = None
 
     @property
     def summary(self) -> ValidationSummary:

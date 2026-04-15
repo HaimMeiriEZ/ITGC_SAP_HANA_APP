@@ -8,6 +8,7 @@ Initial MVP for loading Excel and TXT files and performing integrity checks.
 - Validate required columns
 - Detect missing values in mandatory fields
 - Produce a summary of valid and invalid rows
+- Export an Excel validation report to the output folder
 
 ## Project structure
 
@@ -16,7 +17,7 @@ Initial MVP for loading Excel and TXT files and performing integrity checks.
 - `src/models/` - shared result models
 - `src/pipeline.py` - orchestrates reading and validation
 - `data/input/` - sample incoming files
-- `data/output/` - validation outputs
+- `data/output/` - generated Excel validation reports
 - `tests/` - automated smoke tests
 
 ## Quick start
