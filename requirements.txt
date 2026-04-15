@@ -1,0 +1,5 @@
+# Add project dependencies here
+# Example:
+# pandas
+# sqlalchemy
+# hdbcli
