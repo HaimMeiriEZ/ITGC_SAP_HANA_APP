@@ -3,6 +3,7 @@ from pathlib import Path
 
 from src.config import AppConfig
 from src.pipeline import process_file
+from src.ui.desktop_app import launch_desktop_app
 
 
 def run() -> None:
@@ -16,7 +17,16 @@ def run() -> None:
         default=["user_id", "name"],
         help="עמודות חובה לבדיקה",
     )
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="הרצה במצב שורת פקודה במקום פתיחת הממשק הגרפי",
+    )
     args = parser.parse_args()
+
+    if not args.file_path and not args.cli:
+        launch_desktop_app()
+        return
 
     if not args.file_path:
         config = AppConfig.default()

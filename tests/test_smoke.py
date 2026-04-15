@@ -1,10 +1,12 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import tkinter as tk
 import unittest
 
 from openpyxl import Workbook, load_workbook
 
 from src.pipeline import process_file
+from src.ui.desktop_app import ValidationDesktopApp
 from src.validators.engine import ValidationEngine
 
 
@@ -75,6 +77,17 @@ class TestSmoke(unittest.TestCase):
             self.assertEqual(workbook["שגיאות"]["A2"].value, 2)
             self.assertEqual(workbook["שגיאות"]["B2"].value, "email")
             self.assertEqual(workbook["שגיאות"]["C2"].value, "ערך חובה חסר")
+
+    def test_desktop_gui_initializes_with_hebrew_labels(self) -> None:
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            app = ValidationDesktopApp(root)
+            self.assertEqual(app.run_button.cget("text"), "הרץ בדיקה")
+            self.assertEqual(app.select_button.cget("text"), "בחירת קובץ")
+            self.assertEqual(app.summary_vars["status"].get(), "ממתין להרצה")
+        finally:
+            root.destroy()
 
 
 if __name__ == "__main__":

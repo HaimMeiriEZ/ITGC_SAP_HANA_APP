@@ -9,6 +9,7 @@ Initial MVP for loading Excel and TXT files and performing integrity checks.
 - Detect missing values in mandatory fields
 - Produce a summary of valid and invalid rows
 - Export an Excel validation report to the output folder
+- Work through a local desktop screen in Hebrew
 
 ## Project structure
 
@@ -40,7 +41,13 @@ Initial MVP for loading Excel and TXT files and performing integrity checks.
    python -m src.main data/input/sample.txt --required user_id name
    ```
 
-4. Run tests:
+4. Open the desktop application:
+
+   ```bash
+   python -m src.main
+   ```
+
+5. Run tests:
 
    ```bash
    python -m unittest discover -s tests -v

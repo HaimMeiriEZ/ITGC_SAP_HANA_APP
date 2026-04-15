@@ -13,3 +13,7 @@ venv/
 
 # VS Code
 .vscode/
+
+# App outputs
+/data/output/*.xlsx
+/data/input/20*.txt
