@@ -1,132 +1,238 @@
 import os
+import re
 import subprocess
 import sys
-import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+    QHeaderView,
+)
 
 from src.config import AppConfig
 from src.pipeline import process_file
 
 
-class ValidationDesktopApp:
-    def __init__(self, root: tk.Tk, base_dir: Path | None = None) -> None:
-        self.root = root
+def get_qt_app() -> QApplication:
+    if "unittest" in sys.modules and "QT_QPA_PLATFORM" not in os.environ:
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+        app.setLayoutDirection(Qt.RightToLeft)
+        app.setFont(QFont("Segoe UI", 10))
+    return app
+
+
+class ValidationDesktopApp(QMainWindow):
+    def __init__(self, base_dir: Path | None = None) -> None:
+        super().__init__()
         self.config = AppConfig.default(base_dir or Path.cwd())
         self.config.input_dir.mkdir(parents=True, exist_ok=True)
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         self.report_path: Path | None = None
 
-        self.file_path_var = tk.StringVar(value="")
-        self.required_columns_var = tk.StringVar(value="user_id,name,email")
-        self.summary_vars = {
-            "total": tk.StringVar(value="0"),
-            "valid": tk.StringVar(value="0"),
-            "invalid": tk.StringVar(value="0"),
-            "status": tk.StringVar(value="ממתין להרצה"),
-        }
+        self.summary_labels: dict[str, QLabel] = {}
 
-        self._configure_root()
+        self._configure_window()
         self._build_ui()
 
-    def _configure_root(self) -> None:
-        self.root.title("מערכת בדיקות קבצים - ITGC")
-        self.root.geometry("1100x760")
-        self.root.minsize(980, 680)
-        self.root.configure(bg="#f5f7fb")
+    @staticmethod
+    def format_rtl_text(text: object) -> str:
+        raw_text = "" if text is None else str(text)
+        return re.sub(r"[\u2066\u2067\u2068\u2069\u200e\u200f]", "", raw_text)
 
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Header.TLabel", font=("Segoe UI", 18, "bold"), foreground="#16325c")
-        style.configure("Section.TLabelframe.Label", font=("Segoe UI", 11, "bold"))
-        style.configure("Action.TButton", font=("Segoe UI", 10, "bold"))
+    def _configure_window(self) -> None:
+        self.setWindowTitle(self.format_rtl_text("מערכת בדיקות קבצים - ITGC"))
+        self.setMinimumSize(980, 680)
+        self.resize(1100, 760)
+        self.setLayoutDirection(Qt.RightToLeft)
 
     def _build_ui(self) -> None:
-        container = ttk.Frame(self.root, padding=16)
-        container.pack(fill=tk.BOTH, expand=True)
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
 
-        header = ttk.Frame(container)
-        header.pack(fill=tk.X, pady=(0, 12))
-        ttk.Label(header, text="מסך בדיקת קבצי TXT ו-Excel", style="Header.TLabel").pack(side=tk.RIGHT)
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(12)
 
-        actions = ttk.Frame(container)
-        actions.pack(fill=tk.X, pady=(0, 10))
+        header_label = QLabel(self.format_rtl_text("מסך בדיקת קבצי TXT ו-Excel"))
+        header_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        header_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #16325c;")
+        main_layout.addWidget(header_label)
 
-        self.select_button = ttk.Button(actions, text="בחירת קובץ", style="Action.TButton", command=self.choose_file)
-        self.select_button.pack(side=tk.RIGHT, padx=4)
+        buttons_layout = QHBoxLayout()
+        buttons_layout.setSpacing(8)
 
-        self.run_button = ttk.Button(actions, text="הרץ בדיקה", style="Action.TButton", command=self.run_validation)
-        self.run_button.pack(side=tk.RIGHT, padx=4)
+        self.select_button = QPushButton("בחירת קובץ")
+        self.select_button.clicked.connect(self.choose_file)
+        buttons_layout.addWidget(self.select_button)
 
-        self.report_button = ttk.Button(actions, text="פתח דוח אקסל", style="Action.TButton", command=self.open_report, state=tk.DISABLED)
-        self.report_button.pack(side=tk.RIGHT, padx=4)
+        self.run_button = QPushButton("הרץ בדיקה")
+        self.run_button.clicked.connect(self.run_validation)
+        buttons_layout.addWidget(self.run_button)
 
-        self.output_button = ttk.Button(actions, text="פתח תיקיית פלט", style="Action.TButton", command=self.open_output_folder)
-        self.output_button.pack(side=tk.RIGHT, padx=4)
+        self.report_button = QPushButton("פתח דוח אקסל")
+        self.report_button.setEnabled(False)
+        self.report_button.clicked.connect(self.open_report)
+        buttons_layout.addWidget(self.report_button)
 
-        self.clear_button = ttk.Button(actions, text="נקה מסך", style="Action.TButton", command=self.clear_results)
-        self.clear_button.pack(side=tk.RIGHT, padx=4)
+        self.output_button = QPushButton("פתח תיקיית פלט")
+        self.output_button.clicked.connect(self.open_output_folder)
+        buttons_layout.addWidget(self.output_button)
 
-        source_frame = ttk.LabelFrame(container, text="קובץ ופרמטרים", style="Section.TLabelframe")
-        source_frame.pack(fill=tk.X, pady=(0, 10))
-        source_frame.columnconfigure(0, weight=1)
+        self.clear_button = QPushButton("נקה מסך")
+        self.clear_button.clicked.connect(self.clear_results)
+        buttons_layout.addWidget(self.clear_button)
 
-        ttk.Label(source_frame, text="נתיב הקובץ הנבחר:").grid(row=0, column=1, sticky="e", padx=8, pady=8)
-        ttk.Entry(source_frame, textvariable=self.file_path_var, justify="right").grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+        main_layout.addLayout(buttons_layout)
 
-        ttk.Label(source_frame, text="עמודות חובה:").grid(row=1, column=1, sticky="e", padx=8, pady=8)
-        ttk.Entry(source_frame, textvariable=self.required_columns_var, justify="right").grid(row=1, column=0, sticky="ew", padx=8, pady=8)
+        self.source_group = QGroupBox("קובץ ופרמטרים")
+        self.source_group.setAlignment(Qt.AlignRight)
+        source_layout = QGridLayout(self.source_group)
+        source_layout.setContentsMargins(12, 18, 12, 12)
+        source_layout.setHorizontalSpacing(10)
+        source_layout.setVerticalSpacing(10)
 
-        summary_frame = ttk.LabelFrame(container, text="סיכום בדיקה", style="Section.TLabelframe")
-        summary_frame.pack(fill=tk.X, pady=(0, 10))
+        source_layout.addWidget(QLabel("נתיב הקובץ הנבחר:"), 0, 1)
+        self.file_display_label = QLabel("טרם נבחר קובץ")
+        self.file_display_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.file_display_label.setWordWrap(True)
+        self.file_display_label.setStyleSheet("padding: 6px; background: #ffffff; border: 1px solid #cfd6e4;")
+        source_layout.addWidget(self.file_display_label, 0, 0)
 
-        for index, (label_text, key) in enumerate([
-            ("שורות שנבדקו", "total"),
-            ("שורות תקינות", "valid"),
-            ("שורות שגויות", "invalid"),
-            ("סטטוס", "status"),
-        ]):
-            card = ttk.Frame(summary_frame, padding=10)
-            card.grid(row=0, column=index, padx=6, pady=6, sticky="nsew")
-            ttk.Label(card, text=label_text, font=("Segoe UI", 10, "bold")).pack()
-            ttk.Label(card, textvariable=self.summary_vars[key], font=("Segoe UI", 12)).pack()
-            summary_frame.columnconfigure(index, weight=1)
+        source_layout.addWidget(QLabel("עמודות חובה:"), 1, 1)
+        self.required_columns_edit = QLineEdit("user_id,name,email")
+        self.required_columns_edit.setAlignment(Qt.AlignRight)
+        source_layout.addWidget(self.required_columns_edit, 1, 0)
 
-        results_frame = ttk.LabelFrame(container, text="רשימת שגיאות", style="Section.TLabelframe")
-        results_frame.pack(fill=tk.BOTH, expand=True)
-        results_frame.rowconfigure(0, weight=1)
-        results_frame.columnconfigure(0, weight=1)
+        main_layout.addWidget(self.source_group)
 
-        columns = ("row_number", "column_name", "message")
-        self.issues_tree = ttk.Treeview(results_frame, columns=columns, show="headings")
-        self.issues_tree.heading("row_number", text="מספר שורה")
-        self.issues_tree.heading("column_name", text="שם עמודה")
-        self.issues_tree.heading("message", text="הודעת שגיאה")
-        self.issues_tree.column("row_number", width=110, anchor="center")
-        self.issues_tree.column("column_name", width=180, anchor="e")
-        self.issues_tree.column("message", width=520, anchor="e")
-        self.issues_tree.grid(row=0, column=0, sticky="nsew")
+        self.summary_group = QGroupBox("סיכום בדיקה")
+        self.summary_group.setAlignment(Qt.AlignRight)
+        summary_layout = QGridLayout(self.summary_group)
+        summary_layout.setContentsMargins(12, 18, 12, 12)
+        summary_layout.setHorizontalSpacing(10)
+        summary_layout.setVerticalSpacing(8)
+        summary_items = [
+            ("שורות שנבדקו", "total", "0"),
+            ("שורות תקינות", "valid", "0"),
+            ("שורות שגויות", "invalid", "0"),
+            ("סטטוס", "status", "ממתין להרצה"),
+        ]
+        for column, (title, key, default_value) in enumerate(summary_items):
+            title_label = QLabel(title)
+            title_label.setAlignment(Qt.AlignCenter)
+            title_label.setStyleSheet("font-weight: bold;")
+            value_label = QLabel(default_value)
+            value_label.setAlignment(Qt.AlignCenter)
+            value_label.setStyleSheet("font-size: 18px; padding: 6px;")
+            summary_layout.addWidget(title_label, 0, column)
+            summary_layout.addWidget(value_label, 1, column)
+            self.summary_labels[key] = value_label
 
-        scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.issues_tree.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        self.issues_tree.configure(yscrollcommand=scrollbar.set)
+        main_layout.addWidget(self.summary_group)
+
+        self.results_group = QGroupBox("רשימת שגיאות")
+        self.results_group.setAlignment(Qt.AlignRight)
+        results_layout = QVBoxLayout(self.results_group)
+        results_layout.setContentsMargins(12, 18, 12, 12)
+        results_layout.setSpacing(10)
+        self.issues_table = QTableWidget(0, 3)
+        self.issues_table.setHorizontalHeaderLabels(["מספר שורה", "שם עמודה", "הודעת שגיאה"])
+        self.issues_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.issues_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.issues_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.issues_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.issues_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.issues_table.setAlternatingRowColors(True)
+        results_layout.addWidget(self.issues_table)
+
+        main_layout.addWidget(self.results_group)
+
+        central_widget.setStyleSheet(
+            """
+            QWidget {
+                background-color: #f5f7fb;
+                font-family: 'Segoe UI';
+                font-size: 11pt;
+            }
+            QGroupBox {
+                font-weight: bold;
+                border: 1px solid #c7cfda;
+                border-radius: 8px;
+                margin-top: 16px;
+                padding-top: 16px;
+                background-color: #f9fbfe;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top right;
+                right: 18px;
+                padding: 0 10px;
+                background-color: #f5f7fb;
+            }
+            QPushButton {
+                background-color: #e9eef7;
+                border: 1px solid #b7c4d8;
+                border-radius: 6px;
+                padding: 8px 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #dbe7f8;
+            }
+            QLineEdit {
+                background-color: white;
+                border: 1px solid #cfd6e4;
+                padding: 6px;
+            }
+            QTableWidget {
+                background-color: white;
+                border: 1px solid #cfd6e4;
+                gridline-color: #d7deea;
+            }
+            """
+        )
 
     def choose_file(self) -> None:
-        file_path = filedialog.askopenfilename(
-            title="בחירת קובץ לבדיקה",
-            filetypes=[("Supported files", "*.txt *.csv *.xlsx *.xlsm"), ("All files", "*.*")],
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "בחירת קובץ לבדיקה",
+            str(self.config.input_dir),
+            "Supported files (*.txt *.csv *.xlsx *.xlsm);;All files (*.*)",
         )
         if file_path:
-            self.file_path_var.set(file_path)
+            self.file_display_label.setText(self.format_rtl_text(file_path))
 
     def _parse_required_columns(self) -> list[str]:
-        raw_value = self.required_columns_var.get().replace(";", ",").replace("\n", ",")
+        raw_value = self.required_columns_edit.text().replace(";", ",").replace("\n", ",")
         return [item.strip() for item in raw_value.split(",") if item.strip()]
 
+    def _current_file_path(self) -> str:
+        displayed = self.file_display_label.text().strip()
+        return "" if displayed == "טרם נבחר קובץ" else displayed
+
     def run_validation(self) -> None:
-        file_path = self.file_path_var.get().strip()
+        file_path = self._current_file_path()
         if not file_path:
-            messagebox.showwarning("חסר קובץ", "יש לבחור קובץ לפני הרצת הבדיקה.")
+            QMessageBox.warning(self, "חסר קובץ", "יש לבחור קובץ לפני הרצת הבדיקה.")
             return
 
         try:
@@ -136,43 +242,49 @@ class ValidationDesktopApp:
                 output_dir=self.config.output_dir,
             )
         except Exception as error:
-            messagebox.showerror("שגיאה", f"אירעה שגיאה במהלך העיבוד:\n{error}")
+            QMessageBox.critical(self, "שגיאה", f"אירעה שגיאה במהלך העיבוד:\n{error}")
             return
 
-        self.summary_vars["total"].set(str(result.summary.total_rows))
-        self.summary_vars["valid"].set(str(result.summary.valid_rows))
-        self.summary_vars["invalid"].set(str(result.summary.invalid_rows))
-        self.summary_vars["status"].set("תקין" if result.summary.is_valid else "נמצאו שגיאות")
+        self.summary_labels["total"].setText(str(result.summary.total_rows))
+        self.summary_labels["valid"].setText(str(result.summary.valid_rows))
+        self.summary_labels["invalid"].setText(str(result.summary.invalid_rows))
+        self.summary_labels["status"].setText("תקין" if result.summary.is_valid else "נמצאו שגיאות")
 
-        for item in self.issues_tree.get_children():
-            self.issues_tree.delete(item)
-
+        self.issues_table.setRowCount(0)
         if result.issues:
             for issue in result.issues:
-                row_value = issue.row_number if issue.row_number > 0 else "מבנה"
-                self.issues_tree.insert("", tk.END, values=(row_value, issue.column_name, issue.message))
+                row_index = self.issues_table.rowCount()
+                self.issues_table.insertRow(row_index)
+                values = [
+                    str(issue.row_number if issue.row_number > 0 else "מבנה"),
+                    self.format_rtl_text(issue.column_name),
+                    self.format_rtl_text(issue.message),
+                ]
+                for column, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    self.issues_table.setItem(row_index, column, item)
         else:
-            self.issues_tree.insert("", tk.END, values=("-", "-", "לא נמצאו שגיאות"))
+            self.issues_table.insertRow(0)
+            for column, value in enumerate(["-", "-", "לא נמצאו שגיאות"]):
+                item = QTableWidgetItem(value)
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.issues_table.setItem(0, column, item)
 
         self.report_path = result.report_path
-        self.report_button.config(state=tk.NORMAL if self.report_path else tk.DISABLED)
-
-        messagebox.showinfo(
-            "הבדיקה הושלמה",
-            "הקובץ נבדק בהצלחה ודוח האקסל נוצר בתיקיית הפלט.",
-        )
+        self.report_button.setEnabled(self.report_path is not None)
+        QMessageBox.information(self, "הבדיקה הושלמה", "הקובץ נבדק בהצלחה ודוח האקסל נוצר בתיקיית הפלט.")
 
     def clear_results(self) -> None:
-        self.file_path_var.set("")
-        self.required_columns_var.set("user_id,name,email")
-        self.summary_vars["total"].set("0")
-        self.summary_vars["valid"].set("0")
-        self.summary_vars["invalid"].set("0")
-        self.summary_vars["status"].set("ממתין להרצה")
+        self.file_display_label.setText("טרם נבחר קובץ")
+        self.required_columns_edit.setText("user_id,name,email")
+        self.summary_labels["total"].setText("0")
+        self.summary_labels["valid"].setText("0")
+        self.summary_labels["invalid"].setText("0")
+        self.summary_labels["status"].setText("ממתין להרצה")
         self.report_path = None
-        self.report_button.config(state=tk.DISABLED)
-        for item in self.issues_tree.get_children():
-            self.issues_tree.delete(item)
+        self.report_button.setEnabled(False)
+        self.issues_table.setRowCount(0)
 
     def open_output_folder(self) -> None:
         self._open_path(self.config.output_dir)
@@ -181,7 +293,7 @@ class ValidationDesktopApp:
         if self.report_path and self.report_path.exists():
             self._open_path(self.report_path)
         else:
-            messagebox.showwarning("דוח לא זמין", "טרם נוצר דוח אקסל לפתיחה.")
+            QMessageBox.warning(self, "דוח לא זמין", "טרם נוצר דוח אקסל לפתיחה.")
 
     @staticmethod
     def _open_path(path: Path) -> None:
@@ -195,6 +307,7 @@ class ValidationDesktopApp:
 
 
 def launch_desktop_app() -> None:
-    root = tk.Tk()
-    ValidationDesktopApp(root)
-    root.mainloop()
+    app = get_qt_app()
+    window = ValidationDesktopApp()
+    window.show()
+    app.exec()

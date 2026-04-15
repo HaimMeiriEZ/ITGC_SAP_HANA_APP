@@ -1,12 +1,13 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import tkinter as tk
 import unittest
 
 from openpyxl import Workbook, load_workbook
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
 
 from src.pipeline import process_file
-from src.ui.desktop_app import ValidationDesktopApp
+from src.ui.desktop_app import ValidationDesktopApp, get_qt_app
 from src.validators.engine import ValidationEngine
 
 
@@ -79,15 +80,30 @@ class TestSmoke(unittest.TestCase):
             self.assertEqual(workbook["שגיאות"]["C2"].value, "ערך חובה חסר")
 
     def test_desktop_gui_initializes_with_hebrew_labels(self) -> None:
-        root = tk.Tk()
-        root.withdraw()
+        qt_app = get_qt_app()
+        self.assertIsInstance(qt_app, QApplication)
+
+        window = ValidationDesktopApp()
         try:
-            app = ValidationDesktopApp(root)
-            self.assertEqual(app.run_button.cget("text"), "הרץ בדיקה")
-            self.assertEqual(app.select_button.cget("text"), "בחירת קובץ")
-            self.assertEqual(app.summary_vars["status"].get(), "ממתין להרצה")
+            self.assertEqual(window.run_button.text(), "הרץ בדיקה")
+            self.assertEqual(window.select_button.text(), "בחירת קובץ")
+            self.assertEqual(window.summary_labels["status"].text(), "ממתין להרצה")
+            self.assertEqual(window.source_group.title(), "קובץ ופרמטרים")
+            self.assertEqual(window.summary_group.title(), "סיכום בדיקה")
+            self.assertEqual(window.results_group.title(), "רשימת שגיאות")
+            self.assertTrue(window.source_group.alignment() & Qt.AlignRight)
+            self.assertTrue(window.summary_group.alignment() & Qt.AlignRight)
+            self.assertTrue(window.results_group.alignment() & Qt.AlignRight)
         finally:
-            root.destroy()
+            window.close()
+
+    def test_rtl_formatter_keeps_text_clean_without_control_markers(self) -> None:
+        value = ValidationDesktopApp.format_rtl_text("קובץ Excel, users.txt (2026)")
+
+        self.assertEqual(value, "קובץ Excel, users.txt (2026)")
+        self.assertNotIn("\u2066", value)
+        self.assertNotIn("\u2067", value)
+        self.assertNotIn("\u2069", value)
 
 
 if __name__ == "__main__":
