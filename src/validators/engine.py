@@ -5,6 +5,8 @@ from src.validators.spec_rules import (
     build_profile_issues,
     detect_validation_profile,
     filter_required_value_columns,
+    get_column_aliases,
+    matches_column_alias,
     normalize_name,
 )
 
@@ -25,8 +27,7 @@ class ValidationEngine:
         required_value_columns = filter_required_value_columns(detected_profile, self.required_columns)
 
         for column in required_value_columns:
-            normalized_column = normalize_name(column)
-            if normalized_column not in available_columns:
+            if not matches_column_alias(available_columns, column):
                 issues.append(
                     ValidationIssue(
                         row_number=0,
@@ -36,7 +37,7 @@ class ValidationEngine:
                 )
 
         present_required_columns = [
-            column for column in required_value_columns if normalize_name(column) in available_columns
+            column for column in required_value_columns if matches_column_alias(available_columns, column)
         ]
 
         for row_number, row in enumerate(rows, start=1):
@@ -46,7 +47,11 @@ class ValidationEngine:
                 if not str(key).startswith("__")
             }
             for column in present_required_columns:
-                value = normalized_row.get(normalize_name(column))
+                value = None
+                for candidate in get_column_aliases(column):
+                    if candidate in normalized_row:
+                        value = normalized_row.get(candidate)
+                        break
                 if value is None or (isinstance(value, str) and not value.strip()):
                     issues.append(
                         ValidationIssue(

@@ -38,6 +38,30 @@ PROFILE_REQUIRED_ANY_GROUPS: dict[str, list[tuple[str, ...]]] = {
 PROFILE_OPTIONAL_VALUE_COLUMNS: dict[str, set[str]] = {
     "AGR_1251": {"LOW", "HIGH"},
     "AGR_1252": {"HIGH"},
+    "STMS": {"STATUS"},
+}
+
+PROFILE_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
+    "TRKORR": ("REQUEST", "REQUEST NUMBER", "TRANSPORT REQUEST"),
+    "STATUS": ("RC", "RETURN CODE", "FUNCTION", "TRFUNCTION"),
+    "AS4USER": ("OWNER", "USER", "CREATED BY", "USER NAME"),
+    "AS4DATE": ("DATE", "CHANGE DATE"),
+    "TRFUNCTION": ("RC", "RETURN CODE", "FUNCTION", "STATUS"),
+    "MANDT": ("CLT", "CLIENT"),
+    "BNAME": ("USER", "USER NAME", "USERNAME"),
+    "UNAME": ("USER", "USER NAME", "USERNAME"),
+    "USER_NAME": ("USER", "USER NAME", "USERNAME"),
+    "AGR_NAME": ("ROLE", "ROLE NAME"),
+    "PROFILE": ("PROFILE NAME",),
+    "PARAMETER": ("NAME", "PARAMETER NAME", "PROPERTY"),
+    "VALUE": ("CURRENT VALUE", "CONFIGURED VALUE"),
+    "ADDRNUMBER": ("ADDRESS NUMBER",),
+    "PERSNUMBER": ("PERSON NUMBER",),
+    "SMTP_ADDR": ("EMAIL", "E-MAIL", "EMAIL ADDRESS", "SMTP ADDRESS"),
+    "OBJECT": ("AUTH OBJECT", "AUTHORIZATION OBJECT"),
+    "FIELD": ("FIELD NAME", "AUTH FIELD"),
+    "LOW": ("LOW VALUE", "FROM", "FROM VALUE"),
+    "HIGH": ("HIGH VALUE", "TO", "TO VALUE"),
 }
 
 PROFILE_STRUCTURE_RULES: dict[str, dict[str, Any]] = {
@@ -155,6 +179,17 @@ def filter_required_value_columns(profile: str | None, required_columns: list[st
     ]
 
 
+def get_column_aliases(candidate: str) -> list[str]:
+    normalized_candidate = normalize_name(candidate)
+    aliases = [normalized_candidate]
+    aliases.extend(normalize_name(alias) for alias in PROFILE_COLUMN_ALIASES.get(normalized_candidate, ()))
+    return list(dict.fromkeys(aliases))
+
+
+def matches_column_alias(available_columns: set[str], candidate: str) -> bool:
+    return any(alias in available_columns for alias in get_column_aliases(candidate))
+
+
 def detect_validation_profile(source_name: str | None, rows: list[dict[str, Any]]) -> str | None:
     file_name = (source_name or "").strip().lower()
     columns = {normalize_name(column) for row in rows[:1] for column in row.keys()}
@@ -179,8 +214,24 @@ def detect_validation_profile(source_name: str | None, rows: list[dict[str, Any]
         if token in file_name:
             return profile
 
-    if {"SMTP_ADDR", "ADDRNUMBER"}.intersection(columns) or {"BNAME", "PERSNUMBER"}.issubset(columns):
+    if matches_column_alias(columns, "SMTP_ADDR") and (
+        matches_column_alias(columns, "ADDRNUMBER") or matches_column_alias(columns, "PERSNUMBER")
+    ):
         return "ADR6_USR21"
+    if matches_column_alias(columns, "TRKORR") and (
+        "SHORT TEXT" in columns or matches_column_alias(columns, "STATUS") or matches_column_alias(columns, "AS4USER")
+    ):
+        return "STMS"
+    if matches_column_alias(columns, "BNAME") and matches_column_alias(columns, "UFLAG"):
+        return "USR02"
+    if matches_column_alias(columns, "AGR_NAME") and matches_column_alias(columns, "OBJECT") and matches_column_alias(columns, "FIELD"):
+        return "AGR_1251"
+    if matches_column_alias(columns, "AGR_NAME") and matches_column_alias(columns, "UNAME"):
+        return "AGR_USERS"
+    if matches_column_alias(columns, "BNAME") and matches_column_alias(columns, "PROFILE"):
+        return "UST04"
+    if matches_column_alias(columns, "TRKORR") and matches_column_alias(columns, "AS4USER"):
+        return "E070"
     if {"PROPERTY", "VALUE"}.issubset(columns):
         return "M_PASSWORD_POLICY"
     if {"AUDIT_POLICY_NAME", "IS_AUDIT_POLICY_ACTIVE"}.issubset(columns):
@@ -189,7 +240,7 @@ def detect_validation_profile(source_name: str | None, rows: list[dict[str, Any]
         return "GRANTED_PRIVILEGES"
     if ({"SECTION", "KEY", "VALUE"}.issubset(columns) or {"SECTION_NAME", "KEY_NAME", "CONFIGURED_VALUE"}.issubset(columns)):
         return "M_INIFILE_CONTENTS"
-    if "USER_NAME" in columns:
+    if matches_column_alias(columns, "USER_NAME"):
         return "USERS"
 
     return None
@@ -210,11 +261,11 @@ def build_profile_issues(profile: str | None, rows: list[dict[str, Any]]) -> lis
     issues.extend(_validate_expected_structure(profile, available_columns))
 
     for column in PROFILE_REQUIRED_COLUMNS.get(profile, []):
-        if column not in available_columns:
+        if not matches_column_alias(available_columns, column):
             issues.append(ValidationIssue(row_number=0, column_name=column, message="עמודת חובה חסרה"))
 
     for group in PROFILE_REQUIRED_ANY_GROUPS.get(profile, []):
-        if not any(candidate in available_columns for candidate in group):
+        if not any(matches_column_alias(available_columns, candidate) for candidate in group):
             issues.append(
                 ValidationIssue(
                     row_number=0,
@@ -245,7 +296,7 @@ def _validate_expected_structure(profile: str, available_columns: set[str]) -> l
     alternatives = rule.get("alternatives", [])
     if alternatives:
         for alternative in alternatives:
-            if set(alternative).issubset(available_columns):
+            if all(matches_column_alias(available_columns, column) for column in alternative):
                 return []
 
         expected_text = " או ".join(" + ".join(option) for option in alternatives)
@@ -253,15 +304,17 @@ def _validate_expected_structure(profile: str, available_columns: set[str]) -> l
             ValidationIssue(
                 row_number=0,
                 column_name=friendly_name,
-                message=f"הקובץ אינו תואם למבנה המצופה עבור הסלוט {friendly_name}. יש לצפות לאחד מהמבנים: {expected_text}",
+                message=f"הקובץ אינו תואם למבנה המצופה עבור המשבצת {friendly_name}. יש לצפות לאחד מהמבנים: {expected_text}",
             )
         ]
 
-    missing_columns = [column for column in rule.get("required_all", []) if column not in available_columns]
+    missing_columns = [
+        column for column in rule.get("required_all", []) if not matches_column_alias(available_columns, column)
+    ]
     missing_groups = [
         " / ".join(group)
         for group in rule.get("required_one_of", [])
-        if not any(column in available_columns for column in group)
+        if not any(matches_column_alias(available_columns, column) for column in group)
     ]
 
     if not missing_columns and not missing_groups:
@@ -277,7 +330,7 @@ def _validate_expected_structure(profile: str, available_columns: set[str]) -> l
         ValidationIssue(
             row_number=0,
             column_name=friendly_name,
-            message=f"הקובץ אינו תואם למבנה המצופה עבור הסלוט {friendly_name}. {' '.join(message_parts)}",
+            message=f"הקובץ אינו תואם למבנה המצופה עבור המשבצת {friendly_name}. {' '.join(message_parts)}",
         )
     ]
 
@@ -285,8 +338,9 @@ def _validate_expected_structure(profile: str, available_columns: set[str]) -> l
 def _find_column_name(row: dict[str, Any], candidates: tuple[str, ...]) -> str | None:
     normalized_map = {normalize_name(column): column for column in row.keys()}
     for candidate in candidates:
-        if candidate in normalized_map:
-            return normalized_map[candidate]
+        for alias in get_column_aliases(candidate):
+            if alias in normalized_map:
+                return normalized_map[alias]
     return None
 
 

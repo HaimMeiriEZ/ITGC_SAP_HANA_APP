@@ -26,6 +26,7 @@ class ValidationResult:
     report_path: Path | None = None
     detected_profile: str | None = None
     source_files: list[str] = field(default_factory=list)
+    file_row_counts: dict[str, int] = field(default_factory=dict)
     total_rows_override: int | None = None
 
     @property

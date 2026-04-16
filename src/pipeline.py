@@ -26,10 +26,14 @@ def process_file(
         result = _process_agr1251_in_batches(paths, engine, source_name)
     else:
         rows: list[dict] = []
+        file_row_counts: dict[str, int] = {}
         for path in paths:
-            rows.extend(_attach_source(_read_rows(path), path))
+            file_rows = _read_rows(path)
+            file_row_counts[path.name] = len(file_rows)
+            rows.extend(_attach_source(file_rows, path))
         result = engine.validate(rows, source_name=source_name)
         result.source_files = [path.name for path in paths]
+        result.file_row_counts = file_row_counts
         result.total_rows_override = len(rows)
 
     if output_dir is not None:
@@ -68,6 +72,7 @@ def _process_agr1251_in_batches(paths: list[Path], engine: ValidationEngine, sou
     row_offset = 0
     detected_profile: str | None = None
     seen_structure_issues: set[tuple[str, str, str]] = set()
+    file_row_counts: dict[str, int] = {}
 
     for path in paths:
         suffix = path.suffix.lower()
@@ -113,6 +118,7 @@ def _process_agr1251_in_batches(paths: list[Path], engine: ValidationEngine, sou
                 )
 
             total_rows += len(annotated_batch)
+            file_row_counts[path.name] = file_row_counts.get(path.name, 0) + len(annotated_batch)
             row_offset += len(annotated_batch)
 
     return ValidationResult(
@@ -120,5 +126,6 @@ def _process_agr1251_in_batches(paths: list[Path], engine: ValidationEngine, sou
         issues=issues,
         detected_profile=detected_profile,
         source_files=[path.name for path in paths],
+        file_row_counts=file_row_counts,
         total_rows_override=total_rows,
     )

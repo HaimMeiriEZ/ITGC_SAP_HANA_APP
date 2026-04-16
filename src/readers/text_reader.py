@@ -7,12 +7,15 @@ from typing import Any, Iterator
 
 class TextFileReader:
     METADATA_PREFIXES = ("table:", "displayed fields:")
+    ENCODING_CANDIDATES = ("utf-8-sig", "utf-8", "cp1255", "cp1252", "latin-1")
 
     def read(self, file_path: Path) -> list[dict[str, Any]]:
         return [row for batch in self.read_in_batches(file_path, chunk_size=50000) for row in batch]
 
     def read_in_batches(self, file_path: Path, chunk_size: int = 20000) -> Iterator[list[dict[str, Any]]]:
-        with file_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        encoding = self._detect_encoding(file_path)
+
+        with file_path.open("r", encoding=encoding, newline="") as handle:
             preview_lines: list[str] = []
             for _ in range(80):
                 line = handle.readline()
@@ -45,6 +48,21 @@ class TextFileReader:
 
             if current_batch:
                 yield current_batch
+
+    @classmethod
+    def _detect_encoding(cls, file_path: Path) -> str:
+        sample = file_path.read_bytes()[:65536]
+        if not sample:
+            return "utf-8-sig"
+
+        for encoding in cls.ENCODING_CANDIDATES:
+            try:
+                sample.decode(encoding)
+                return encoding
+            except UnicodeDecodeError:
+                continue
+
+        return "latin-1"
 
     @classmethod
     def _find_header_line_index(cls, lines: list[str], delimiter: str) -> int:
