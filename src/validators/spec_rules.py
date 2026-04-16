@@ -35,6 +35,11 @@ PROFILE_REQUIRED_ANY_GROUPS: dict[str, list[tuple[str, ...]]] = {
     ],
 }
 
+PROFILE_OPTIONAL_VALUE_COLUMNS: dict[str, set[str]] = {
+    "AGR_1251": {"LOW", "HIGH"},
+    "AGR_1252": {"HIGH"},
+}
+
 PROFILE_STRUCTURE_RULES: dict[str, dict[str, Any]] = {
     "USR02": {
         "required_all": ["BNAME", "UFLAG"],
@@ -139,6 +144,15 @@ def normalize_name(value: object) -> str:
 
 def normalize_text(value: object) -> str:
     return str(value).strip().casefold()
+
+
+def filter_required_value_columns(profile: str | None, required_columns: list[str]) -> list[str]:
+    optional_columns = PROFILE_OPTIONAL_VALUE_COLUMNS.get(profile or "", set())
+    return [
+        column
+        for column in required_columns
+        if normalize_name(column) not in optional_columns
+    ]
 
 
 def detect_validation_profile(source_name: str | None, rows: list[dict[str, Any]]) -> str | None:

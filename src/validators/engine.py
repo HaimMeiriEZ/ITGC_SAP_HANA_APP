@@ -1,7 +1,12 @@
 from typing import Any
 
 from src.models.validation_result import ValidationIssue, ValidationResult
-from src.validators.spec_rules import build_profile_issues, detect_validation_profile, normalize_name
+from src.validators.spec_rules import (
+    build_profile_issues,
+    detect_validation_profile,
+    filter_required_value_columns,
+    normalize_name,
+)
 
 
 class ValidationEngine:
@@ -16,8 +21,10 @@ class ValidationEngine:
             for column in row.keys()
             if not str(column).startswith("__")
         }
+        detected_profile = detect_validation_profile(source_name, rows)
+        required_value_columns = filter_required_value_columns(detected_profile, self.required_columns)
 
-        for column in self.required_columns:
+        for column in required_value_columns:
             normalized_column = normalize_name(column)
             if normalized_column not in available_columns:
                 issues.append(
@@ -29,7 +36,7 @@ class ValidationEngine:
                 )
 
         present_required_columns = [
-            column for column in self.required_columns if normalize_name(column) in available_columns
+            column for column in required_value_columns if normalize_name(column) in available_columns
         ]
 
         for row_number, row in enumerate(rows, start=1):
@@ -50,7 +57,6 @@ class ValidationEngine:
                         )
                     )
 
-        detected_profile = detect_validation_profile(source_name, rows)
         for issue in build_profile_issues(detected_profile, rows):
             if issue.row_number > 0 and issue.row_number <= len(rows):
                 issue.source_file = str(rows[issue.row_number - 1].get("__source_file", ""))

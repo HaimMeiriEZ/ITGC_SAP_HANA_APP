@@ -142,6 +142,7 @@ class ValidationDesktopApp(QMainWindow):
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         self.report_path: Path | None = None
         self.slot_widgets: dict[str, dict[str, object]] = {}
+        self.category_run_buttons: dict[str, QPushButton] = {}
         self.selected_slot_key: str | None = None
         self.summary_labels: dict[str, QLabel] = {}
         self.run_log_records: list[dict[str, object]] = []
@@ -178,7 +179,7 @@ class ValidationDesktopApp(QMainWindow):
         header_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #16325c;")
         main_layout.addWidget(header_label)
 
-        hint_label = QLabel("בחר קבצים לפי הסלוט המתאים. כוכבית מציינת סלוט חובה. בחלק מהסלוטים ניתן לבחור כמה קבצים יחד לצורך בדיקה מאוחדת.")
+        hint_label = QLabel("בחר קבצים לפי הסלוט המתאים. כוכבית מציינת סלוט חובה. ניתן להריץ בדיקה נפרדת לכל קבוצת קבצים בלי להמתין לטעינת כל הדוחות.")
         hint_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         hint_label.setWordWrap(True)
         hint_label.setStyleSheet("color: #4f5d73;")
@@ -234,7 +235,17 @@ class ValidationDesktopApp(QMainWindow):
             category_label = QLabel(category)
             category_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             category_label.setStyleSheet("font-weight: bold; color: #16325c; margin-top: 8px;")
-            slots_layout.addWidget(category_label, current_row, 0, 1, 4)
+
+            category_button = QPushButton("הרץ בדיקה")
+            category_button.setMinimumHeight(32)
+            category_button.setToolTip(self.format_rtl_text(f"הרצת בדיקה עבור קבוצת {category}"))
+            category_button.clicked.connect(
+                lambda _checked=False, cat=category: self.run_category_validation(cat)
+            )
+            self.category_run_buttons[category] = category_button
+
+            slots_layout.addWidget(category_label, current_row, 1, 1, 3)
+            slots_layout.addWidget(category_button, current_row, 0)
             current_row += 1
 
             for slot_key, metadata in self.SLOT_DEFINITIONS.items():
@@ -312,9 +323,9 @@ class ValidationDesktopApp(QMainWindow):
         self.run_log_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.run_log_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.run_log_table.setAlternatingRowColors(True)
-        self.run_log_table.setMinimumHeight(160)
-        self.run_log_table.setToolTip("לחיצה על שורה שגויה תפתח פירוט שגיאות")
-        self.run_log_table.cellClicked.connect(self.show_log_details)
+        self.run_log_table.setMinimumHeight(260)
+        self.run_log_table.setToolTip("לחיצה כפולה על שורה תפתח פירוט מלא עבור הקובץ")
+        self.run_log_table.cellDoubleClicked.connect(self.show_log_details)
         run_log_layout.addWidget(self.run_log_table)
         main_layout.addWidget(self.run_log_group)
 
@@ -325,6 +336,7 @@ class ValidationDesktopApp(QMainWindow):
         self.required_columns_edit.setAlignment(Qt.AlignRight)
         self.required_columns_edit.setPlaceholderText("יוזן אוטומטית לפי הסלוט שנבחר")
         required_layout.addWidget(self.required_columns_edit)
+        self.required_columns_group.hide()
         main_layout.addWidget(self.required_columns_group)
 
         self.summary_group = QGroupBox("סיכום בדיקה")
@@ -349,6 +361,7 @@ class ValidationDesktopApp(QMainWindow):
             summary_layout.addWidget(title_label, 0, column)
             summary_layout.addWidget(value_label, 1, column)
             self.summary_labels[key] = value_label
+        self.summary_group.hide()
         main_layout.addWidget(self.summary_group)
 
         self.results_group = QGroupBox("רשימת שגיאות")
@@ -365,6 +378,7 @@ class ValidationDesktopApp(QMainWindow):
         self.issues_table.setAlternatingRowColors(True)
         results_layout.addWidget(self.issues_table)
         self.issues_table.setMinimumHeight(180)
+        self.results_group.hide()
         main_layout.addWidget(self.results_group)
 
         central_widget.setStyleSheet(
@@ -443,9 +457,22 @@ class ValidationDesktopApp(QMainWindow):
             self.slot_widgets[slot_key]["path_label"].setText(self._format_selected_files(file_paths))
             self.required_columns_edit.setText(self._suggest_required_columns(slot_key))
 
-    def _parse_required_columns(self) -> list[str]:
-        raw_value = self.required_columns_edit.text().replace(";", ",").replace("\n", ",")
-        return [item.strip() for item in raw_value.split(",") if item.strip()]
+    def _parse_required_columns(self, raw_value: str | None = None) -> list[str]:
+        value = self.required_columns_edit.text() if raw_value is None else raw_value
+        normalized_value = value.replace(";", ",").replace("\n", ",")
+        return [item.strip() for item in normalized_value.split(",") if item.strip()]
+
+    def _required_columns_for_slot(self, slot_key: str) -> list[str]:
+        if self.selected_slot_key == slot_key and self.required_columns_edit.text().strip():
+            return self._parse_required_columns()
+        return self._parse_required_columns(self._suggest_required_columns(slot_key))
+
+    def _get_category_slots(self, category: str) -> list[str]:
+        return [
+            slot_key
+            for slot_key, metadata in self.SLOT_DEFINITIONS.items()
+            if metadata["category"] == category
+        ]
 
     def _current_file_paths(self) -> list[str]:
         if not self.selected_slot_key:
@@ -467,8 +494,8 @@ class ValidationDesktopApp(QMainWindow):
             "USR02": "BNAME,UFLAG,TRDAT,LTIME",
             "ADR6_USR21": "",
             "AGR_USERS": "AGR_NAME,UNAME",
-            "AGR_1251": "AGR_NAME,OBJECT,FIELD,LOW,HIGH",
-            "AGR_1252": "AGR_NAME,LOW,HIGH",
+            "AGR_1251": "AGR_NAME,OBJECT,FIELD",
+            "AGR_1252": "AGR_NAME,LOW",
             "AGR_DEFINE": "AGR_NAME,PARENT_AGR",
             "UST04": "BNAME,PROFILE",
             "E070": "TRKORR,AS4USER,TRFUNCTION",
@@ -485,25 +512,98 @@ class ValidationDesktopApp(QMainWindow):
             QMessageBox.warning(self, "חסר קובץ", "יש לבחור קובץ מתוך אחד מסלוטי הקלט לפני הרצת הבדיקה.")
             return
 
-        if self.selected_slot_key == "AGR_1251":
+        self._run_slot_validation(self.selected_slot_key, file_paths, show_feedback=True)
+
+    def run_category_validation(self, category: str) -> None:
+        selected_slots: list[tuple[str, list[str]]] = []
+        missing_required: list[str] = []
+
+        for slot_key in self._get_category_slots(category):
+            file_paths = list(self.slot_widgets[slot_key].get("selected_paths", []))
+            if file_paths:
+                selected_slots.append((slot_key, file_paths))
+            elif self.SLOT_DEFINITIONS[slot_key]["required"]:
+                missing_required.append(slot_key)
+
+        if not selected_slots:
+            QMessageBox.warning(
+                self,
+                "לא נבחרו קבצים",
+                f"לא נבחרו קבצים עבור הקבוצה {category}. יש לבחור לפחות קובץ אחד לפני הרצת הבדיקה.",
+            )
+            return
+
+        if missing_required:
+            QMessageBox.warning(
+                self,
+                "חסרים קבצי חובה",
+                f"בקבוצה {category} חסרים קבצי חובה עבור הסלוטים: {', '.join(missing_required)}.\n\nהבדיקה תמשיך עבור הקבצים שנבחרו.",
+            )
+
+        processed_slots = 0
+        processed_files = 0
+        total_rows = 0
+        invalid_slots = 0
+        failed_slots: list[str] = []
+
+        for slot_key, file_paths in selected_slots:
+            slot_summary = self._run_slot_validation(slot_key, file_paths, show_feedback=False)
+            processed_slots += 1
+            processed_files += int(slot_summary["file_count"])
+            total_rows += int(slot_summary["total_rows"])
+
+            if slot_summary["status"] == "error":
+                failed_slots.append(slot_key)
+            elif not bool(slot_summary["is_valid"]):
+                invalid_slots += 1
+
+        summary_lines = [
+            f"בדיקת הקבוצה {category} הושלמה.",
+            f"סלוטים שנבדקו: {processed_slots}",
+            f"קבצים שנבדקו: {processed_files}",
+            f"שורות שנבדקו: {total_rows}",
+        ]
+
+        if invalid_slots:
+            summary_lines.append(f"סלוטים עם ממצאים: {invalid_slots}")
+        if failed_slots:
+            summary_lines.append(f"סלוטים שנכשלו בעיבוד: {', '.join(failed_slots)}")
+        summary_lines.append("ניתן לבצע לחיצה כפולה על הרשומה בלוג לצפייה בפירוט.")
+
+        if invalid_slots or failed_slots:
+            QMessageBox.warning(self, "בדיקת קבוצה הושלמה עם ממצאים", "\n".join(summary_lines))
+        else:
+            QMessageBox.information(self, "בדיקת קבוצה הושלמה", "\n".join(summary_lines))
+
+    def _run_slot_validation(self, slot_key: str, file_paths: list[str], show_feedback: bool = True) -> dict[str, object]:
+        if slot_key == "AGR_1251":
             self.summary_labels["status"].setText("מעבד קובצי הרשאות גדולים במנות...")
             QApplication.processEvents()
 
         try:
             result = process_file(
                 file_paths,
-                required_columns=self._parse_required_columns(),
+                required_columns=self._required_columns_for_slot(slot_key),
                 output_dir=self.config.output_dir,
-                source_name_override=self.selected_slot_key,
+                source_name_override=slot_key,
             )
         except Exception as error:
-            QMessageBox.critical(self, "שגיאה", f"אירעה שגיאה במהלך העיבוד:\n{error}")
-            return
+            self.summary_labels["status"].setText(f"שגיאה בעיבוד {slot_key}")
+            if show_feedback:
+                QMessageBox.critical(self, "שגיאה", f"אירעה שגיאה במהלך העיבוד של הסלוט {slot_key}:\n{error}")
+            return {
+                "slot_key": slot_key,
+                "status": "error",
+                "file_count": len(file_paths),
+                "total_rows": 0,
+                "invalid_rows": 0,
+                "is_valid": False,
+            }
 
         self.summary_labels["total"].setText(str(result.summary.total_rows))
         self.summary_labels["valid"].setText(str(result.summary.valid_rows))
         self.summary_labels["invalid"].setText(str(result.summary.invalid_rows))
-        status_text = "תקין" if result.summary.is_valid else f"נמצאו שגיאות - {self.selected_slot_key}"
+        status_text = "תקין" if result.summary.is_valid else f"נמצאו שגיאות - {slot_key}"
         self.summary_labels["status"].setText(status_text)
 
         self.issues_table.setRowCount(0)
@@ -527,32 +627,43 @@ class ValidationDesktopApp(QMainWindow):
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.issues_table.setItem(0, column, item)
 
-        self._append_run_log_entries(self.selected_slot_key, file_paths, result)
-        self.report_path = result.report_path
+        self._append_run_log_entries(slot_key, file_paths, result)
+        if result.report_path is not None:
+            self.report_path = result.report_path
         self.report_button.setEnabled(self.report_path is not None)
         file_count = len(result.source_files) if result.source_files else len(file_paths)
 
-        if result.summary.is_valid:
-            QMessageBox.information(
-                self,
-                "הבדיקה הושלמה",
-                f"בדיקת הסלוט {self.selected_slot_key} הסתיימה ללא שגיאות. נקלטו {file_count} קבצים.",
-            )
-        else:
-            ordered_messages = []
-            structure_messages = [issue.message for issue in result.issues if "אינו תואם למבנה" in issue.message]
-            other_messages = [issue.message for issue in result.issues if "אינו תואם למבנה" not in issue.message]
-            for message in structure_messages + other_messages:
-                if message not in ordered_messages:
-                    ordered_messages.append(message)
-                if len(ordered_messages) == 3:
-                    break
-            summary_text = "\n".join(f"• {message}" for message in ordered_messages)
-            QMessageBox.warning(
-                self,
-                "נמצאו שגיאות בבדיקה",
-                f"בדיקת הסלוט {self.selected_slot_key} הסתיימה עם שגיאות.\n\n{summary_text}\n\nניתן ללחוץ על הרשומה השגויה בלוג לצפייה בפירוט.",
-            )
+        if show_feedback:
+            if result.summary.is_valid:
+                QMessageBox.information(
+                    self,
+                    "הבדיקה הושלמה",
+                    f"בדיקת הסלוט {slot_key} הסתיימה ללא שגיאות. נקלטו {file_count} קבצים.",
+                )
+            else:
+                ordered_messages = []
+                structure_messages = [issue.message for issue in result.issues if "אינו תואם למבנה" in issue.message]
+                other_messages = [issue.message for issue in result.issues if "אינו תואם למבנה" not in issue.message]
+                for message in structure_messages + other_messages:
+                    if message not in ordered_messages:
+                        ordered_messages.append(message)
+                    if len(ordered_messages) == 3:
+                        break
+                summary_text = "\n".join(f"• {message}" for message in ordered_messages)
+                QMessageBox.warning(
+                    self,
+                    "נמצאו שגיאות בבדיקה",
+                    f"בדיקת הסלוט {slot_key} הסתיימה עם שגיאות.\n\n{summary_text}\n\nניתן לבצע לחיצה כפולה על הרשומה בלוג לצפייה בפירוט.",
+                )
+
+        return {
+            "slot_key": slot_key,
+            "status": "ok",
+            "file_count": file_count,
+            "total_rows": result.summary.total_rows,
+            "invalid_rows": result.summary.invalid_rows,
+            "is_valid": result.summary.is_valid,
+        }
 
     def _append_run_log_entries(self, slot_key: str, file_paths: list[str], result) -> None:
         issues_by_file: dict[str, list] = {Path(path).name: [] for path in file_paths}
@@ -623,12 +734,8 @@ class ValidationDesktopApp(QMainWindow):
         if row_index < 0 or row_index >= len(self.run_log_records):
             return
 
-        record = self.run_log_records[row_index]
-        if record.get("status") != "שגוי":
-            return
-
         dialog = QDialog(self)
-        dialog.setWindowTitle("פירוט שגיאות לקובץ")
+        dialog.setWindowTitle("פירוט קובץ שנבדק")
         dialog.setLayoutDirection(Qt.RightToLeft)
         dialog.resize(760, 420)
 

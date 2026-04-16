@@ -5,17 +5,26 @@ __pycache__/
 *.pyd
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 .venv/
 venv/
 
 # Env
 .env
 
-# VS Code
+# VS Code / local IDE
 .vscode/
+.idea/
+
+# Windows noise
+Thumbs.db
+Desktop.ini
 
 # App outputs
-/data/output/*.xlsx
+/data/output/
 /data/input/20*.txt
 /output/
 

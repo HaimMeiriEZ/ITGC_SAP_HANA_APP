@@ -1,5 +1,6 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 import unittest
 
 from openpyxl import Workbook, load_workbook
@@ -127,16 +128,17 @@ class TestSmoke(unittest.TestCase):
         window = ValidationDesktopApp()
         try:
             self.assertEqual(window.run_button.text(), "הרץ בדיקה")
-            self.assertEqual(window.summary_labels["status"].text(), "ממתין להרצה")
             self.assertEqual(window.slots_group.title(), "מקורות קלט לבדיקת SAP HANA APP")
-            self.assertEqual(window.summary_group.title(), "סיכום בדיקה")
-            self.assertEqual(window.results_group.title(), "רשימת שגיאות")
             self.assertTrue(window.slots_group.alignment() & Qt.AlignRight)
-            self.assertTrue(window.summary_group.alignment() & Qt.AlignRight)
-            self.assertTrue(window.results_group.alignment() & Qt.AlignRight)
+            self.assertFalse(window.required_columns_group.isVisible())
+            self.assertFalse(window.summary_group.isVisible())
+            self.assertFalse(window.results_group.isVisible())
+            self.assertIn("לחיצה כפולה", window.run_log_table.toolTip())
             self.assertIn("USR02", window.slot_widgets)
             self.assertIn("AGR_USERS", window.slot_widgets)
             self.assertIn("RSPARAM", window.slot_widgets)
+            self.assertIn("טבלאות משתמשים", window.category_run_buttons)
+            self.assertEqual(window.category_run_buttons["טבלאות משתמשים"].text(), "הרץ בדיקה")
         finally:
             window.close()
 
@@ -154,6 +156,63 @@ class TestSmoke(unittest.TestCase):
             )
         finally:
             window.close()
+
+    def test_category_run_button_validates_selected_group(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            adr6_path = base_dir / "adr6.txt"
+            usr02_path.write_text(
+                "BNAME;UFLAG;TRDAT;LTIME\nUSER_A;0;20260101;080000\n",
+                encoding="utf-8",
+            )
+            adr6_path.write_text(
+                "ADDRNUMBER;PERSNUMBER;SMTP_ADDR\n1001;2001;user@example.com\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window.slot_widgets["ADR6_USR21"]["selected_paths"] = [str(adr6_path)]
+
+                with patch("src.ui.desktop_app.QMessageBox.information") as information_mock, patch(
+                    "src.ui.desktop_app.QMessageBox.warning"
+                ) as warning_mock:
+                    window.run_category_validation("טבלאות משתמשים")
+
+                self.assertEqual(window.run_log_table.rowCount(), 2)
+                self.assertTrue(window.report_button.isEnabled())
+                self.assertTrue(information_mock.called)
+                self.assertFalse(warning_mock.called)
+            finally:
+                window.close()
+
+    def test_category_run_warns_when_required_slot_is_missing(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            adr6_path = base_dir / "adr6_only.txt"
+            adr6_path.write_text(
+                "ADDRNUMBER;PERSNUMBER;SMTP_ADDR\n1001;2001;user@example.com\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["ADR6_USR21"]["selected_paths"] = [str(adr6_path)]
+
+                with patch("src.ui.desktop_app.QMessageBox.information") as information_mock, patch(
+                    "src.ui.desktop_app.QMessageBox.warning"
+                ) as warning_mock:
+                    window.run_category_validation("טבלאות משתמשים")
+
+                self.assertEqual(window.run_log_table.rowCount(), 1)
+                self.assertTrue(warning_mock.called)
+                self.assertTrue(information_mock.called)
+            finally:
+                window.close()
 
     def test_run_log_is_recorded_per_file_and_exposes_details(self) -> None:
         window = ValidationDesktopApp()
@@ -180,9 +239,12 @@ class TestSmoke(unittest.TestCase):
             self.assertEqual(window.run_log_table.item(0, 0).text(), "USR02")
             self.assertEqual(window.run_log_table.item(0, 2).text(), "שגוי")
             self.assertEqual(window.run_log_table.item(1, 2).text(), "תקין")
-            details = window._build_log_details(0)
-            self.assertIn("usr02_a.txt", details)
-            self.assertIn("ערך חריג", details)
+            invalid_details = window._build_log_details(0)
+            valid_details = window._build_log_details(1)
+            self.assertIn("usr02_a.txt", invalid_details)
+            self.assertIn("ערך חריג", invalid_details)
+            self.assertIn("usr02_b.txt", valid_details)
+            self.assertIn("לא נמצאו שגיאות", valid_details)
         finally:
             window.close()
 
@@ -243,6 +305,25 @@ class TestSmoke(unittest.TestCase):
         result = ValidationEngine().validate(rows, source_name="ADR6_USR21")
 
         self.assertFalse(any(issue.column_name == "BNAME" and issue.message == "עמודת חובה חסרה" for issue in result.issues))
+
+    def test_agr_1251_allows_empty_high_value_in_normal_sap_rows(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "agr_1251_100.txt"
+            input_path.write_text(
+                "MANDT;AGR_NAME;COUNTER;OBJECT;AUTH;VARIANT;FIELD;LOW;HIGH\n"
+                "100;/AIF/ARC_CREATE;000001;S_TCODE;T_XX93001900;;TCD;SARA;\n"
+                "100;/AIF/ARC_CREATE;000002;S_ADMI_FCD;T_XX93001900;;S_ADMI_FCD;;\n",
+                encoding="utf-8",
+            )
+
+            result = process_file(
+                input_path,
+                required_columns=["AGR_NAME", "OBJECT", "FIELD", "LOW", "HIGH"],
+                source_name_override="AGR_1251",
+            )
+
+            range_issues = [issue for issue in result.issues if issue.column_name in {"LOW", "HIGH"}]
+            self.assertEqual(range_issues, [])
 
     def test_usr02_slot_blocks_wrong_rsparam_structure(self) -> None:
         rows = [
