@@ -26,6 +26,21 @@ class TextFileReader:
             if not preview_lines:
                 return
 
+            if self._looks_like_key_value_text(preview_lines):
+                current_batch: list[dict[str, Any]] = []
+                for line in chain(preview_lines, handle):
+                    parsed_row = self._parse_key_value_line(line)
+                    if not parsed_row:
+                        continue
+                    current_batch.append(parsed_row)
+                    if len(current_batch) >= chunk_size:
+                        yield current_batch
+                        current_batch = []
+
+                if current_batch:
+                    yield current_batch
+                return
+
             delimiter = self._detect_delimiter("".join(preview_lines))
             header_index = self._find_header_line_index(preview_lines, delimiter)
             relevant_preview = preview_lines[header_index:]
@@ -78,7 +93,11 @@ class TextFileReader:
             if len(cells) < 2:
                 continue
 
-            identifier_like = [cell for cell in cells if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_/@.-]*", cell)]
+            identifier_like = [
+                cell
+                for cell in cells
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_/@.()\- %]*", cell)
+            ]
             if len(identifier_like) >= 2:
                 return index
 
@@ -103,6 +122,34 @@ class TextFileReader:
             normalized[key_text] = value
 
         return normalized
+
+    @staticmethod
+    def _looks_like_key_value_text(lines: list[str]) -> bool:
+        matches = 0
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("#", ";", "[")):
+                continue
+            if re.match(r"^[A-Za-z0-9_./-]+\s*(=|:|\s{2,})\s*.+$", stripped):
+                matches += 1
+            if matches >= 2:
+                return True
+        return False
+
+    @staticmethod
+    def _parse_key_value_line(line: str) -> dict[str, Any]:
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", ";", "[")):
+            return {}
+
+        match = re.match(r"^(?P<name>[A-Za-z0-9_./-]+)\s*(=|:|\s{2,})\s*(?P<value>.+?)\s*$", stripped)
+        if not match:
+            return {}
+
+        return {
+            "NAME": match.group("name").strip(),
+            "VALUE": match.group("value").strip(),
+        }
 
     @staticmethod
     def _detect_delimiter(sample: str) -> str:

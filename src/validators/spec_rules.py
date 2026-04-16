@@ -54,7 +54,15 @@ PROFILE_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "AGR_NAME": ("ROLE", "ROLE NAME"),
     "PROFILE": ("PROFILE NAME",),
     "PARAMETER": ("NAME", "PARAMETER NAME", "PROPERTY"),
-    "VALUE": ("CURRENT VALUE", "CONFIGURED VALUE"),
+    "VALUE": (
+        "CURRENT VALUE",
+        "CONFIGURED VALUE",
+        "PARAMETER VALUE",
+        "ACTUAL VALUE",
+        "USER-DEFINED VALUE",
+        "SYSTEM DEFAULT VALUE",
+        "SYSTEM DEFAULT VALUE(UNSUBSTITUTED FORM)",
+    ),
     "ADDRNUMBER": ("ADDRESS NUMBER",),
     "PERSNUMBER": ("PERSON NUMBER",),
     "SMTP_ADDR": ("EMAIL", "E-MAIL", "EMAIL ADDRESS", "SMTP ADDRESS"),
@@ -159,6 +167,27 @@ CRITICAL_PRIVILEGES = {
     "TRUST ADMIN",
     "USER ADMIN",
     "BACKUP ADMIN",
+}
+
+SAP_ITGC_RELEVANT_PARAMETERS = {
+    "login/min_password_lng",
+    "login/min_password_digits",
+    "login/min_password_letters",
+    "login/min_password_lowercase",
+    "login/min_password_uppercase",
+    "login/min_password_specials",
+    "login/fails_to_user_lock",
+    "login/failed_user_auto_unlock",
+    "login/password_expiration_time",
+    "login/password_history_size",
+    "login/password_change_for_sso",
+    "login/password_downwards_compatibility",
+    "login/no_automatic_user_sapstar",
+}
+
+PROFILE_SCOPED_VALUE_PARAMETERS: dict[str, set[str]] = {
+    "RSPARAM": SAP_ITGC_RELEVANT_PARAMETERS,
+    "TPFET": SAP_ITGC_RELEVANT_PARAMETERS,
 }
 
 
@@ -342,6 +371,22 @@ def _find_column_name(row: dict[str, Any], candidates: tuple[str, ...]) -> str |
             if alias in normalized_map:
                 return normalized_map[alias]
     return None
+
+
+def should_enforce_required_value(profile: str | None, row: dict[str, Any], column: str) -> bool:
+    if normalize_name(column) != "VALUE":
+        return True
+
+    relevant_parameters = PROFILE_SCOPED_VALUE_PARAMETERS.get(profile or "")
+    if not relevant_parameters:
+        return True
+
+    parameter_column = _find_column_name(row, ("PARAMETER", "NAME", "PROPERTY"))
+    if not parameter_column:
+        return True
+
+    parameter_name = normalize_text(row.get(parameter_column, ""))
+    return parameter_name in relevant_parameters
 
 
 def _parse_numeric(value: object) -> float | None:

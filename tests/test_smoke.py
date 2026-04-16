@@ -446,6 +446,100 @@ class TestSmoke(unittest.TestCase):
         self.assertFalse(result.summary.is_valid)
         self.assertTrue(any("אינו תואם למבנה המצופה עבור המשבצת USR02" in issue.message for issue in result.issues))
 
+    def test_rsparam_excel_with_title_row_is_detected(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "rsparam.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(["Parameter export"])
+            sheet.append([None, None])
+            sheet.append(["NAME", "CURRENT VALUE"])
+            sheet.append(["login/min_password_lng", "8"])
+            workbook.save(file_path)
+
+            result = process_file(
+                file_path,
+                required_columns=["PARAMETER", "VALUE"],
+                source_name_override="RSPARAM",
+            )
+
+            self.assertFalse(any(issue.message == "עמודת חובה חסרה" for issue in result.issues))
+            self.assertFalse(any("אינו תואם למבנה המצופה עבור המשבצת RSPARAM" in issue.message for issue in result.issues))
+
+    def test_rz10_key_value_text_is_detected(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "rz10.txt"
+            file_path.write_text(
+                "login/min_password_lng = 8\nlogin/password_lock_for_system_user = 1\n",
+                encoding="utf-8",
+            )
+
+            result = process_file(
+                file_path,
+                required_columns=["PARAMETER", "VALUE"],
+                source_name_override="TPFET",
+            )
+
+            self.assertFalse(any(issue.message == "עמודת חובה חסרה" for issue in result.issues))
+            self.assertFalse(any("אינו תואם למבנה המצופה עבור המשבצת TPFET" in issue.message for issue in result.issues))
+
+    def test_rsparam_csv_with_user_defined_and_system_default_headers_is_detected(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "rsparam.csv"
+            file_path.write_text(
+                "Parameter Name,User-Defined Value,System Default Value,System Default Value(Unsubstituted Form),Comment\n"
+                "login/min_password_lng,,8,8,Minimum password length\n",
+                encoding="utf-8",
+            )
+
+            result = process_file(
+                file_path,
+                required_columns=["PARAMETER", "VALUE"],
+                source_name_override="RSPARAM",
+            )
+
+            self.assertFalse(any(issue.message == "עמודת חובה חסרה" for issue in result.issues))
+            self.assertFalse(any("אינו תואם למבנה המצופה עבור המשבצת RSPARAM" in issue.message for issue in result.issues))
+
+    def test_rsparam_excel_with_cover_sheet_is_detected(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "rsparam_cover.xlsx"
+            workbook = Workbook()
+            cover = workbook.active
+            cover.title = "Cover"
+            cover.append(["Export summary"])
+            sheet = workbook.create_sheet("RSPARAM")
+            sheet.append(["Parameter Name", "Parameter Value"])
+            sheet.append(["login/min_password_lng", "8"])
+            workbook.save(file_path)
+
+            result = process_file(
+                file_path,
+                required_columns=["PARAMETER", "VALUE"],
+                source_name_override="RSPARAM",
+            )
+
+            self.assertFalse(any(issue.message == "עמודת חובה חסרה" for issue in result.issues))
+            self.assertFalse(any("אינו תואם למבנה המצופה עבור המשבצת RSPARAM" in issue.message for issue in result.issues))
+
+    def test_rsparam_blank_value_is_ignored_for_irrelevant_parameter(self) -> None:
+        rows = [
+            {"PARAMETER": "dbs/db2/generic", "VALUE": ""},
+        ]
+
+        result = ValidationEngine(required_columns=["PARAMETER", "VALUE"]).validate(rows, source_name="RSPARAM")
+
+        self.assertFalse(any(issue.column_name == "VALUE" and issue.message == "ערך חובה חסר" for issue in result.issues))
+
+    def test_rsparam_blank_value_is_reported_for_itgc_relevant_parameter(self) -> None:
+        rows = [
+            {"PARAMETER": "login/min_password_lng", "VALUE": ""},
+        ]
+
+        result = ValidationEngine(required_columns=["PARAMETER", "VALUE"]).validate(rows, source_name="RSPARAM")
+
+        self.assertTrue(any(issue.column_name == "VALUE" and issue.message == "ערך חובה חסר" for issue in result.issues))
+
 
 if __name__ == "__main__":
     unittest.main()

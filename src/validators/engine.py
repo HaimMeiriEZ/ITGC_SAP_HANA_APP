@@ -8,6 +8,7 @@ from src.validators.spec_rules import (
     get_column_aliases,
     matches_column_alias,
     normalize_name,
+    should_enforce_required_value,
 )
 
 
@@ -49,10 +50,24 @@ class ValidationEngine:
             for column in present_required_columns:
                 value = None
                 for candidate in get_column_aliases(column):
-                    if candidate in normalized_row:
-                        value = normalized_row.get(candidate)
-                        break
-                if value is None or (isinstance(value, str) and not value.strip()):
+                    if candidate not in normalized_row:
+                        continue
+                    candidate_value = normalized_row.get(candidate)
+                    if candidate_value is None:
+                        if value is None:
+                            value = candidate_value
+                        continue
+                    if isinstance(candidate_value, str) and not candidate_value.strip():
+                        if value is None:
+                            value = candidate_value
+                        continue
+                    value = candidate_value
+                    break
+                if (value is None or (isinstance(value, str) and not value.strip())) and should_enforce_required_value(
+                    detected_profile,
+                    row,
+                    column,
+                ):
                     issues.append(
                         ValidationIssue(
                             row_number=row_number,
