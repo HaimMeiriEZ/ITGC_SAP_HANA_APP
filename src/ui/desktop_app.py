@@ -406,7 +406,7 @@ class ValidationDesktopApp(QMainWindow):
         run_log_layout = QVBoxLayout(self.run_log_group)
         run_log_layout.setContentsMargins(12, 18, 12, 12)
         self.run_log_table = QTableWidget(0, 10)
-        self.run_log_table.setHorizontalHeaderLabels(["סלוט", "קבוצת דוחות", "קובץ", "תאריך הפקה", "רשומות שנקלטו", "סטטוס", "מספר שגיאות", "תיאור שגיאה", "תאריך בדיקה", "שעת בדיקה"])
+        self.run_log_table.setHorizontalHeaderLabels(["משבצת", "קבוצת דוחות", "קובץ", "תאריך הפקה", "רשומות שנקלטו", "סטטוס", "מספר שגיאות", "תיאור שגיאה", "תאריך בדיקה", "שעת בדיקה"])
         self.run_log_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.run_log_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.run_log_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
@@ -435,7 +435,7 @@ class ValidationDesktopApp(QMainWindow):
         required_layout = QHBoxLayout(self.required_columns_group)
         self.required_columns_edit = QLineEdit("")
         self.required_columns_edit.setAlignment(Qt.AlignRight)
-        self.required_columns_edit.setPlaceholderText("יוזן אוטומטית לפי הסלוט שנבחר")
+        self.required_columns_edit.setPlaceholderText("יוזן אוטומטית לפי המשבצת שנבחרה")
         required_layout.addWidget(self.required_columns_edit)
         self.required_columns_group.hide()
         main_layout.addWidget(self.required_columns_group)
@@ -650,7 +650,7 @@ class ValidationDesktopApp(QMainWindow):
     def run_validation(self) -> None:
         file_paths = self._current_file_paths()
         if not file_paths or not self.selected_slot_key:
-            QMessageBox.warning(self, "חסר קובץ", "יש לבחור קובץ מתוך אחד מסלוטי הקלט לפני הרצת הבדיקה.")
+            QMessageBox.warning(self, "חסר קובץ", "יש לבחור קובץ מתוך אחד ממשבצות הקלט לפני הרצת הבדיקה.")
             return
 
         self._run_slot_validation(self.selected_slot_key, file_paths, show_feedback=True)
@@ -678,7 +678,7 @@ class ValidationDesktopApp(QMainWindow):
             QMessageBox.warning(
                 self,
                 "חסרים קבצי חובה",
-                f"בקבוצה {category} חסרים קבצי חובה עבור הסלוטים: {', '.join(missing_required)}.\n\nהבדיקה תמשיך עבור הקבצים שנבחרו.",
+                f"בקבוצה {category} חסרים קבצי חובה עבור המשבצות: {', '.join(missing_required)}.\n\nהבדיקה תמשיך עבור הקבצים שנבחרו.",
             )
 
         processed_slots = 0
@@ -700,15 +700,15 @@ class ValidationDesktopApp(QMainWindow):
 
         summary_lines = [
             f"בדיקת הקבוצה {category} הושלמה.",
-            f"סלוטים שנבדקו: {processed_slots}",
+            f"משבצות שנבדקו: {processed_slots}",
             f"קבצים שנבדקו: {processed_files}",
             f"שורות שנבדקו: {total_rows}",
         ]
 
         if invalid_slots:
-            summary_lines.append(f"סלוטים עם ממצאים: {invalid_slots}")
+            summary_lines.append(f"משבצות עם ממצאים: {invalid_slots}")
         if failed_slots:
-            summary_lines.append(f"סלוטים שנכשלו בעיבוד: {', '.join(failed_slots)}")
+            summary_lines.append(f"משבצות שנכשלו בעיבוד: {', '.join(failed_slots)}")
         summary_lines.append("ניתן לבצע לחיצה כפולה על הרשומה בלוג לצפייה בפירוט.")
 
         if invalid_slots or failed_slots:
@@ -731,7 +731,7 @@ class ValidationDesktopApp(QMainWindow):
         except Exception as error:
             self.summary_labels["status"].setText(f"שגיאה בעיבוד {slot_key}")
             self.issues_table.setRowCount(0)
-            error_message = f"אירעה שגיאה במהלך העיבוד של הסלוט {slot_key}: {error}"
+            error_message = f"אירעה שגיאה במהלך העיבוד של המשבצת {slot_key}: {error}"
             self.issues_table.insertRow(0)
             for column, value in enumerate(["מבנה", "SYSTEM", error_message]):
                 item = QTableWidgetItem(self.format_rtl_text(value))
@@ -739,7 +739,7 @@ class ValidationDesktopApp(QMainWindow):
                 self.issues_table.setItem(0, column, item)
             self._append_error_log_entries(slot_key, file_paths, str(error))
             if show_feedback:
-                QMessageBox.critical(self, "שגיאה", f"אירעה שגיאה במהלך העיבוד של הסלוט {slot_key}:\n{error}")
+                QMessageBox.critical(self, "שגיאה", f"אירעה שגיאה במהלך העיבוד של המשבצת {slot_key}:\n{error}")
             return {
                 "slot_key": slot_key,
                 "status": "error",
@@ -787,7 +787,7 @@ class ValidationDesktopApp(QMainWindow):
                 QMessageBox.information(
                     self,
                     "הבדיקה הושלמה",
-                    f"בדיקת הסלוט {slot_key} הסתיימה ללא שגיאות. נקלטו {file_count} קבצים.",
+                    f"בדיקת המשבצת {slot_key} הסתיימה ללא שגיאות. נקלטו {file_count} קבצים.",
                 )
             else:
                 ordered_messages = []
@@ -802,7 +802,7 @@ class ValidationDesktopApp(QMainWindow):
                 QMessageBox.warning(
                     self,
                     "נמצאו שגיאות בבדיקה",
-                    f"בדיקת הסלוט {slot_key} הסתיימה עם שגיאות.\n\n{summary_text}\n\nניתן לבצע לחיצה כפולה על הרשומה בלוג לצפייה בפירוט.",
+                    f"בדיקת המשבצת {slot_key} הסתיימה עם שגיאות.\n\n{summary_text}\n\nניתן לבצע לחיצה כפולה על הרשומה בלוג לצפייה בפירוט.",
                 )
 
         return {
@@ -932,7 +932,7 @@ class ValidationDesktopApp(QMainWindow):
 
         record = self.run_log_records[row_index]
         lines = [
-            f"סלוט: {record['slot_key']}",
+            f"משבצת: {record['slot_key']}",
             f"קבוצת דוחות: {record['report_group']}",
             f"קובץ: {record['file_name']}",
             f"תאריך הפקה: {record['extraction_date']}",
