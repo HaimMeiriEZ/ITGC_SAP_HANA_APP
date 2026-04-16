@@ -173,12 +173,19 @@ class TestSmoke(unittest.TestCase):
             self.assertTrue(window.slot_widgets["USR02"]["extraction_date_label"].alignment() & Qt.AlignRight)
             self.assertEqual(window.slot_widgets["USR02"]["path_label"].layoutDirection(), Qt.RightToLeft)
             self.assertIn("טרם נבחר קובץ", window.slot_widgets["USR02"]["path_label"].text())
+            window.slot_widgets["USR02"]["selected_paths"] = ["C:/temp/usr02_100.txt"]
+            window._update_slot_path_label("USR02")
+            self.assertEqual(window.slot_widgets["USR02"]["path_label"].layoutDirection(), Qt.LeftToRight)
+            self.assertTrue(window.slot_widgets["USR02"]["path_label"].alignment() & Qt.AlignLeft)
             self.assertIn("AGR_USERS", window.slot_widgets)
             self.assertIn("RSPARAM", window.slot_widgets)
             self.assertIn("טבלאות משתמשים", window.category_run_buttons)
             self.assertIn("טבלאות משתמשים", window.category_sections)
             self.assertEqual(window.category_run_buttons["טבלאות משתמשים"].text(), "הרץ בדיקה")
             self.assertNotEqual(window.category_run_buttons["טבלאות משתמשים"].styleSheet(), "")
+            users_layout = window.category_sections["טבלאות משתמשים"].layout()
+            self.assertGreaterEqual(users_layout.columnStretch(1), 1)
+            self.assertGreaterEqual(users_layout.columnStretch(2), 2)
         finally:
             window.close()
 

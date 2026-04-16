@@ -251,9 +251,11 @@ class ValidationDesktopApp(QMainWindow):
         slots_layout.setHorizontalSpacing(12)
         slots_layout.setVerticalSpacing(10)
         slots_layout.setColumnStretch(0, 0)
-        slots_layout.setColumnStretch(1, 0)
-        slots_layout.setColumnStretch(2, 1)
+        slots_layout.setColumnStretch(1, 1)
+        slots_layout.setColumnStretch(2, 2)
         slots_layout.setColumnStretch(3, 0)
+        slots_layout.setColumnMinimumWidth(0, 140)
+        slots_layout.setColumnMinimumWidth(3, 120)
         slots_layout.setAlignment(Qt.AlignTop | Qt.AlignRight)
 
         current_row = 0
@@ -289,9 +291,11 @@ class ValidationDesktopApp(QMainWindow):
             category_layout.setHorizontalSpacing(12)
             category_layout.setVerticalSpacing(10)
             category_layout.setColumnStretch(0, 0)
-            category_layout.setColumnStretch(1, 0)
-            category_layout.setColumnStretch(2, 1)
+            category_layout.setColumnStretch(1, 1)
+            category_layout.setColumnStretch(2, 2)
             category_layout.setColumnStretch(3, 0)
+            category_layout.setColumnMinimumWidth(0, 140)
+            category_layout.setColumnMinimumWidth(3, 120)
             category_layout.setAlignment(Qt.AlignTop | Qt.AlignRight)
 
             category_button = QPushButton("הרץ בדיקה")
@@ -328,8 +332,10 @@ class ValidationDesktopApp(QMainWindow):
                 sample = QLabel(self.format_ui_rtl_text(f"קובץ צפוי: {metadata['expected_file']}"))
                 sample.setLayoutDirection(Qt.RightToLeft)
                 sample.setAlignment(Qt.AlignRight | Qt.AlignTop)
+                sample.setWordWrap(True)
                 sample.setStyleSheet("color: #5b6573;")
-                sample.setMinimumWidth(180)
+                sample.setMinimumWidth(120)
+                sample.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
                 status_label = QLabel(self.format_ui_rtl_text("טרם נבחר קובץ"))
                 status_label.setLayoutDirection(Qt.RightToLeft)
@@ -407,6 +413,8 @@ class ValidationDesktopApp(QMainWindow):
         run_log_layout.setContentsMargins(12, 18, 12, 12)
         self.run_log_table = QTableWidget(0, 10)
         self.run_log_table.setHorizontalHeaderLabels(["משבצת", "קבוצת דוחות", "קובץ", "תאריך הפקה", "רשומות שנקלטו", "סטטוס", "מספר שגיאות", "תיאור שגיאה", "תאריך בדיקה", "שעת בדיקה"])
+        self.run_log_table.horizontalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.run_log_table.verticalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.run_log_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.run_log_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.run_log_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
@@ -471,6 +479,8 @@ class ValidationDesktopApp(QMainWindow):
         results_layout.setContentsMargins(12, 18, 12, 12)
         self.issues_table = QTableWidget(0, 3)
         self.issues_table.setHorizontalHeaderLabels(["מספר שורה", "שם עמודה", "הודעת שגיאה"])
+        self.issues_table.horizontalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.issues_table.verticalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.issues_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.issues_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.issues_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
@@ -575,6 +585,29 @@ class ValidationDesktopApp(QMainWindow):
             return date_text or "לא צוין"
         return "לא צוין"
 
+    def _update_slot_path_label(self, slot_key: str, file_paths: list[str] | None = None) -> None:
+        widget_data = self.slot_widgets.get(slot_key, {})
+        label = widget_data.get("path_label")
+        if not isinstance(label, QLabel):
+            return
+
+        paths = file_paths if file_paths is not None else list(widget_data.get("selected_paths", []))
+        if not paths:
+            label.setLayoutDirection(Qt.RightToLeft)
+            label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            label.setText(self.format_ui_rtl_text("טרם נבחר קובץ"))
+            return
+
+        if len(paths) == 1:
+            label.setLayoutDirection(Qt.LeftToRight)
+            label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            label.setText(self.format_rtl_text(paths[0]))
+            return
+
+        label.setLayoutDirection(Qt.RightToLeft)
+        label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        label.setText(self.format_ui_rtl_text(self._format_selected_files(paths)))
+
     def choose_file(self, slot_key: str) -> None:
         if slot_key in self.MULTI_FILE_SLOTS:
             file_paths, _ = QFileDialog.getOpenFileNames(
@@ -595,7 +628,7 @@ class ValidationDesktopApp(QMainWindow):
         if file_paths:
             self.selected_slot_key = slot_key
             self.slot_widgets[slot_key]["selected_paths"] = file_paths
-            self.slot_widgets[slot_key]["path_label"].setText(self._format_selected_files(file_paths))
+            self._update_slot_path_label(slot_key, file_paths)
             self.required_columns_edit.setText(self._suggest_required_columns(slot_key))
 
     def _parse_required_columns(self, raw_value: str | None = None) -> list[str]:
@@ -978,9 +1011,9 @@ class ValidationDesktopApp(QMainWindow):
 
     def clear_results(self) -> None:
         self.selected_slot_key = None
-        for widget_data in self.slot_widgets.values():
+        for slot_key, widget_data in self.slot_widgets.items():
             widget_data["selected_paths"] = []
-            widget_data["path_label"].setText("טרם נבחר קובץ")
+            self._update_slot_path_label(slot_key, [])
             date_edit = widget_data.get("extraction_date_edit")
             if isinstance(date_edit, QLineEdit):
                 date_edit.setText(self._default_extraction_date())
