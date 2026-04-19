@@ -5,7 +5,7 @@ import unittest
 
 from openpyxl import Workbook, load_workbook
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QSizePolicy
+from PySide6.QtWidgets import QApplication, QDialog, QHeaderView, QScrollArea, QSizePolicy
 
 from src.models.validation_result import ValidationIssue, ValidationResult
 from src.pipeline import process_file
@@ -211,12 +211,15 @@ class TestSmoke(unittest.TestCase):
             self.assertIs(window.run_log_group.parentWidget(), window.intake_tab)
             self.assertIs(window.user_preview_group.parentWidget(), window.review_tab)
             self.assertEqual(ValidationDesktopApp.format_rtl_text(window.user_preview_group.title()), "רשימת משתמשים שנטענו")
-            self.assertEqual(window.user_preview_table.columnCount(), 12)
+            self.assertEqual(window.user_preview_table.columnCount(), 15)
             self.assertEqual(window.user_preview_table.verticalScrollBarPolicy(), Qt.ScrollBarAlwaysOn)
             self.assertEqual(window.user_preview_table.horizontalHeaderItem(0).text(), "CLIENT")
             self.assertEqual(window.user_preview_table.horizontalHeaderItem(1).text(), "משתמש")
             self.assertEqual(window.user_preview_table.horizontalHeaderItem(8).text(), "מספר כתובת")
             self.assertEqual(window.user_preview_table.horizontalHeaderItem(9).text(), "מספר פרסונה")
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(12).text(), "סיסמה ראשונית")
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(13).text(), "תאריך שינוי סיסמה")
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(14).text(), "תאריך הגדרת סיסמה")
             self.assertIn("טרם נבחר קובץ", window.slot_widgets["USR02"]["path_label"].text())
             window.slot_widgets["USR02"]["selected_paths"] = ["C:/temp/usr02_100.txt"]
             window._update_slot_path_label("USR02")
@@ -231,6 +234,130 @@ class TestSmoke(unittest.TestCase):
             users_layout = window.category_sections["טבלאות משתמשים"].layout()
             self.assertGreaterEqual(users_layout.columnStretch(1), 1)
             self.assertGreaterEqual(users_layout.columnStretch(2), 2)
+        finally:
+            window.close()
+
+    def test_user_preview_table_supports_column_configuration_and_interactive_resize(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            self.assertEqual(window.user_preview_columns_button.text(), "הוסף / מחק עמודות")
+            self.assertFalse(isinstance(window.centralWidget(), QScrollArea))
+            self.assertEqual(window.user_preview_table.horizontalHeader().sectionResizeMode(0), QHeaderView.Interactive)
+            self.assertEqual(window.user_preview_table.horizontalHeader().sectionResizeMode(1), QHeaderView.Interactive)
+            self.assertGreater(len(window.USER_PREVIEW_COLUMN_DEFINITIONS), window.user_preview_table.columnCount() - 1)
+            defined_fields = {column["field"] for column in window.USER_PREVIEW_COLUMN_DEFINITIONS}
+            self.assertIn("PWDINITIAL", defined_fields)
+            self.assertIn("PWDCHGDATE", defined_fields)
+            self.assertIn("PWDSETDATE", defined_fields)
+        finally:
+            window.close()
+
+    def test_user_preview_table_supports_sorting_and_period_filter(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            self.assertTrue(window.user_preview_table.isSortingEnabled())
+            self.assertEqual(window.user_preview_status_filter.count(), 3)
+            self.assertEqual(window.audit_period_from_edit.text(), "")
+            self.assertEqual(window.audit_period_to_edit.text(), "")
+        finally:
+            window.close()
+
+    def test_user_preview_filters_users_by_activity_in_selected_period(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "100;ACTIVE_OPEN;0;20250115;080000\n"
+                "100;ACTIVE_LOCKED;64;20251231;090000\n"
+                "100;INACTIVE_OLD;0;20240101;100000\n"
+                "100;INACTIVE_EMPTY;0;;110000\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+
+                window.user_preview_status_filter.setCurrentIndex(0)
+                window.refresh_user_preview()
+                self.assertEqual(window.user_preview_table.rowCount(), 4)
+
+                window.audit_period_from_edit.setText("2025-01-01")
+                window.audit_period_to_edit.setText("2025-12-31")
+                window.user_preview_status_filter.setCurrentIndex(1)
+                window.refresh_user_preview()
+
+                active_users = {
+                    window.user_preview_table.item(row, 1).text()
+                    for row in range(window.user_preview_table.rowCount())
+                }
+                self.assertEqual(window.user_preview_table.rowCount(), 2)
+                self.assertEqual(active_users, {"ACTIVE_OPEN", "ACTIVE_LOCKED"})
+
+                window.user_preview_status_filter.setCurrentIndex(2)
+                window.refresh_user_preview()
+
+                inactive_users = {
+                    window.user_preview_table.item(row, 1).text()
+                    for row in range(window.user_preview_table.rowCount())
+                }
+                self.assertEqual(window.user_preview_table.rowCount(), 2)
+                self.assertEqual(inactive_users, {"INACTIVE_OLD", "INACTIVE_EMPTY"})
+            finally:
+                window.close()
+
+    def test_user_preview_column_selection_updates_headers_and_persists(self) -> None:
+        get_qt_app()
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window._apply_user_preview_columns(["BNAME", "STATUS", "UFLAG", "PWDINITIAL", "PWDCHGDATE", "PWDSETDATE"])
+
+                self.assertEqual(window.user_preview_table.columnCount(), 6)
+                self.assertEqual(window.user_preview_table.horizontalHeaderItem(0).text(), "משתמש")
+                self.assertEqual(window.user_preview_table.horizontalHeaderItem(1).text(), "סטטוס משתמש")
+                self.assertEqual(window.user_preview_table.horizontalHeaderItem(2).text(), "סיסמה ראשונית")
+                self.assertEqual(window.user_preview_table.horizontalHeaderItem(3).text(), "תאריך שינוי סיסמה")
+                self.assertEqual(window.user_preview_table.horizontalHeaderItem(4).text(), "תאריך הגדרת סיסמה")
+                self.assertEqual(window.user_preview_table.horizontalHeaderItem(5).text(), "קוד נעילה")
+            finally:
+                window.close()
+
+            second_window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                self.assertEqual(second_window.user_preview_table.columnCount(), 6)
+                self.assertEqual(second_window.user_preview_visible_columns, ["BNAME", "STATUS", "PWDINITIAL", "PWDCHGDATE", "PWDSETDATE", "UFLAG"])
+            finally:
+                second_window.close()
+
+    def test_cancel_in_user_preview_column_dialog_keeps_existing_columns(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            original_headers = [
+                window.user_preview_table.horizontalHeaderItem(index).text()
+                for index in range(window.user_preview_table.columnCount())
+            ]
+            dialog, selection_table = window._create_user_preview_columns_dialog()
+            selection_table.item(0, 2).setCheckState(Qt.Unchecked)
+
+            with patch.object(window, "_create_user_preview_columns_dialog", return_value=(dialog, selection_table)), patch.object(
+                dialog,
+                "exec",
+                return_value=QDialog.Rejected,
+            ):
+                window.show_user_preview_column_dialog()
+
+            current_headers = [
+                window.user_preview_table.horizontalHeaderItem(index).text()
+                for index in range(window.user_preview_table.columnCount())
+            ]
+            self.assertEqual(current_headers, original_headers)
         finally:
             window.close()
 
@@ -494,8 +621,8 @@ class TestSmoke(unittest.TestCase):
             adr6_path = base_dir / "adr6.txt"
 
             usr02_path.write_text(
-                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
-                "100;USER_A;0;20260101;080000\n",
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME;PWDINITIAL;PWDCHGDATE;PWDSETDATE\n"
+                "100;USER_A;0;20260101;080000;1;20250101;20241231\n",
                 encoding="utf-8",
             )
             addr_users_path.write_text(
@@ -532,6 +659,9 @@ class TestSmoke(unittest.TestCase):
                 self.assertEqual(window.user_preview_table.item(0, 9).text(), "2001")
                 self.assertEqual(window.user_preview_table.item(0, 10).text(), "20260101")
                 self.assertEqual(window.user_preview_table.item(0, 11).text(), "080000")
+                self.assertEqual(window.user_preview_table.item(0, 12).text(), "1")
+                self.assertEqual(window.user_preview_table.item(0, 13).text(), "20250101")
+                self.assertEqual(window.user_preview_table.item(0, 14).text(), "20241231")
             finally:
                 window.close()
 

@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import subprocess
@@ -11,6 +12,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QComboBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -62,6 +64,39 @@ class ValidationDesktopApp(QMainWindow):
         "E070",
         "STMS",
     }
+
+    USER_PREVIEW_COLUMN_DEFINITIONS = [
+        {"field": "MANDT", "formal": "CLIENT", "technical": "MANDT", "source": "USR02", "default": True, "width": 90},
+        {"field": "BNAME", "formal": "משתמש", "technical": "BNAME", "source": "USR02", "default": True, "width": 130},
+        {"field": "NAME_FIRST", "formal": "שם פרטי", "technical": "NAME_FIRST", "source": "USER_ADDR", "default": True, "width": 120},
+        {"field": "NAME_LAST", "formal": "שם משפחה", "technical": "NAME_LAST", "source": "USER_ADDR", "default": True, "width": 120},
+        {"field": "NAME_TEXTC", "formal": "שם מלא", "technical": "NAME_TEXTC", "source": "USER_ADDR", "default": True, "width": 180},
+        {"field": "COMPANY", "formal": "חברה", "technical": "COMPANY", "source": "USER_ADDR", "default": True, "width": 150},
+        {"field": "SMTP_ADDR", "formal": 'דוא"ל', "technical": "SMTP_ADDR", "source": "ADR6", "default": True, "width": 200},
+        {"field": "STATUS", "formal": "סטטוס משתמש", "technical": "STATUS", "source": "USR02", "default": True, "width": 120},
+        {"field": "ADDRNUMBER", "formal": "מספר כתובת", "technical": "ADDRNUMBER", "source": "USER_ADDR / ADR6", "default": True, "width": 120},
+        {"field": "PERSNUMBER", "formal": "מספר פרסונה", "technical": "PERSNUMBER", "source": "USER_ADDR / ADR6", "default": True, "width": 120},
+        {"field": "TRDAT", "formal": "תאריך כניסה אחרון", "technical": "TRDAT", "source": "USR02", "default": True, "width": 140},
+        {"field": "LTIME", "formal": "שעת כניסה אחרונה", "technical": "LTIME", "source": "USR02", "default": True, "width": 140},
+        {"field": "PWDINITIAL", "formal": "סיסמה ראשונית", "technical": "PWDINITIAL", "source": "USR02", "default": True, "width": 120},
+        {"field": "PWDCHGDATE", "formal": "תאריך שינוי סיסמה", "technical": "PWDCHGDATE", "source": "USR02", "default": True, "width": 145},
+        {"field": "PWDSETDATE", "formal": "תאריך הגדרת סיסמה", "technical": "PWDSETDATE", "source": "USR02", "default": True, "width": 145},
+        {"field": "UFLAG", "formal": "קוד נעילה", "technical": "UFLAG", "source": "USR02", "default": False, "width": 100},
+    ]
+    DEFAULT_USER_PREVIEW_COLUMNS = [
+        column["field"]
+        for column in USER_PREVIEW_COLUMN_DEFINITIONS
+        if bool(column.get("default"))
+    ]
+    CURRENT_USER_PREVIEW_SETTINGS_VERSION = 2
+    USER_PREVIEW_SETTINGS_MIGRATIONS = {
+        2: ["PWDINITIAL", "PWDCHGDATE", "PWDSETDATE"],
+    }
+    USER_PREVIEW_FILTER_OPTIONS = [
+        ("all", "כלל האוכלוסייה"),
+        ("active", "פעילים בתקופה הנבדקת"),
+        ("inactive", "לא פעילים בתקופה הנבדקת"),
+    ]
 
     SLOT_DEFINITIONS = {
         "USR02": {
@@ -154,6 +189,8 @@ class ValidationDesktopApp(QMainWindow):
         self.load_history: list[str] = []
         self.summary_labels: dict[str, QLabel] = {}
         self.run_log_records: list[dict[str, object]] = []
+        self._allow_user_preview_persistence = base_dir is not None or "unittest" not in sys.modules
+        self.user_preview_visible_columns = self._load_user_preview_column_selection()
 
         self._configure_window()
         self._build_ui()
@@ -177,14 +214,9 @@ class ValidationDesktopApp(QMainWindow):
         self.setLayoutDirection(Qt.RightToLeft)
 
     def _build_ui(self) -> None:
-        self.page_scroll = QScrollArea()
-        self.page_scroll.setWidgetResizable(True)
-        self.page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setCentralWidget(self.page_scroll)
-
         central_widget = QWidget()
         central_widget.setLayoutDirection(Qt.RightToLeft)
-        self.page_scroll.setWidget(central_widget)
+        self.setCentralWidget(central_widget)
 
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(16, 16, 16, 16)
@@ -494,8 +526,62 @@ class ValidationDesktopApp(QMainWindow):
         self.user_preview_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.user_preview_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         user_preview_layout = QVBoxLayout(self.user_preview_group)
-        user_preview_layout.setContentsMargins(10, 16, 10, 10)
-        user_preview_layout.setSpacing(6)
+        user_preview_layout.setContentsMargins(8, 12, 8, 8)
+        user_preview_layout.setSpacing(4)
+        user_preview_layout.setAlignment(Qt.AlignTop)
+
+        self.user_preview_actions_row = QWidget()
+        self.user_preview_actions_row.setLayoutDirection(Qt.RightToLeft)
+        self.user_preview_actions_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.user_preview_actions_row.setMaximumHeight(40)
+        user_preview_actions_layout = QHBoxLayout(self.user_preview_actions_row)
+        user_preview_actions_layout.setContentsMargins(0, 0, 0, 0)
+        user_preview_actions_layout.setSpacing(8)
+        user_preview_actions_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        self.user_preview_columns_button = QPushButton("הוסף / מחק עמודות")
+        self.user_preview_columns_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.user_preview_columns_button.clicked.connect(self.show_user_preview_column_dialog)
+        user_preview_actions_layout.addWidget(self.user_preview_columns_button, 0, Qt.AlignRight)
+        user_preview_actions_layout.addStretch(1)
+        user_preview_layout.addWidget(self.user_preview_actions_row, 0, Qt.AlignTop)
+
+        self.user_preview_filter_row = QWidget()
+        self.user_preview_filter_row.setLayoutDirection(Qt.RightToLeft)
+        self.user_preview_filter_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        user_preview_filter_layout = QHBoxLayout(self.user_preview_filter_row)
+        user_preview_filter_layout.setContentsMargins(0, 0, 0, 0)
+        user_preview_filter_layout.setSpacing(8)
+        user_preview_filter_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        self.user_preview_filter_label = QLabel(self.format_ui_rtl_text("סינון משתמשים:"))
+        self.user_preview_status_filter = QComboBox()
+        self.user_preview_status_filter.setMinimumWidth(220)
+        self.user_preview_status_filter.setLayoutDirection(Qt.RightToLeft)
+        for filter_value, filter_label in self.USER_PREVIEW_FILTER_OPTIONS:
+            self.user_preview_status_filter.addItem(self.format_rtl_text(filter_label), filter_value)
+
+        self.audit_period_from_label = QLabel(self.format_ui_rtl_text("מתאריך:"))
+        self.audit_period_from_edit = QLineEdit("")
+        self.audit_period_from_edit.setAlignment(Qt.AlignRight)
+        self.audit_period_from_edit.setPlaceholderText("YYYY-MM-DD")
+        self.audit_period_from_edit.setMaximumWidth(130)
+
+        self.audit_period_to_label = QLabel(self.format_ui_rtl_text("עד תאריך:"))
+        self.audit_period_to_edit = QLineEdit("")
+        self.audit_period_to_edit.setAlignment(Qt.AlignRight)
+        self.audit_period_to_edit.setPlaceholderText("YYYY-MM-DD")
+        self.audit_period_to_edit.setMaximumWidth(130)
+
+        user_preview_filter_layout.addWidget(self.user_preview_filter_label, 0, Qt.AlignRight)
+        user_preview_filter_layout.addWidget(self.user_preview_status_filter, 0, Qt.AlignRight)
+        user_preview_filter_layout.addWidget(self.audit_period_from_label, 0, Qt.AlignRight)
+        user_preview_filter_layout.addWidget(self.audit_period_from_edit, 0, Qt.AlignRight)
+        user_preview_filter_layout.addWidget(self.audit_period_to_label, 0, Qt.AlignRight)
+        user_preview_filter_layout.addWidget(self.audit_period_to_edit, 0, Qt.AlignRight)
+        user_preview_filter_layout.addStretch(1)
+        user_preview_layout.addWidget(self.user_preview_filter_row, 0, Qt.AlignTop)
+
         self.user_preview_hint = QLabel(
             self.format_ui_rtl_text(
                 "הטבלה מציגה את משתמשי USR02 עם העשרת נתונים מקובצי USER_ADDR ו-ADR6 בלבד."
@@ -504,40 +590,23 @@ class ValidationDesktopApp(QMainWindow):
         self.user_preview_hint.setWordWrap(True)
         self.user_preview_hint.setAlignment(Qt.AlignRight | Qt.AlignTop)
         self.user_preview_hint.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.user_preview_hint.setMaximumHeight(28)
-        user_preview_layout.addWidget(self.user_preview_hint)
+        self.user_preview_hint.setMaximumHeight(44)
+        user_preview_layout.addWidget(self.user_preview_hint, 0, Qt.AlignTop)
 
-        self.user_preview_table = QTableWidget(0, 12)
-        self.user_preview_table.setHorizontalHeaderLabels([
-            "CLIENT",
-            "משתמש",
-            "שם פרטי",
-            "שם משפחה",
-            "שם מלא",
-            "חברה",
-            'דוא"ל',
-            "סטטוס משתמש",
-            "מספר כתובת",
-            "מספר פרסונה",
-            "תאריך כניסה אחרון",
-            "שעת כניסה אחרונה",
-        ])
-        self.user_preview_table.horizontalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.user_preview_table.verticalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        for column in range(12):
-            mode = QHeaderView.ResizeToContents
-            if column in {4, 6}:
-                mode = QHeaderView.Stretch
-            self.user_preview_table.horizontalHeader().setSectionResizeMode(column, mode)
+        self.user_preview_table = QTableWidget(0, 0)
         self.user_preview_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.user_preview_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.user_preview_table.setAlternatingRowColors(True)
         self.user_preview_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.user_preview_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.user_preview_table.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
-        self.user_preview_table.setMinimumHeight(260)
-        self.user_preview_table.setMaximumHeight(360)
-        user_preview_layout.addWidget(self.user_preview_table)
+        self.user_preview_table.setMinimumHeight(240)
+        self.user_preview_table.setMaximumHeight(340)
+        self._configure_user_preview_table()
+        self.user_preview_status_filter.currentIndexChanged.connect(self.refresh_user_preview)
+        self.audit_period_from_edit.editingFinished.connect(self.refresh_user_preview)
+        self.audit_period_to_edit.editingFinished.connect(self.refresh_user_preview)
+        user_preview_layout.addWidget(self.user_preview_table, 0, Qt.AlignTop)
         self.review_layout.addWidget(self.user_preview_group)
 
         self.run_log_group = QGroupBox(self.format_ui_rtl_text("לוג קבצים שנבדקו"))
@@ -849,6 +918,155 @@ class ValidationDesktopApp(QMainWindow):
         }
         return suggestions.get(slot_key, "")
 
+    def _user_preview_settings_path(self) -> Path:
+        return self.config.output_dir / "user_preview_columns.json"
+
+    def _normalize_user_preview_columns(self, selected_columns: list[str] | None) -> list[str]:
+        allowed_fields = [column["field"] for column in self.USER_PREVIEW_COLUMN_DEFINITIONS]
+        if not selected_columns:
+            return list(self.DEFAULT_USER_PREVIEW_COLUMNS)
+
+        normalized = [field for field in allowed_fields if field in selected_columns]
+        return normalized or list(self.DEFAULT_USER_PREVIEW_COLUMNS)
+
+    def _load_user_preview_column_selection(self) -> list[str]:
+        if not self._allow_user_preview_persistence:
+            return list(self.DEFAULT_USER_PREVIEW_COLUMNS)
+
+        settings_path = self._user_preview_settings_path()
+        if not settings_path.exists():
+            return list(self.DEFAULT_USER_PREVIEW_COLUMNS)
+
+        try:
+            raw_data = json.loads(settings_path.read_text(encoding="utf-8"))
+        except Exception:
+            return list(self.DEFAULT_USER_PREVIEW_COLUMNS)
+
+        loaded_columns = list(raw_data.get("visible_columns", [])) if isinstance(raw_data, dict) else []
+        settings_version = int(raw_data.get("version", 0)) if isinstance(raw_data, dict) else 0
+
+        for version in range(settings_version + 1, self.CURRENT_USER_PREVIEW_SETTINGS_VERSION + 1):
+            for field_name in self.USER_PREVIEW_SETTINGS_MIGRATIONS.get(version, []):
+                if field_name not in loaded_columns:
+                    loaded_columns.append(field_name)
+
+        return self._normalize_user_preview_columns(loaded_columns)
+
+    def _save_user_preview_column_selection(self) -> None:
+        if not self._allow_user_preview_persistence:
+            return
+
+        settings_path = self._user_preview_settings_path()
+        payload = {
+            "version": self.CURRENT_USER_PREVIEW_SETTINGS_VERSION,
+            "visible_columns": self.user_preview_visible_columns,
+        }
+        settings_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _get_user_preview_column_definition(self, field_name: str) -> dict[str, object]:
+        for column in self.USER_PREVIEW_COLUMN_DEFINITIONS:
+            if column["field"] == field_name:
+                return column
+        return {"field": field_name, "formal": field_name, "technical": field_name, "source": "לא ידוע", "width": 120}
+
+    def _configure_user_preview_table(self) -> None:
+        self.user_preview_visible_columns = self._normalize_user_preview_columns(self.user_preview_visible_columns)
+        self.user_preview_table.setColumnCount(len(self.user_preview_visible_columns))
+        self.user_preview_table.setHorizontalHeaderLabels([
+            str(self._get_user_preview_column_definition(field_name).get("formal", field_name))
+            for field_name in self.user_preview_visible_columns
+        ])
+        header = self.user_preview_table.horizontalHeader()
+        header.setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        header.setSectionsMovable(False)
+        header.setSectionsClickable(True)
+        header.setMinimumSectionSize(70)
+        self.user_preview_table.verticalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        for column_index, field_name in enumerate(self.user_preview_visible_columns):
+            header.setSectionResizeMode(column_index, QHeaderView.Interactive)
+            default_width = int(self._get_user_preview_column_definition(field_name).get("width", 120))
+            self.user_preview_table.setColumnWidth(column_index, default_width)
+        self.user_preview_table.setSortingEnabled(True)
+
+    def _create_user_preview_columns_dialog(self) -> tuple[QDialog, QTableWidget]:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.format_rtl_text("בחירת עמודות לסקירת משתמשים"))
+        dialog.setLayoutDirection(Qt.RightToLeft)
+        dialog.resize(720, 460)
+
+        layout = QVBoxLayout(dialog)
+        hint_label = QLabel(
+            self.format_ui_rtl_text("סמן את העמודות שברצונך להציג. לחיצה על OK תרענן את הטבלה, ו-Cancel תשאיר את המצב הקיים.")
+        )
+        hint_label.setWordWrap(True)
+        hint_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        layout.addWidget(hint_label)
+
+        selection_table = QTableWidget(len(self.USER_PREVIEW_COLUMN_DEFINITIONS), 3)
+        selection_table.setHorizontalHeaderLabels(["שם פורמלי", "שם טכני", "הצג"])
+        selection_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        selection_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        selection_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        selection_table.horizontalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        selection_table.verticalHeader().setVisible(False)
+        selection_table.setAlternatingRowColors(True)
+        selection_table.setSelectionBehavior(QTableWidget.SelectRows)
+
+        for row_index, column in enumerate(self.USER_PREVIEW_COLUMN_DEFINITIONS):
+            formal_item = QTableWidgetItem(self.format_rtl_text(str(column["formal"])))
+            formal_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            formal_item.setToolTip(self.format_ui_rtl_text(f"מקור נתון: {column['source']}"))
+            technical_item = QTableWidgetItem(str(column["technical"]))
+            technical_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            technical_item.setToolTip(self.format_ui_rtl_text(f"מקור נתון: {column['source']}"))
+            checkbox_item = QTableWidgetItem("")
+            checkbox_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+            checkbox_item.setCheckState(Qt.Checked if column["field"] in self.user_preview_visible_columns else Qt.Unchecked)
+            checkbox_item.setTextAlignment(Qt.AlignCenter)
+            checkbox_item.setToolTip(self.format_ui_rtl_text(f"מקור נתון: {column['source']}"))
+            selection_table.setItem(row_index, 0, formal_item)
+            selection_table.setItem(row_index, 1, technical_item)
+            selection_table.setItem(row_index, 2, checkbox_item)
+
+        layout.addWidget(selection_table)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        return dialog, selection_table
+
+    def _get_selected_user_preview_columns(self, selection_table: QTableWidget) -> list[str]:
+        selected_columns: list[str] = []
+        for row_index, column in enumerate(self.USER_PREVIEW_COLUMN_DEFINITIONS):
+            checkbox_item = selection_table.item(row_index, 2)
+            if checkbox_item is not None and checkbox_item.checkState() == Qt.Checked:
+                selected_columns.append(str(column["field"]))
+        return selected_columns
+
+    def _apply_user_preview_columns(self, selected_columns: list[str]) -> None:
+        normalized_columns = self._normalize_user_preview_columns(selected_columns)
+        if not normalized_columns:
+            QMessageBox.warning(self, "בחירת עמודות", "יש לבחור לפחות עמודה אחת להצגה בטבלת הסקירה.")
+            return
+
+        self.user_preview_visible_columns = normalized_columns
+        self._save_user_preview_column_selection()
+        self._configure_user_preview_table()
+        self.refresh_user_preview()
+
+    def show_user_preview_column_dialog(self) -> None:
+        dialog, selection_table = self._create_user_preview_columns_dialog()
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        selected_columns = self._get_selected_user_preview_columns(selection_table)
+        if not selected_columns:
+            QMessageBox.warning(self, "בחירת עמודות", "יש לבחור לפחות עמודה אחת להצגה בטבלת הסקירה.")
+            return
+
+        self._apply_user_preview_columns(selected_columns)
+
     @staticmethod
     def _get_row_value(row: dict[str, object], *candidates: str) -> str:
         normalized_row = {
@@ -890,6 +1108,63 @@ class ValidationDesktopApp(QMainWindow):
             return "נעול"
         return normalized_value
 
+    @staticmethod
+    def _parse_user_preview_date(raw_value: object) -> datetime | None:
+        normalized_value = "" if raw_value is None else str(raw_value).strip()
+        if not normalized_value:
+            return None
+
+        supported_patterns = [
+            "%Y-%m-%d",
+            "%Y%m%d",
+            "%d.%m.%Y",
+            "%d/%m/%Y",
+            "%d.%m.%y",
+            "%d/%m/%y",
+        ]
+        for pattern in supported_patterns:
+            try:
+                return datetime.strptime(normalized_value, pattern)
+            except ValueError:
+                continue
+        return None
+
+    def _get_user_preview_filter_mode(self) -> str:
+        filter_widget = getattr(self, "user_preview_status_filter", None)
+        if isinstance(filter_widget, QComboBox):
+            selected_value = filter_widget.currentData()
+            if selected_value:
+                return str(selected_value)
+        return "all"
+
+    def _filter_user_preview_rows(self, preview_rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], str]:
+        filter_mode = self._get_user_preview_filter_mode()
+        if filter_mode == "all":
+            return preview_rows, ""
+
+        start_text = self.audit_period_from_edit.text().strip() if hasattr(self, "audit_period_from_edit") else ""
+        end_text = self.audit_period_to_edit.text().strip() if hasattr(self, "audit_period_to_edit") else ""
+        if not start_text or not end_text:
+            return preview_rows, "כדי לסנן לפי פעילות בתקופה יש להזין תאריך התחלה ותאריך סיום."
+
+        start_date = self._parse_user_preview_date(start_text)
+        end_date = self._parse_user_preview_date(end_text)
+        if start_date is None or end_date is None:
+            return preview_rows, "יש להזין את טווח התאריכים בפורמט YYYY-MM-DD."
+        if start_date > end_date:
+            return preview_rows, "תאריך ההתחלה חייב להיות מוקדם או שווה לתאריך הסיום."
+
+        filtered_rows: list[dict[str, str]] = []
+        for preview_row in preview_rows:
+            last_login_date = self._parse_user_preview_date(preview_row.get("TRDAT", ""))
+            was_active_in_period = last_login_date is not None and start_date <= last_login_date <= end_date
+            if filter_mode == "active" and was_active_in_period:
+                filtered_rows.append(preview_row)
+            elif filter_mode == "inactive" and not was_active_in_period:
+                filtered_rows.append(preview_row)
+
+        return filtered_rows, ""
+
     def _build_user_preview_rows(
         self,
         usr02_rows: list[dict[str, object]],
@@ -905,12 +1180,17 @@ class ValidationDesktopApp(QMainWindow):
             bname = self._get_row_value(row, "BNAME")
             if not bname:
                 continue
+            raw_uflag = self._get_row_value(row, "UFLAG")
             usr02_map[(mandt, bname)] = {
                 "MANDT": mandt,
                 "BNAME": bname,
-                "STATUS": self._format_user_status(self._get_row_value(row, "UFLAG")),
+                "UFLAG": raw_uflag,
+                "STATUS": self._format_user_status(raw_uflag),
                 "TRDAT": self._get_row_value(row, "TRDAT"),
                 "LTIME": self._get_row_value(row, "LTIME"),
+                "PWDINITIAL": self._get_row_value(row, "PWDINITIAL"),
+                "PWDCHGDATE": self._get_row_value(row, "PWDCHGDATE"),
+                "PWDSETDATE": self._get_row_value(row, "PWDSETDATE"),
             }
 
         for row in combined_rows:
@@ -975,64 +1255,90 @@ class ValidationDesktopApp(QMainWindow):
                     "COMPANY": addr_entry.get("COMPANY", ""),
                     "SMTP_ADDR": email_value,
                     "STATUS": usr_entry.get("STATUS", "לא זמין"),
+                    "UFLAG": usr_entry.get("UFLAG", ""),
                     "ADDRNUMBER": addr_entry.get("ADDRNUMBER", ""),
                     "PERSNUMBER": addr_entry.get("PERSNUMBER", ""),
                     "TRDAT": usr_entry.get("TRDAT", ""),
                     "LTIME": usr_entry.get("LTIME", ""),
+                    "PWDINITIAL": usr_entry.get("PWDINITIAL", ""),
+                    "PWDCHGDATE": usr_entry.get("PWDCHGDATE", ""),
+                    "PWDSETDATE": usr_entry.get("PWDSETDATE", ""),
                 }
             )
 
         return preview_rows
 
     def refresh_user_preview(self) -> None:
-        self.user_preview_table.setRowCount(0)
+        self._configure_user_preview_table()
+        self.user_preview_table.setSortingEnabled(False)
 
-        usr02_rows = self._load_preview_rows("USR02")
-        combined_rows = self._load_preview_rows("ADR6_USR21")
-        preview_rows = self._build_user_preview_rows(usr02_rows, combined_rows)
+        try:
+            self.user_preview_table.setRowCount(0)
 
-        if not preview_rows:
-            self.user_preview_hint.setText(
-                self.format_ui_rtl_text(
-                    "לא זוהו עדיין משתמשים להצגה. יש לטעון קובצי USR02 ו-ADR6 / ADDR_USERS."
+            usr02_rows = self._load_preview_rows("USR02")
+            combined_rows = self._load_preview_rows("ADR6_USR21")
+            preview_rows = self._build_user_preview_rows(usr02_rows, combined_rows)
+
+            if not preview_rows:
+                self.user_preview_hint.setText(
+                    self.format_ui_rtl_text(
+                        "לא זוהו עדיין משתמשים להצגה. יש לטעון קובצי USR02 ו-ADR6 / USER_ADDR."
+                    )
                 )
-            )
-            return
+                return
 
-        self.user_preview_hint.setText(
-            self.format_ui_rtl_text(f"הטבלה מציגה כעת {len(preview_rows)} משתמשים שנטענו לכלי.")
-        )
+            filtered_rows, filter_note = self._filter_user_preview_rows(preview_rows)
+            filter_mode = self._get_user_preview_filter_mode()
 
-        ordered_fields = [
-            "MANDT",
-            "BNAME",
-            "NAME_FIRST",
-            "NAME_LAST",
-            "NAME_TEXTC",
-            "COMPANY",
-            "SMTP_ADDR",
-            "STATUS",
-            "ADDRNUMBER",
-            "PERSNUMBER",
-            "TRDAT",
-            "LTIME",
-        ]
-        for preview_row in preview_rows:
-            row_index = self.user_preview_table.rowCount()
-            self.user_preview_table.insertRow(row_index)
-            for column, field_name in enumerate(ordered_fields):
-                value = preview_row.get(field_name, "") or ""
-                item = QTableWidgetItem(self.format_rtl_text(value))
-                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                item.setToolTip(self.format_rtl_text(value))
-                if field_name == "STATUS":
-                    if value == "פעיל":
-                        item.setBackground(QColor("#eaf7ea"))
-                    elif "אי-התאמה" in value:
-                        item.setBackground(QColor("#fff4cc"))
-                    elif value == "נעול":
-                        item.setBackground(QColor("#fdecec"))
-                self.user_preview_table.setItem(row_index, column, item)
+            if filter_note:
+                self.user_preview_hint.setText(
+                    self.format_ui_rtl_text(
+                        f"{filter_note} הטבלה מציגה כעת את כל {len(preview_rows)} המשתמשים שנטענו לכלי."
+                    )
+                )
+                rows_to_display = preview_rows
+            else:
+                rows_to_display = filtered_rows
+                if filter_mode == "all":
+                    self.user_preview_hint.setText(
+                        self.format_ui_rtl_text(f"הטבלה מציגה כעת {len(rows_to_display)} משתמשים שנטענו לכלי.")
+                    )
+                else:
+                    self.user_preview_hint.setText(
+                        self.format_ui_rtl_text(
+                            f"הטבלה מציגה כעת {len(rows_to_display)} משתמשים מתוך {len(preview_rows)} בהתאם לטווח התאריכים שנבחר."
+                        )
+                    )
+
+            if not rows_to_display:
+                return
+
+            for preview_row in rows_to_display:
+                row_index = self.user_preview_table.rowCount()
+                self.user_preview_table.insertRow(row_index)
+                for column, field_name in enumerate(self.user_preview_visible_columns):
+                    value = preview_row.get(field_name, "") or ""
+                    item = QTableWidgetItem(self.format_rtl_text(value))
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    item.setToolTip(self.format_rtl_text(value))
+                    if field_name == "STATUS":
+                        if value == "פעיל":
+                            item.setBackground(QColor("#eaf7ea"))
+                        elif "אי-התאמה" in value:
+                            item.setBackground(QColor("#fff4cc"))
+                        elif value == "נעול":
+                            item.setBackground(QColor("#fdecec"))
+                    self.user_preview_table.setItem(row_index, column, item)
+
+            self.user_preview_table.resizeColumnsToContents()
+            for column_index, field_name in enumerate(self.user_preview_visible_columns):
+                default_width = int(self._get_user_preview_column_definition(field_name).get("width", 120))
+                self.user_preview_table.setColumnWidth(
+                    column_index,
+                    max(self.user_preview_table.columnWidth(column_index), default_width),
+                )
+        finally:
+            self.user_preview_table.setSortingEnabled(True)
 
     def run_validation(self) -> None:
         file_paths = self._current_file_paths()
