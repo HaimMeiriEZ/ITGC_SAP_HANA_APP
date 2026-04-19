@@ -6,8 +6,56 @@ from typing import Any, Iterator
 
 
 class TextFileReader:
-    METADATA_PREFIXES = ("table:", "displayed fields:")
+    METADATA_PREFIXES = ("table:", "displayed fields:", "entries for", "time interval")
     ENCODING_CANDIDATES = ("utf-8-sig", "utf-8", "cp1255", "cp1252", "latin-1")
+    HEADER_HINTS = {
+        "TRKORR",
+        "REQUEST",
+        "REQUEST NUMBER",
+        "TRANSPORT REQUEST",
+        "NUMBER",
+        "DATE",
+        "TIME",
+        "CLT",
+        "CLIENT",
+        "OWNER",
+        "USER",
+        "USER NAME",
+        "PROJECT",
+        "SHORT TEXT",
+        "RC",
+        "RETURN CODE",
+        "TRFUNCTION",
+        "TRSTATUS",
+        "TARSYSTEM",
+        "KORRDEV",
+        "AS4USER",
+        "AS4DATE",
+        "AS4TIME",
+        "STRKORR",
+        "AS4TEXT",
+        "MANDT",
+        "BNAME",
+        "UFLAG",
+        "TRDAT",
+        "LTIME",
+        "AGR_NAME",
+        "OBJECT",
+        "FIELD",
+        "LOW",
+        "HIGH",
+        "UNAME",
+        "PROFILE",
+        "PARAMETER",
+        "PARAMETER NAME",
+        "VALUE",
+        "CURRENT VALUE",
+        "CONFIGURED VALUE",
+        "NAME",
+        "SMTP_ADDR",
+        "ADDRNUMBER",
+        "PERSNUMBER",
+    }
 
     def read(self, file_path: Path) -> list[dict[str, Any]]:
         return [row for batch in self.read_in_batches(file_path, chunk_size=50000) for row in batch]
@@ -79,28 +127,56 @@ class TextFileReader:
 
         return "latin-1"
 
+    @staticmethod
+    def _clean_cell_text(value: object) -> str:
+        return re.sub(r"\s+", " ", str(value).strip().strip('"'))
+
     @classmethod
     def _find_header_line_index(cls, lines: list[str], delimiter: str) -> int:
+        best_index = 0
+        best_score = float("-inf")
+        fallback_index: int | None = None
+
         for index, line in enumerate(lines):
-            stripped = line.strip()
+            stripped = cls._clean_cell_text(line)
             if not stripped:
                 continue
 
             if stripped.casefold().startswith(cls.METADATA_PREFIXES):
                 continue
 
-            cells = [cell.strip() for cell in line.split(delimiter) if cell.strip()]
+            cells = [cls._clean_cell_text(cell) for cell in line.split(delimiter) if cls._clean_cell_text(cell)]
             if len(cells) < 2:
                 continue
 
-            identifier_like = [
-                cell
-                for cell in cells
-                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_/@.()\- %]*", cell)
-            ]
-            if len(identifier_like) >= 2:
+            normalized_cells = [cell.upper() for cell in cells]
+            header_matches = sum(1 for cell in normalized_cells if cell in cls.HEADER_HINTS)
+            identifier_like = sum(
+                1
+                for cell in normalized_cells
+                if re.fullmatch(r"[A-Z_][A-Z0-9_/@.()\- %]*", cell)
+            )
+            data_like = sum(
+                1
+                for cell in normalized_cells
+                if re.fullmatch(r"[0-9./:\-]+", cell)
+            )
+            score = (header_matches * 4) + min(identifier_like, len(cells)) - (data_like * 2)
+
+            if header_matches >= 2 and len(cells) >= 3:
                 return index
 
+            if fallback_index is None and identifier_like >= 2:
+                fallback_index = index
+
+            if score > best_score:
+                best_score = score
+                best_index = index
+
+        if best_score > 0:
+            return best_index
+        if fallback_index is not None:
+            return fallback_index
         return 0
 
     @staticmethod
@@ -123,12 +199,36 @@ class TextFileReader:
 
         return normalized
 
-    @staticmethod
-    def _looks_like_key_value_text(lines: list[str]) -> bool:
+    @classmethod
+    def _looks_like_key_value_text(cls, lines: list[str]) -> bool:
+        sample = "".join(lines)
+        delimiter = cls._detect_delimiter(sample)
+
+        for line in lines:
+            stripped = line.strip().strip('"')
+            if not stripped:
+                continue
+            if stripped.casefold().startswith(cls.METADATA_PREFIXES):
+                continue
+
+            cells = [cls._clean_cell_text(cell) for cell in line.split(delimiter) if cls._clean_cell_text(cell)]
+            if len(cells) >= 3:
+                identifier_like = [
+                    cell
+                    for cell in cells
+                    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_/@.()\- %]*", cell)
+                ]
+                if len(identifier_like) >= min(3, len(cells)):
+                    return False
+
         matches = 0
         for line in lines:
             stripped = line.strip()
-            if not stripped or stripped.startswith(("#", ";", "[")):
+            if not stripped or stripped.casefold().startswith(cls.METADATA_PREFIXES):
+                continue
+            if stripped.startswith(("#", ";", "[")):
+                continue
+            if "\t" in stripped and stripped.count("\t") >= 2:
                 continue
             if re.match(r"^[A-Za-z0-9_./-]+\s*(=|:|\s{2,})\s*.+$", stripped):
                 matches += 1

@@ -5,6 +5,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from openpyxl import Workbook
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -33,6 +35,7 @@ from PySide6.QtWidgets import (
 from src.config import AppConfig
 from src.models.validation_result import ValidationIssue
 from src.pipeline import process_file
+from src.validators.spec_rules import get_column_aliases
 
 
 def get_qt_app() -> QApplication:
@@ -68,10 +71,10 @@ class ValidationDesktopApp(QMainWindow):
             "required": True,
         },
         "ADR6_USR21": {
-            "label": "ADR6 / USR21",
+            "label": "ADR6 / USER_ADDR",
             "category": "טבלאות משתמשים",
-            "description": "ניתן להזין קובצי ADR6 או קובצי USR21 או את שניהם יחד לצורך הצלבת פרטי משתמש ואימייל.",
-            "expected_file": "adr6.txt או usr21.txt",
+            "description": "ניתן להזין קובצי ADR6 או USER_ADDR או את שניהם יחד לצורך העשרת נתוני המשתמשים מתוך USR02.",
+            "expected_file": "adr6.txt או user_addr.txt",
             "required": False,
         },
         "AGR_USERS": {
@@ -143,10 +146,12 @@ class ValidationDesktopApp(QMainWindow):
         self.config.input_dir.mkdir(parents=True, exist_ok=True)
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         self.report_path: Path | None = None
+        self.log_export_path: Path | None = None
         self.slot_widgets: dict[str, dict[str, object]] = {}
         self.category_run_buttons: dict[str, QPushButton] = {}
         self.category_sections: dict[str, QGroupBox] = {}
         self.selected_slot_key: str | None = None
+        self.load_history: list[str] = []
         self.summary_labels: dict[str, QLabel] = {}
         self.run_log_records: list[dict[str, object]] = []
 
@@ -166,7 +171,7 @@ class ValidationDesktopApp(QMainWindow):
         return normalized_text
 
     def _configure_window(self) -> None:
-        self.setWindowTitle(self.format_rtl_text("מערכת בדיקות SAP HANA APP - ITGC"))
+        self.setWindowTitle(self.format_rtl_text("כלי להערכת בקרות ITGC בסביבת SAP HANA APP"))
         self.setMinimumSize(1180, 760)
         self.resize(1280, 860)
         self.setLayoutDirection(Qt.RightToLeft)
@@ -185,12 +190,18 @@ class ValidationDesktopApp(QMainWindow):
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(12)
 
-        self.header_label = QLabel(self.format_ui_rtl_text("מסך בדיקת קלטי SAP HANA APP"))
+        self.app_title_label = QLabel(self.format_ui_rtl_text("כלי להערכת בקרות ITGC בסביבת SAP HANA APP"))
+        self.app_title_label.setLayoutDirection(Qt.RightToLeft)
+        self.app_title_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.app_title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.app_title_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #16325c;")
+        main_layout.addWidget(self.app_title_label)
+
+        self.header_label = QLabel(self.format_ui_rtl_text("מסך בדיקת קלטי SAP HANA DB"))
         self.header_label.setLayoutDirection(Qt.RightToLeft)
         self.header_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.header_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.header_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #16325c;")
-        main_layout.addWidget(self.header_label)
+        self.header_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #16325c;")
 
         self.hint_label = QLabel(
             self.format_ui_rtl_text(
@@ -202,7 +213,6 @@ class ValidationDesktopApp(QMainWindow):
         self.hint_label.setWordWrap(True)
         self.hint_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.hint_label.setStyleSheet("color: #4f5d73;")
-        main_layout.addWidget(self.hint_label)
 
         self.actions_row = QWidget()
         self.actions_row.setLayoutDirection(Qt.RightToLeft)
@@ -212,9 +222,17 @@ class ValidationDesktopApp(QMainWindow):
         buttons_layout.setSpacing(8)
         buttons_layout.addStretch(1)
 
+        self.clear_last_load_button = QPushButton(self.format_ui_rtl_text("נקה טעינה אחרונה"))
+        self.clear_last_load_button.clicked.connect(self.clear_last_loaded_slot)
+        buttons_layout.addWidget(self.clear_last_load_button)
+
         self.clear_button = QPushButton(self.format_ui_rtl_text("נקה מסך"))
         self.clear_button.clicked.connect(self.clear_results)
         buttons_layout.addWidget(self.clear_button)
+
+        self.export_log_button = QPushButton(self.format_ui_rtl_text("ייצוא רישום לאקסל"))
+        self.export_log_button.clicked.connect(lambda: self.export_run_log_to_excel(open_after_export=True))
+        buttons_layout.addWidget(self.export_log_button)
 
         self.output_button = QPushButton(self.format_ui_rtl_text("פתח תיקיית פלט"))
         self.output_button.clicked.connect(self.open_output_folder)
@@ -225,11 +243,60 @@ class ValidationDesktopApp(QMainWindow):
         self.report_button.clicked.connect(self.open_report)
         buttons_layout.addWidget(self.report_button)
 
-        self.run_button = QPushButton(self.format_ui_rtl_text("הרץ בדיקה"))
-        self.run_button.clicked.connect(self.run_validation)
-        buttons_layout.addWidget(self.run_button)
+        self.tabs = QTabWidget()
+        self.tabs.setLayoutDirection(Qt.RightToLeft)
+        self.tabs.setDocumentMode(True)
+        self.tabs.setTabPosition(QTabWidget.North)
+        self.tabs.setMovable(False)
 
-        main_layout.addWidget(self.actions_row)
+        self.intake_tab = QWidget()
+        self.intake_tab.setLayoutDirection(Qt.RightToLeft)
+        self.intake_layout = QVBoxLayout(self.intake_tab)
+        self.intake_layout.setContentsMargins(8, 8, 8, 8)
+        self.intake_layout.setSpacing(10)
+        self.intake_layout.addWidget(self.header_label)
+        self.intake_layout.addWidget(self.hint_label)
+        self.intake_layout.addWidget(self.actions_row)
+
+        self.analysis_tab = QWidget()
+        self.analysis_tab.setLayoutDirection(Qt.RightToLeft)
+        self.analysis_layout = QVBoxLayout(self.analysis_tab)
+        self.analysis_layout.setContentsMargins(12, 12, 12, 12)
+        self.analysis_layout.setSpacing(10)
+        self.analysis_hint_label = QLabel(
+            self.format_ui_rtl_text("לאחר טעינת הקבצים ניתן לבצע ניתוח לביקורת ולסקור כאן את הממצאים המרכזיים.")
+        )
+        self.analysis_hint_label.setWordWrap(True)
+        self.analysis_hint_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        self.analysis_layout.addWidget(self.analysis_hint_label)
+        self.audit_run_button = QPushButton(self.format_ui_rtl_text("בצע ניתוח לביקורת עבור המשבצת שנבחרה"))
+        self.audit_run_button.clicked.connect(self.run_validation)
+        self.analysis_layout.addWidget(self.audit_run_button, 0, Qt.AlignRight)
+
+        self.review_tab = QWidget()
+        self.review_tab.setLayoutDirection(Qt.RightToLeft)
+        self.review_layout = QVBoxLayout(self.review_tab)
+        self.review_layout.setContentsMargins(6, 6, 6, 6)
+        self.review_layout.setSpacing(6)
+        self.review_layout.setAlignment(Qt.AlignTop)
+
+        self.settings_tab = QWidget()
+        self.settings_tab.setLayoutDirection(Qt.RightToLeft)
+        self.settings_layout = QVBoxLayout(self.settings_tab)
+        self.settings_layout.setContentsMargins(12, 12, 12, 12)
+        self.settings_layout.setSpacing(10)
+        self.settings_intro_label = QLabel(
+            self.format_ui_rtl_text("בטאב זה ניתן לנהל את הגדרות הביקורת והעמודות הנדרשות לכל משבצת.")
+        )
+        self.settings_intro_label.setWordWrap(True)
+        self.settings_intro_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        self.settings_layout.addWidget(self.settings_intro_label)
+
+        self.tabs.addTab(self.intake_tab, self.format_rtl_text("קליטת קבצים"))
+        self.tabs.addTab(self.analysis_tab, self.format_rtl_text("ביצוע ניתוח לביקורת"))
+        self.tabs.addTab(self.review_tab, self.format_rtl_text("סקירת דוח משתמשים"))
+        self.tabs.addTab(self.settings_tab, self.format_rtl_text("הגדרות מערכת לביקורת"))
+        main_layout.addWidget(self.tabs)
 
         self.slots_group = QGroupBox(self.format_ui_rtl_text("מקורות קלט לבדיקת SAP HANA APP"))
         self.slots_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -370,11 +437,26 @@ class ValidationDesktopApp(QMainWindow):
                 select_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
                 select_button.clicked.connect(lambda _checked=False, sk=slot_key: self.choose_file(sk))
 
+                clear_slot_button = QPushButton("נקה")
+                clear_slot_button.setMinimumHeight(34)
+                clear_slot_button.setMinimumWidth(74)
+                clear_slot_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+                clear_slot_button.clicked.connect(lambda _checked=False, sk=slot_key: self.clear_slot_selection(sk))
+
+                slot_buttons = QWidget()
+                slot_buttons.setLayoutDirection(Qt.RightToLeft)
+                slot_buttons_layout = QHBoxLayout(slot_buttons)
+                slot_buttons_layout.setContentsMargins(0, 0, 0, 0)
+                slot_buttons_layout.setSpacing(6)
+                slot_buttons_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                slot_buttons_layout.addWidget(select_button)
+                slot_buttons_layout.addWidget(clear_slot_button)
+
                 category_layout.setRowMinimumHeight(section_row, 42)
                 category_layout.addWidget(slot_title, section_row, 3)
                 category_layout.addWidget(description, section_row, 2)
                 category_layout.addWidget(sample, section_row, 1)
-                category_layout.addWidget(select_button, section_row, 0)
+                category_layout.addWidget(slot_buttons, section_row, 0)
                 section_row += 1
                 category_layout.setRowMinimumHeight(section_row, 36)
                 category_layout.addWidget(status_label, section_row, 0, 1, 4)
@@ -386,6 +468,7 @@ class ValidationDesktopApp(QMainWindow):
                 self.slot_widgets[slot_key] = {
                     "path_label": status_label,
                     "button": select_button,
+                    "clear_button": clear_slot_button,
                     "metadata": metadata,
                     "selected_paths": [],
                     "extraction_date_edit": extraction_date_edit,
@@ -405,7 +488,57 @@ class ValidationDesktopApp(QMainWindow):
         self.slots_scroll.setWidget(slots_container)
         slots_group_layout.addWidget(self.slots_scroll)
 
-        main_layout.addWidget(self.slots_group)
+        self.intake_layout.addWidget(self.slots_group)
+
+        self.user_preview_group = QGroupBox(self.format_ui_rtl_text("רשימת משתמשים שנטענו"))
+        self.user_preview_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.user_preview_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        user_preview_layout = QVBoxLayout(self.user_preview_group)
+        user_preview_layout.setContentsMargins(10, 16, 10, 10)
+        user_preview_layout.setSpacing(6)
+        self.user_preview_hint = QLabel(
+            self.format_ui_rtl_text(
+                "הטבלה מציגה את משתמשי USR02 עם העשרת נתונים מקובצי USER_ADDR ו-ADR6 בלבד."
+            )
+        )
+        self.user_preview_hint.setWordWrap(True)
+        self.user_preview_hint.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        self.user_preview_hint.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.user_preview_hint.setMaximumHeight(28)
+        user_preview_layout.addWidget(self.user_preview_hint)
+
+        self.user_preview_table = QTableWidget(0, 12)
+        self.user_preview_table.setHorizontalHeaderLabels([
+            "CLIENT",
+            "משתמש",
+            "שם פרטי",
+            "שם משפחה",
+            "שם מלא",
+            "חברה",
+            'דוא"ל',
+            "סטטוס משתמש",
+            "מספר כתובת",
+            "מספר פרסונה",
+            "תאריך כניסה אחרון",
+            "שעת כניסה אחרונה",
+        ])
+        self.user_preview_table.horizontalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.user_preview_table.verticalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        for column in range(12):
+            mode = QHeaderView.ResizeToContents
+            if column in {4, 6}:
+                mode = QHeaderView.Stretch
+            self.user_preview_table.horizontalHeader().setSectionResizeMode(column, mode)
+        self.user_preview_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.user_preview_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.user_preview_table.setAlternatingRowColors(True)
+        self.user_preview_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.user_preview_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.user_preview_table.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
+        self.user_preview_table.setMinimumHeight(260)
+        self.user_preview_table.setMaximumHeight(360)
+        user_preview_layout.addWidget(self.user_preview_table)
+        self.review_layout.addWidget(self.user_preview_group)
 
         self.run_log_group = QGroupBox(self.format_ui_rtl_text("לוג קבצים שנבדקו"))
         self.run_log_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -436,7 +569,7 @@ class ValidationDesktopApp(QMainWindow):
         self.run_log_table.setToolTip("לחיצה כפולה על שורה תפתח פירוט מלא עבור הקובץ")
         self.run_log_table.cellDoubleClicked.connect(self.show_log_details)
         run_log_layout.addWidget(self.run_log_table)
-        main_layout.addWidget(self.run_log_group)
+        self.intake_layout.addWidget(self.run_log_group)
 
         self.required_columns_group = QGroupBox(self.format_ui_rtl_text("עמודות חובה לבדיקה"))
         self.required_columns_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -445,8 +578,8 @@ class ValidationDesktopApp(QMainWindow):
         self.required_columns_edit.setAlignment(Qt.AlignRight)
         self.required_columns_edit.setPlaceholderText("יוזן אוטומטית לפי המשבצת שנבחרה")
         required_layout.addWidget(self.required_columns_edit)
-        self.required_columns_group.hide()
-        main_layout.addWidget(self.required_columns_group)
+        self.required_columns_group.show()
+        self.settings_layout.addWidget(self.required_columns_group)
 
         self.summary_group = QGroupBox(self.format_ui_rtl_text("סיכום בדיקה"))
         self.summary_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -471,7 +604,7 @@ class ValidationDesktopApp(QMainWindow):
             summary_layout.addWidget(value_label, 1, column)
             self.summary_labels[key] = value_label
         self.summary_group.hide()
-        main_layout.addWidget(self.summary_group)
+        self.analysis_layout.addWidget(self.summary_group)
 
         self.results_group = QGroupBox(self.format_ui_rtl_text("רשימת שגיאות"))
         self.results_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -490,7 +623,7 @@ class ValidationDesktopApp(QMainWindow):
         results_layout.addWidget(self.issues_table)
         self.issues_table.setMinimumHeight(180)
         self.results_group.hide()
-        main_layout.addWidget(self.results_group)
+        self.analysis_layout.addWidget(self.results_group)
 
         central_widget.setStyleSheet(
             """
@@ -577,6 +710,10 @@ class ValidationDesktopApp(QMainWindow):
     def _get_slot_category(self, slot_key: str) -> str:
         return str(self.SLOT_DEFINITIONS.get(slot_key, {}).get("category", "לא סווג"))
 
+    def _get_slot_display_name(self, slot_key: str) -> str:
+        metadata = self.SLOT_DEFINITIONS.get(slot_key, {})
+        return str(metadata.get("label", slot_key))
+
     def _get_slot_extraction_date(self, slot_key: str) -> str:
         widget_data = self.slot_widgets.get(slot_key, {})
         date_edit = widget_data.get("extraction_date_edit")
@@ -608,6 +745,36 @@ class ValidationDesktopApp(QMainWindow):
         label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         label.setText(self.format_ui_rtl_text(self._format_selected_files(paths)))
 
+    def _remember_slot_load(self, slot_key: str) -> None:
+        self.load_history = [item for item in self.load_history if item != slot_key]
+        if list(self.slot_widgets.get(slot_key, {}).get("selected_paths", [])):
+            self.load_history.append(slot_key)
+
+    def clear_slot_selection(self, slot_key: str) -> None:
+        if slot_key not in self.slot_widgets:
+            return
+
+        self.slot_widgets[slot_key]["selected_paths"] = []
+        self._update_slot_path_label(slot_key, [])
+        self.load_history = [item for item in self.load_history if item != slot_key]
+
+        if self.selected_slot_key == slot_key:
+            self.selected_slot_key = self.load_history[-1] if self.load_history else None
+            if self.selected_slot_key:
+                self.required_columns_edit.setText(self._suggest_required_columns(self.selected_slot_key))
+            else:
+                self.required_columns_edit.setText("")
+
+        self.refresh_user_preview()
+
+    def clear_last_loaded_slot(self) -> None:
+        while self.load_history:
+            last_slot_key = self.load_history[-1]
+            if list(self.slot_widgets.get(last_slot_key, {}).get("selected_paths", [])):
+                self.clear_slot_selection(last_slot_key)
+                return
+            self.load_history.pop()
+
     def choose_file(self, slot_key: str) -> None:
         if slot_key in self.MULTI_FILE_SLOTS:
             file_paths, _ = QFileDialog.getOpenFileNames(
@@ -628,8 +795,10 @@ class ValidationDesktopApp(QMainWindow):
         if file_paths:
             self.selected_slot_key = slot_key
             self.slot_widgets[slot_key]["selected_paths"] = file_paths
+            self._remember_slot_load(slot_key)
             self._update_slot_path_label(slot_key, file_paths)
             self.required_columns_edit.setText(self._suggest_required_columns(slot_key))
+            self.refresh_user_preview()
 
     def _parse_required_columns(self, raw_value: str | None = None) -> list[str]:
         value = self.required_columns_edit.text() if raw_value is None else raw_value
@@ -680,12 +849,199 @@ class ValidationDesktopApp(QMainWindow):
         }
         return suggestions.get(slot_key, "")
 
+    @staticmethod
+    def _get_row_value(row: dict[str, object], *candidates: str) -> str:
+        normalized_row = {
+            str(key).strip().upper(): value
+            for key, value in row.items()
+            if not str(key).startswith("__")
+        }
+        for candidate in candidates:
+            for alias in get_column_aliases(candidate):
+                if alias in normalized_row:
+                    value = normalized_row[alias]
+                    if value is None:
+                        continue
+                    return str(value).strip()
+        return ""
+
+    def _load_preview_rows(self, slot_key: str) -> list[dict[str, object]]:
+        file_paths = list(self.slot_widgets.get(slot_key, {}).get("selected_paths", []))
+        if not file_paths:
+            return []
+
+        try:
+            result = process_file(
+                file_paths,
+                required_columns=[],
+                source_name_override=slot_key,
+            )
+        except Exception:
+            return []
+
+        return list(result.rows)
+
+    @staticmethod
+    def _format_user_status(flag_value: object) -> str:
+        normalized_value = "" if flag_value is None else str(flag_value).strip()
+        if normalized_value in {"", "0", "00"}:
+            return "פעיל"
+        if normalized_value in {"64", "128", "129"}:
+            return "נעול"
+        return normalized_value
+
+    def _build_user_preview_rows(
+        self,
+        usr02_rows: list[dict[str, object]],
+        combined_rows: list[dict[str, object]],
+    ) -> list[dict[str, str]]:
+        usr02_map: dict[tuple[str, str], dict[str, str]] = {}
+        addr_users_map: dict[tuple[str, str], dict[str, str]] = {}
+        email_by_addr: dict[str, str] = {}
+        email_by_pers: dict[str, str] = {}
+
+        for row in usr02_rows:
+            mandt = self._get_row_value(row, "MANDT")
+            bname = self._get_row_value(row, "BNAME")
+            if not bname:
+                continue
+            usr02_map[(mandt, bname)] = {
+                "MANDT": mandt,
+                "BNAME": bname,
+                "STATUS": self._format_user_status(self._get_row_value(row, "UFLAG")),
+                "TRDAT": self._get_row_value(row, "TRDAT"),
+                "LTIME": self._get_row_value(row, "LTIME"),
+            }
+
+        for row in combined_rows:
+            addrnumber = self._get_row_value(row, "ADDRNUMBER")
+            persnumber = self._get_row_value(row, "PERSNUMBER")
+            smtp_addr = self._get_row_value(row, "SMTP_ADDR")
+
+            if smtp_addr:
+                if addrnumber:
+                    email_by_addr[addrnumber] = smtp_addr
+                if persnumber:
+                    email_by_pers[persnumber] = smtp_addr
+
+            bname = self._get_row_value(row, "BNAME")
+            if not bname:
+                continue
+
+            mandt = self._get_row_value(row, "MANDT")
+            key = (mandt, bname)
+            current_entry = addr_users_map.setdefault(
+                key,
+                {
+                    "MANDT": mandt,
+                    "BNAME": bname,
+                    "NAME_FIRST": "",
+                    "NAME_LAST": "",
+                    "NAME_TEXTC": "",
+                    "COMPANY": "",
+                    "ADDRNUMBER": "",
+                    "PERSNUMBER": "",
+                    "SMTP_ADDR": "",
+                },
+            )
+
+            for field_name in ["NAME_FIRST", "NAME_LAST", "NAME_TEXTC", "COMPANY", "ADDRNUMBER", "PERSNUMBER", "SMTP_ADDR"]:
+                field_value = self._get_row_value(row, field_name)
+                if field_value and not current_entry[field_name]:
+                    current_entry[field_name] = field_value
+
+        if usr02_map:
+            ordered_keys = sorted(list(usr02_map.keys()), key=lambda item: (item[0], item[1]))
+        else:
+            ordered_keys = sorted(list(addr_users_map.keys()), key=lambda item: (item[0], item[1]))
+
+        preview_rows: list[dict[str, str]] = []
+
+        for key in ordered_keys:
+            usr_entry = usr02_map.get(key, {})
+            addr_entry = addr_users_map.get(key, {})
+            email_value = (
+                addr_entry.get("SMTP_ADDR", "")
+                or email_by_addr.get(addr_entry.get("ADDRNUMBER", ""), "")
+                or email_by_pers.get(addr_entry.get("PERSNUMBER", ""), "")
+            )
+            preview_rows.append(
+                {
+                    "MANDT": usr_entry.get("MANDT") or addr_entry.get("MANDT", ""),
+                    "BNAME": usr_entry.get("BNAME") or addr_entry.get("BNAME", ""),
+                    "NAME_FIRST": addr_entry.get("NAME_FIRST", ""),
+                    "NAME_LAST": addr_entry.get("NAME_LAST", ""),
+                    "NAME_TEXTC": addr_entry.get("NAME_TEXTC", ""),
+                    "COMPANY": addr_entry.get("COMPANY", ""),
+                    "SMTP_ADDR": email_value,
+                    "STATUS": usr_entry.get("STATUS", "לא זמין"),
+                    "ADDRNUMBER": addr_entry.get("ADDRNUMBER", ""),
+                    "PERSNUMBER": addr_entry.get("PERSNUMBER", ""),
+                    "TRDAT": usr_entry.get("TRDAT", ""),
+                    "LTIME": usr_entry.get("LTIME", ""),
+                }
+            )
+
+        return preview_rows
+
+    def refresh_user_preview(self) -> None:
+        self.user_preview_table.setRowCount(0)
+
+        usr02_rows = self._load_preview_rows("USR02")
+        combined_rows = self._load_preview_rows("ADR6_USR21")
+        preview_rows = self._build_user_preview_rows(usr02_rows, combined_rows)
+
+        if not preview_rows:
+            self.user_preview_hint.setText(
+                self.format_ui_rtl_text(
+                    "לא זוהו עדיין משתמשים להצגה. יש לטעון קובצי USR02 ו-ADR6 / ADDR_USERS."
+                )
+            )
+            return
+
+        self.user_preview_hint.setText(
+            self.format_ui_rtl_text(f"הטבלה מציגה כעת {len(preview_rows)} משתמשים שנטענו לכלי.")
+        )
+
+        ordered_fields = [
+            "MANDT",
+            "BNAME",
+            "NAME_FIRST",
+            "NAME_LAST",
+            "NAME_TEXTC",
+            "COMPANY",
+            "SMTP_ADDR",
+            "STATUS",
+            "ADDRNUMBER",
+            "PERSNUMBER",
+            "TRDAT",
+            "LTIME",
+        ]
+        for preview_row in preview_rows:
+            row_index = self.user_preview_table.rowCount()
+            self.user_preview_table.insertRow(row_index)
+            for column, field_name in enumerate(ordered_fields):
+                value = preview_row.get(field_name, "") or ""
+                item = QTableWidgetItem(self.format_rtl_text(value))
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                item.setToolTip(self.format_rtl_text(value))
+                if field_name == "STATUS":
+                    if value == "פעיל":
+                        item.setBackground(QColor("#eaf7ea"))
+                    elif "אי-התאמה" in value:
+                        item.setBackground(QColor("#fff4cc"))
+                    elif value == "נעול":
+                        item.setBackground(QColor("#fdecec"))
+                self.user_preview_table.setItem(row_index, column, item)
+
     def run_validation(self) -> None:
         file_paths = self._current_file_paths()
         if not file_paths or not self.selected_slot_key:
             QMessageBox.warning(self, "חסר קובץ", "יש לבחור קובץ מתוך אחד ממשבצות הקלט לפני הרצת הבדיקה.")
+            self.tabs.setCurrentIndex(0)
             return
 
+        self.tabs.setCurrentIndex(1)
         self._run_slot_validation(self.selected_slot_key, file_paths, show_feedback=True)
 
     def run_category_validation(self, category: str) -> None:
@@ -744,6 +1100,9 @@ class ValidationDesktopApp(QMainWindow):
             summary_lines.append(f"משבצות שנכשלו בעיבוד: {', '.join(failed_slots)}")
         summary_lines.append("ניתן לבצע לחיצה כפולה על הרשומה בלוג לצפייה בפירוט.")
 
+        self.summary_group.show()
+        self.results_group.show()
+
         if invalid_slots or failed_slots:
             QMessageBox.warning(self, "בדיקת קבוצה הושלמה עם ממצאים", "\n".join(summary_lines))
         else:
@@ -782,6 +1141,8 @@ class ValidationDesktopApp(QMainWindow):
                 "is_valid": False,
             }
 
+        self.summary_group.show()
+        self.results_group.show()
         self.summary_labels["total"].setText(str(result.summary.total_rows))
         self.summary_labels["valid"].setText(str(result.summary.valid_rows))
         self.summary_labels["invalid"].setText(str(result.summary.invalid_rows))
@@ -855,6 +1216,7 @@ class ValidationDesktopApp(QMainWindow):
                 source_file = Path(str(row.get("__source_file", ""))).name
                 if source_file:
                     row_counts_by_file[source_file] = row_counts_by_file.get(source_file, 0) + 1
+        display_slot_name = self._get_slot_display_name(slot_key)
         report_group = self._get_slot_category(slot_key)
         extraction_date = self._get_slot_extraction_date(slot_key)
 
@@ -873,7 +1235,7 @@ class ValidationDesktopApp(QMainWindow):
             checked_at = datetime.now()
             row_count = row_counts_by_file.get(file_name, 0)
             record = {
-                "slot_key": slot_key,
+                "slot_key": display_slot_name,
                 "report_group": report_group,
                 "file_name": file_name,
                 "extraction_date": extraction_date,
@@ -890,7 +1252,7 @@ class ValidationDesktopApp(QMainWindow):
             row_index = self.run_log_table.rowCount()
             self.run_log_table.insertRow(row_index)
             values = [
-                slot_key,
+                display_slot_name,
                 report_group,
                 file_name,
                 extraction_date,
@@ -911,6 +1273,7 @@ class ValidationDesktopApp(QMainWindow):
 
     def _append_error_log_entries(self, slot_key: str, file_paths: list[str], error_text: str) -> None:
         checked_at = datetime.now()
+        display_slot_name = self._get_slot_display_name(slot_key)
         report_group = self._get_slot_category(slot_key)
         extraction_date = self._get_slot_extraction_date(slot_key)
 
@@ -923,7 +1286,7 @@ class ValidationDesktopApp(QMainWindow):
                 source_file=file_name,
             )
             record = {
-                "slot_key": slot_key,
+                "slot_key": display_slot_name,
                 "report_group": report_group,
                 "file_name": file_name,
                 "extraction_date": extraction_date,
@@ -940,7 +1303,7 @@ class ValidationDesktopApp(QMainWindow):
             row_index = self.run_log_table.rowCount()
             self.run_log_table.insertRow(row_index)
             values = [
-                slot_key,
+                display_slot_name,
                 report_group,
                 file_name,
                 extraction_date,
@@ -1011,6 +1374,7 @@ class ValidationDesktopApp(QMainWindow):
 
     def clear_results(self) -> None:
         self.selected_slot_key = None
+        self.load_history = []
         for slot_key, widget_data in self.slot_widgets.items():
             widget_data["selected_paths"] = []
             self._update_slot_path_label(slot_key, [])
@@ -1022,11 +1386,61 @@ class ValidationDesktopApp(QMainWindow):
         self.summary_labels["valid"].setText("0")
         self.summary_labels["invalid"].setText("0")
         self.summary_labels["status"].setText("ממתין להרצה")
+        self.summary_group.hide()
+        self.results_group.hide()
         self.report_path = None
+        self.log_export_path = None
         self.report_button.setEnabled(False)
         self.issues_table.setRowCount(0)
         self.run_log_records = []
         self.run_log_table.setRowCount(0)
+        self.refresh_user_preview()
+        self.tabs.setCurrentIndex(0)
+
+    def export_run_log_to_excel(self, open_after_export: bool = False) -> Path | None:
+        if not self.run_log_records:
+            QMessageBox.warning(self, "אין נתונים לייצוא", "טרם תועדו קבצים שנבדקו לייצוא לאקסל.")
+            return None
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = self.format_rtl_text("קבצים שנבדקו")
+        headers = [
+            "משבצת",
+            "קבוצת דוחות",
+            "קובץ",
+            "תאריך הפקה",
+            "רשומות שנקלטו",
+            "סטטוס",
+            "מספר שגיאות",
+            "תיאור שגיאה",
+            "תאריך בדיקה",
+            "שעת בדיקה",
+        ]
+        sheet.append(headers)
+
+        for record in self.run_log_records:
+            sheet.append([
+                record["slot_key"],
+                record["report_group"],
+                record["file_name"],
+                record["extraction_date"],
+                record["row_count"],
+                record["status"],
+                record["error_count"],
+                record["error_preview"],
+                record["date"],
+                record["time"],
+            ])
+
+        export_path = self.config.output_dir / f"intake_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        workbook.save(export_path)
+        self.log_export_path = export_path
+
+        if open_after_export:
+            QMessageBox.information(self, "הייצוא הושלם", f"קובץ התיעוד נשמר בהצלחה:\n{export_path}")
+
+        return export_path
 
     def open_output_folder(self) -> None:
         self._open_path(self.config.output_dir)

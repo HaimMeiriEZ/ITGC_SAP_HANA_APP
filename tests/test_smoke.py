@@ -141,13 +141,47 @@ class TestSmoke(unittest.TestCase):
             self.assertEqual(result.summary.total_rows, 1)
             self.assertTrue(result.summary.is_valid)
 
+    def test_sap_e070_export_with_legend_row_is_parsed(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "e070_legend.txt"
+            content = (
+                "Table:\t\tE070\t\t\t\t\t\t\n"
+                "Displayed Fields:\t\t\t10\tof\t\t10\t\tFixed Columns:\t1\tList Width\t1023\n"
+                '" K workbench requests, W customized requests, X unclassified tasks, Q customizing tasks "\t\t\t\t\n'
+                "\tTRKORR\t\tTRFUNCTION\t\tTRSTATUS\t\tTARSYSTEM\tKORRDEV\tAS4USER\t\tAS4DATE\t\tAS4TIME\tSTRKORR\tAS4TEXT\n"
+                "\tFPDK902313\t\tW\t\tR\t\tFPQ\tCUST\tTMISHALI\t\t09/11/2025\t\t10:21:31\t\tTomer update\n"
+            )
+            input_path.write_bytes(content.encode("cp1252"))
+
+            result = process_file(
+                input_path,
+                required_columns=["TRKORR", "AS4USER", "TRFUNCTION"],
+                source_name_override="E070",
+            )
+
+            self.assertEqual(result.summary.total_rows, 1)
+            self.assertTrue(result.summary.is_valid)
+            self.assertFalse(any(issue.message == "עמודת חובה חסרה" for issue in result.issues))
+
     def test_desktop_gui_initializes_with_hebrew_labels(self) -> None:
         qt_app = get_qt_app()
         self.assertIsInstance(qt_app, QApplication)
 
         window = ValidationDesktopApp()
         try:
-            self.assertIn("הרץ בדיקה", window.run_button.text())
+            self.assertEqual(window.windowTitle(), "כלי להערכת בקרות ITGC בסביבת SAP HANA APP")
+            self.assertEqual(window.tabs.count(), 4)
+            self.assertEqual(window.tabs.tabText(0), "קליטת קבצים")
+            self.assertEqual(window.tabs.tabText(1), "ביצוע ניתוח לביקורת")
+            self.assertEqual(window.tabs.tabText(2), "סקירת דוח משתמשים")
+            self.assertEqual(window.tabs.tabText(3), "הגדרות מערכת לביקורת")
+            self.assertIn("בצע ניתוח", window.audit_run_button.text())
+            self.assertIn("ייצוא", window.export_log_button.text())
+            self.assertIn("מסך בדיקת קלטי SAP HANA DB", ValidationDesktopApp.format_rtl_text(window.header_label.text()))
+            self.assertIn("כלי להערכת בקרות ITGC", ValidationDesktopApp.format_rtl_text(window.app_title_label.text()))
+            self.assertIs(window.header_label.parentWidget(), window.intake_tab)
+            self.assertIs(window.hint_label.parentWidget(), window.intake_tab)
+            self.assertIs(window.actions_row.parentWidget(), window.intake_tab)
             self.assertIn("מקורות קלט לבדיקת SAP HANA APP", window.slots_group.title())
             self.assertTrue(window.slots_group.alignment() & Qt.AlignRight)
             self.assertEqual(window.header_label.layoutDirection(), Qt.RightToLeft)
@@ -172,6 +206,17 @@ class TestSmoke(unittest.TestCase):
             self.assertIn("extraction_date_label", window.slot_widgets["USR02"])
             self.assertTrue(window.slot_widgets["USR02"]["extraction_date_label"].alignment() & Qt.AlignRight)
             self.assertEqual(window.slot_widgets["USR02"]["path_label"].layoutDirection(), Qt.RightToLeft)
+            self.assertEqual(window.SLOT_DEFINITIONS["ADR6_USR21"]["label"], "ADR6 / USER_ADDR")
+            self.assertIn("USER_ADDR", window.SLOT_DEFINITIONS["ADR6_USR21"]["description"])
+            self.assertIs(window.run_log_group.parentWidget(), window.intake_tab)
+            self.assertIs(window.user_preview_group.parentWidget(), window.review_tab)
+            self.assertEqual(ValidationDesktopApp.format_rtl_text(window.user_preview_group.title()), "רשימת משתמשים שנטענו")
+            self.assertEqual(window.user_preview_table.columnCount(), 12)
+            self.assertEqual(window.user_preview_table.verticalScrollBarPolicy(), Qt.ScrollBarAlwaysOn)
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(0).text(), "CLIENT")
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(1).text(), "משתמש")
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(8).text(), "מספר כתובת")
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(9).text(), "מספר פרסונה")
             self.assertIn("טרם נבחר קובץ", window.slot_widgets["USR02"]["path_label"].text())
             window.slot_widgets["USR02"]["selected_paths"] = ["C:/temp/usr02_100.txt"]
             window._update_slot_path_label("USR02")
@@ -196,6 +241,7 @@ class TestSmoke(unittest.TestCase):
             window.show()
             qt_app.processEvents()
             self.assertGreater(window.slot_widgets["USR02"]["button"].height(), 20)
+            self.assertGreater(window.slot_widgets["USR02"]["clear_button"].height(), 20)
             self.assertGreater(window.slot_widgets["USR02"]["path_label"].height(), 20)
             self.assertGreater(window.slot_widgets["USR02"]["extraction_date_edit"].height(), 20)
             self.assertGreater(
@@ -204,6 +250,63 @@ class TestSmoke(unittest.TestCase):
             )
         finally:
             window.close()
+
+    def test_slot_clear_button_removes_loaded_file(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            with patch("src.ui.desktop_app.QFileDialog.getOpenFileNames", return_value=(["C:/temp/e070_100.txt"], "")):
+                window.choose_file("E070")
+
+            self.assertEqual(window.slot_widgets["E070"]["selected_paths"], ["C:/temp/e070_100.txt"])
+
+            window.slot_widgets["E070"]["clear_button"].click()
+
+            self.assertEqual(window.slot_widgets["E070"]["selected_paths"], [])
+            self.assertIn("טרם נבחר קובץ", window.slot_widgets["E070"]["path_label"].text())
+        finally:
+            window.close()
+
+    def test_clear_last_load_button_removes_only_last_loaded_slot(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            with patch("src.ui.desktop_app.QFileDialog.getOpenFileNames", return_value=(["C:/temp/usr02_100.txt"], "")):
+                window.choose_file("USR02")
+            with patch("src.ui.desktop_app.QFileDialog.getOpenFileNames", return_value=(["C:/temp/e070_100.txt"], "")):
+                window.choose_file("E070")
+
+            window.clear_last_load_button.click()
+
+            self.assertEqual(window.slot_widgets["E070"]["selected_paths"], [])
+            self.assertEqual(window.slot_widgets["USR02"]["selected_paths"], ["C:/temp/usr02_100.txt"])
+            self.assertEqual(window.selected_slot_key, "USR02")
+        finally:
+            window.close()
+
+    def test_export_run_log_to_excel_creates_file(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                result = ValidationResult(
+                    rows=[{"BNAME": "USER_A", "__source_file": "usr02.txt"}],
+                    issues=[],
+                    source_files=["usr02.txt"],
+                )
+                result.file_row_counts = {"usr02.txt": 1}
+                window._append_run_log_entries("USR02", ["C:/temp/usr02.txt"], result)
+
+                export_path = window.export_run_log_to_excel()
+
+                self.assertIsNotNone(export_path)
+                self.assertTrue(export_path.exists())
+                workbook = load_workbook(export_path)
+                self.assertIn("קבצים שנבדקו", workbook.sheetnames)
+                self.assertEqual(workbook["קבצים שנבדקו"]["A1"].value, "משבצת")
+            finally:
+                window.close()
 
     def test_category_run_button_validates_selected_group(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -231,6 +334,8 @@ class TestSmoke(unittest.TestCase):
                     window.run_category_validation("טבלאות משתמשים")
 
                 self.assertEqual(window.run_log_table.rowCount(), 2)
+                self.assertEqual(window.run_log_table.item(1, 0).text(), "ADR6 / USER_ADDR")
+                self.assertEqual(window.tabs.currentIndex(), 0)
                 self.assertTrue(window.report_button.isEnabled())
                 self.assertTrue(information_mock.called)
                 self.assertFalse(warning_mock.called)
@@ -365,6 +470,103 @@ class TestSmoke(unittest.TestCase):
 
         self.assertFalse(any(issue.column_name == "BNAME" and issue.message == "עמודת חובה חסרה" for issue in result.issues))
 
+    def test_adr6_usr21_slot_accepts_addr_users_structure(self) -> None:
+        rows = [
+            {
+                "MANDT": "100",
+                "BNAME": "USER_A",
+                "NAME_FIRST": "Dana",
+                "NAME_LAST": "Levi",
+                "NAME_TEXTC": "Dana Levi",
+                "COMPANY": "Ayalon",
+            },
+        ]
+
+        result = ValidationEngine().validate(rows, source_name="ADR6_USR21")
+
+        self.assertFalse(any("אינו תואם למבנה המצופה עבור המשבצת ADR6 / ADDR_USERS" in issue.message for issue in result.issues))
+
+    def test_user_preview_table_merges_usr02_adr6_and_addr_users(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            addr_users_path = base_dir / "addr_users.txt"
+            adr6_path = base_dir / "adr6.txt"
+
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "100;USER_A;0;20260101;080000\n",
+                encoding="utf-8",
+            )
+            addr_users_path.write_text(
+                "MANDT;BNAME;NAME_FIRST;NAME_LAST;NAME_TEXTC;COMPANY;ADDRNUMBER;PERSNUMBER\n"
+                "100;USER_A;Dana;Levi;Dana Levi;Ayalon;1001;2001\n",
+                encoding="utf-8",
+            )
+            adr6_path.write_text(
+                "ADDRNUMBER;PERSNUMBER;SMTP_ADDR\n"
+                "1001;2001;user@example.com\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window.slot_widgets["ADR6_USR21"]["selected_paths"] = [str(addr_users_path), str(adr6_path)]
+
+                window.refresh_user_preview()
+
+                self.assertEqual(ValidationDesktopApp.format_rtl_text(window.user_preview_group.title()), "רשימת משתמשים שנטענו")
+                self.assertIs(window.user_preview_group.parentWidget(), window.review_tab)
+                self.assertEqual(window.user_preview_table.rowCount(), 1)
+                self.assertEqual(window.user_preview_table.item(0, 0).text(), "100")
+                self.assertEqual(window.user_preview_table.item(0, 1).text(), "USER_A")
+                self.assertEqual(window.user_preview_table.item(0, 2).text(), "Dana")
+                self.assertEqual(window.user_preview_table.item(0, 3).text(), "Levi")
+                self.assertEqual(window.user_preview_table.item(0, 4).text(), "Dana Levi")
+                self.assertEqual(window.user_preview_table.item(0, 5).text(), "Ayalon")
+                self.assertEqual(window.user_preview_table.item(0, 6).text(), "user@example.com")
+                self.assertEqual(window.user_preview_table.item(0, 7).text(), "פעיל")
+                self.assertEqual(window.user_preview_table.item(0, 8).text(), "1001")
+                self.assertEqual(window.user_preview_table.item(0, 9).text(), "2001")
+                self.assertEqual(window.user_preview_table.item(0, 10).text(), "20260101")
+                self.assertEqual(window.user_preview_table.item(0, 11).text(), "080000")
+            finally:
+                window.close()
+
+    def test_unmatched_addr_users_rows_are_excluded_when_usr02_present(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            addr_users_path = base_dir / "addr_users.txt"
+
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "600;UZIZ;0;20260101;080000\n",
+                encoding="utf-8",
+            )
+            addr_users_path.write_text(
+                "MANDT;BNAME;NAME_FIRST;NAME_LAST;NAME_TEXTC;COMPANY\n"
+                "600;UZIZ;Uzi;Ziv;Uzi Ziv;AYALON\n"
+                "600;BASISADMIN;;;Basis Admin;AYALON\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window.slot_widgets["ADR6_USR21"]["selected_paths"] = [str(addr_users_path)]
+
+                window.refresh_user_preview()
+
+                self.assertEqual(window.user_preview_table.rowCount(), 1)
+                self.assertEqual(window.user_preview_table.item(0, 1).text(), "UZIZ")
+                self.assertEqual(window.user_preview_table.item(0, 7).text(), "פעיל")
+            finally:
+                window.close()
+
     def test_agr_1251_allows_empty_high_value_in_normal_sap_rows(self) -> None:
         with TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "agr_1251_100.txt"
@@ -404,6 +606,28 @@ class TestSmoke(unittest.TestCase):
 
         self.assertFalse(any(issue.message == "עמודת חובה חסרה" for issue in result.issues))
         self.assertFalse(any("אינו תואם למבנה המצופה עבור המשבצת STMS" in issue.message for issue in result.issues))
+
+    def test_stms_text_export_with_intro_rows_is_parsed(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "stms.txt"
+            input_path.write_text(
+                "Entries for FPP:\t\t\t155\t\t\t\t\t23.11.2025\t07:52:18\n\n"
+                "\t\tTime Interval\t\t01.01.25 00:00:00\t\t\t\t  to\t23.11.25 24:00:00\n\n"
+                "\tNumber\t\tDate\t\t\tTime\tRequest\t\t\tClt\tOwner\tUser\tProject\tShort Text\t\t\tRC\n\n"
+                "\t     1\t\t17.01.25\t\t\t13:42:40\tFPDK901838\t\t\t400\tPICCOLOG\tPICCOLOG\t\tDER_Customizing_Finetuning_16012025\t0\n",
+                encoding="utf-8",
+            )
+
+            result = process_file(
+                input_path,
+                required_columns=["TRKORR"],
+                source_name_override="STMS",
+            )
+
+            self.assertEqual(result.summary.total_rows, 1)
+            self.assertTrue(result.summary.is_valid)
+            self.assertFalse(any(issue.message == "עמודת חובה חסרה" for issue in result.issues))
+            self.assertFalse(any("אינו תואם למבנה המצופה עבור המשבצת STMS" in issue.message for issue in result.issues))
 
     def test_stms_blank_rc_value_is_not_treated_as_missing_status(self) -> None:
         rows = [

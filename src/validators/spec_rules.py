@@ -66,6 +66,10 @@ PROFILE_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "ADDRNUMBER": ("ADDRESS NUMBER",),
     "PERSNUMBER": ("PERSON NUMBER",),
     "SMTP_ADDR": ("EMAIL", "E-MAIL", "EMAIL ADDRESS", "SMTP ADDRESS"),
+    "NAME_FIRST": ("FIRST NAME", "GIVEN NAME"),
+    "NAME_LAST": ("LAST NAME", "SURNAME", "FAMILY NAME"),
+    "NAME_TEXTC": ("FULL NAME", "DISPLAY NAME", "FORMAL NAME"),
+    "COMPANY": ("COMPANY NAME", "ORGANIZATION"),
     "OBJECT": ("AUTH OBJECT", "AUTHORIZATION OBJECT"),
     "FIELD": ("FIELD NAME", "AUTH FIELD"),
     "LOW": ("LOW VALUE", "FROM", "FROM VALUE"),
@@ -82,8 +86,10 @@ PROFILE_STRUCTURE_RULES: dict[str, dict[str, Any]] = {
         "alternatives": [
             ["ADDRNUMBER", "SMTP_ADDR"],
             ["BNAME", "PERSNUMBER"],
+            ["MANDT", "BNAME", "NAME_TEXTC"],
+            ["MANDT", "BNAME", "NAME_FIRST", "NAME_LAST"],
         ],
-        "friendly_name": "ADR6 / USR21",
+        "friendly_name": "ADR6 / USER_ADDR",
     },
     "AGR_USERS": {
         "required_all": ["AGR_NAME", "UNAME"],
@@ -228,6 +234,9 @@ def detect_validation_profile(source_name: str | None, rows: list[dict[str, Any]
         "adr6_usr21": "ADR6_USR21",
         "adr6": "ADR6_USR21",
         "usr21": "ADR6_USR21",
+        "addr_users": "ADR6_USR21",
+        "user_addr": "ADR6_USR21",
+        "usrs_aadr": "ADR6_USR21",
         "agr_users": "AGR_USERS",
         "agr_1251": "AGR_1251",
         "agr_1252": "AGR_1252",
@@ -245,6 +254,13 @@ def detect_validation_profile(source_name: str | None, rows: list[dict[str, Any]
 
     if matches_column_alias(columns, "SMTP_ADDR") and (
         matches_column_alias(columns, "ADDRNUMBER") or matches_column_alias(columns, "PERSNUMBER")
+    ):
+        return "ADR6_USR21"
+    if matches_column_alias(columns, "BNAME") and (
+        matches_column_alias(columns, "NAME_TEXTC")
+        or matches_column_alias(columns, "NAME_FIRST")
+        or matches_column_alias(columns, "NAME_LAST")
+        or matches_column_alias(columns, "COMPANY")
     ):
         return "ADR6_USR21"
     if matches_column_alias(columns, "TRKORR") and (
