@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -72,10 +73,15 @@ class TestSmoke(unittest.TestCase):
             workbook = load_workbook(result.report_path)
             self.assertIn("סיכום", workbook.sheetnames)
             self.assertIn("שגיאות", workbook.sheetnames)
+            self.assertNotIn("נתונים", workbook.sheetnames)
             self.assertEqual(workbook["סיכום"]["A2"].value, "שורות שנבדקו")
             self.assertEqual(workbook["סיכום"]["B2"].value, 2)
             self.assertEqual(workbook["סיכום"]["A5"].value, "הקובץ תקין")
             self.assertEqual(workbook["סיכום"]["B5"].value, False)
+            self.assertEqual(workbook["סיכום"]["A9"].value, "תאריך הפקה")
+            self.assertRegex(str(workbook["סיכום"]["B9"].value), r"\d{4}-\d{2}-\d{2}")
+            self.assertEqual(workbook["סיכום"]["A10"].value, "שעת הפקה")
+            self.assertRegex(str(workbook["סיכום"]["B10"].value), r"\d{2}:\d{2}:\d{2}")
             self.assertEqual(workbook["שגיאות"]["A1"].value, "מספר שורה")
             self.assertEqual(workbook["שגיאות"]["A2"].value, 2)
             self.assertEqual(workbook["שגיאות"]["B2"].value, "email")
@@ -175,6 +181,9 @@ class TestSmoke(unittest.TestCase):
             self.assertEqual(window.tabs.tabText(1), "ביצוע ניתוח לביקורת")
             self.assertEqual(window.tabs.tabText(2), "סקירת דוח משתמשים")
             self.assertEqual(window.tabs.tabText(3), "הגדרות מערכת לביקורת")
+            self.assertIn("QTabBar::tab:selected", window.tabs.styleSheet())
+            self.assertIn("background-color: #6d002f", window.tabs.styleSheet())
+            self.assertIn("color: white", window.tabs.styleSheet())
             self.assertIn("בצע ניתוח", window.audit_run_button.text())
             self.assertIn("ייצוא", window.export_log_button.text())
             self.assertIn("מסך בדיקת קלטי SAP HANA DB", ValidationDesktopApp.format_rtl_text(window.header_label.text()))
@@ -211,7 +220,7 @@ class TestSmoke(unittest.TestCase):
             self.assertIs(window.run_log_group.parentWidget(), window.intake_tab)
             self.assertIs(window.user_preview_group.parentWidget(), window.review_tab)
             self.assertEqual(ValidationDesktopApp.format_rtl_text(window.user_preview_group.title()), "רשימת משתמשים שנטענו")
-            self.assertEqual(window.user_preview_table.columnCount(), 15)
+            self.assertGreaterEqual(window.user_preview_table.columnCount(), 24)
             self.assertEqual(window.user_preview_table.verticalScrollBarPolicy(), Qt.ScrollBarAlwaysOn)
             self.assertEqual(window.user_preview_table.horizontalHeaderItem(0).text(), "CLIENT")
             self.assertEqual(window.user_preview_table.horizontalHeaderItem(1).text(), "משתמש")
@@ -250,6 +259,26 @@ class TestSmoke(unittest.TestCase):
             self.assertIn("PWDINITIAL", defined_fields)
             self.assertIn("PWDCHGDATE", defined_fields)
             self.assertIn("PWDSETDATE", defined_fields)
+            self.assertIn("GLTGV", defined_fields)
+            self.assertIn("GLTGB", defined_fields)
+            self.assertIn("USTYP", defined_fields)
+            self.assertIn("LOCNT", defined_fields)
+            self.assertIn("OCOD1", defined_fields)
+            self.assertIn("PASSCODE", defined_fields)
+            self.assertIn("PWDSALTEDHASH", defined_fields)
+            self.assertIn("SECURITY_POLICY", defined_fields)
+            self.assertIn("DEPARTMENT", defined_fields)
+        finally:
+            window.close()
+
+    def test_user_preview_grid_uses_available_review_tab_space(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            self.assertEqual(window.user_preview_group.sizePolicy().verticalPolicy(), QSizePolicy.Expanding)
+            self.assertEqual(window.user_preview_table.sizePolicy().verticalPolicy(), QSizePolicy.Expanding)
+            self.assertGreaterEqual(window.user_preview_table.minimumHeight(), 360)
+            self.assertGreater(window.user_preview_table.maximumHeight(), 1000)
         finally:
             window.close()
 
@@ -310,6 +339,39 @@ class TestSmoke(unittest.TestCase):
             finally:
                 window.close()
 
+    def test_user_preview_sorts_date_columns_chronologically(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME;PWDCHGDATE;PWDSETDATE;GLTGV;GLTGB\n"
+                "100;USER_C;0;15.01.2024;080000;01.03.2024;01.02.2024;15.02.2024;31.12.2026\n"
+                "100;USER_A;0;01.01.2020;090000;05.01.2020;02.01.2020;10.01.2020;01.01.2024\n"
+                "100;USER_B;0;09.09.2023;100000;10.10.2023;10.09.2023;11.11.2023;31.12.2025\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window._apply_user_preview_columns(["BNAME", "GLTGV", "TRDAT", "PWDCHGDATE", "PWDSETDATE", "GLTGB"])
+                window.refresh_user_preview()
+
+                gltgv_column = next(
+                    index
+                    for index in range(window.user_preview_table.columnCount())
+                    if window.user_preview_table.horizontalHeaderItem(index).text() == "תקף מתאריך"
+                )
+                window.user_preview_table.sortItems(gltgv_column, Qt.DescendingOrder)
+                sorted_users = [window.user_preview_table.item(row, 0).text() for row in range(window.user_preview_table.rowCount())]
+                displayed_dates = [window.user_preview_table.item(row, gltgv_column).text() for row in range(window.user_preview_table.rowCount())]
+
+                self.assertEqual(sorted_users, ["USER_C", "USER_B", "USER_A"])
+                self.assertEqual(displayed_dates, ["15.02.2024", "11.11.2023", "10.01.2020"])
+            finally:
+                window.close()
+
     def test_user_preview_column_selection_updates_headers_and_persists(self) -> None:
         get_qt_app()
         with TemporaryDirectory() as temp_dir:
@@ -361,6 +423,82 @@ class TestSmoke(unittest.TestCase):
         finally:
             window.close()
 
+    def test_user_preview_reviewer_fields_persist_in_json_by_mandt_and_bname(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "100;USER_A;0;20260101;080000\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "REVIEW_NOTES"])
+                window.refresh_user_preview()
+
+                self.assertEqual(window.user_preview_table.rowCount(), 1)
+                reviewer_combo = window.user_preview_table.cellWidget(0, 2)
+                self.assertIsNotNone(reviewer_combo)
+                self.assertEqual(reviewer_combo.currentText(), "טרם נבדק")
+
+                reviewer_combo.setCurrentText("נבדק")
+                notes_item = window.user_preview_table.item(0, 3)
+                notes_item.setText("נסקר ואושר")
+                window.refresh_user_preview()
+
+                reviewer_combo = window.user_preview_table.cellWidget(0, 2)
+                self.assertEqual(reviewer_combo.currentText(), "נבדק")
+                self.assertEqual(window.user_preview_table.item(0, 3).text(), "נסקר ואושר")
+
+                state_path = base_dir / "data" / "output" / "user_preview_reviewer_state.json"
+                self.assertTrue(state_path.exists())
+                state_data = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertIn("100|USER_A", state_data)
+                self.assertEqual(state_data["100|USER_A"]["REVIEW_STATUS"], "נבדק")
+                self.assertEqual(state_data["100|USER_A"]["REVIEW_NOTES"], "נסקר ואושר")
+            finally:
+                window.close()
+
+    def test_export_user_preview_to_excel_creates_file_with_reviewer_columns(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "100;USER_A;0;20260101;080000\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "REVIEW_NOTES"])
+                window.refresh_user_preview()
+
+                reviewer_combo = window.user_preview_table.cellWidget(0, 2)
+                reviewer_combo.setCurrentText("לבירור")
+                window.user_preview_table.item(0, 3).setText("נדרשת בדיקה נוספת")
+
+                export_path = window.export_user_preview_to_excel()
+
+                self.assertIsNotNone(export_path)
+                self.assertTrue(export_path.exists())
+                self.assertIn("users_review_", export_path.name)
+                workbook = load_workbook(export_path)
+                self.assertIn("סקירת משתמשים", workbook.sheetnames)
+                self.assertEqual(workbook["סקירת משתמשים"]["A1"].value, "CLIENT")
+                self.assertEqual(workbook["סקירת משתמשים"]["C1"].value, "בוצעה סקירה")
+                self.assertEqual(workbook["סקירת משתמשים"]["D1"].value, "הערות סוקר")
+                self.assertEqual(workbook["סקירת משתמשים"]["C2"].value, "לבירור")
+                self.assertEqual(workbook["סקירת משתמשים"]["D2"].value, "נדרשת בדיקה נוספת")
+            finally:
+                window.close()
+
     def test_slot_controls_are_visibly_rendered(self) -> None:
         qt_app = get_qt_app()
         window = ValidationDesktopApp()
@@ -410,6 +548,67 @@ class TestSmoke(unittest.TestCase):
             self.assertEqual(window.selected_slot_key, "USR02")
         finally:
             window.close()
+
+    def test_file_picker_remembers_last_used_folder_between_restarts(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            remembered_dir = base_dir / "remembered"
+            remembered_dir.mkdir(parents=True, exist_ok=True)
+            selected_multi_file = remembered_dir / "usr02_100.txt"
+            selected_multi_file.write_text("BNAME;UFLAG\nUSER_A;0\n", encoding="utf-8")
+            selected_single_file = remembered_dir / "rsparam.xlsx"
+            Workbook().save(selected_single_file)
+
+            get_qt_app()
+            first_window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                with patch(
+                    "src.ui.desktop_app.QFileDialog.getOpenFileNames",
+                    return_value=([str(selected_multi_file)], ""),
+                ) as multi_dialog_mock:
+                    first_window.choose_file("USR02")
+
+                self.assertEqual(multi_dialog_mock.call_args.args[2], str(base_dir / "data" / "input"))
+            finally:
+                first_window.close()
+
+            reopened_window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                with patch(
+                    "src.ui.desktop_app.QFileDialog.getOpenFileName",
+                    return_value=(str(selected_single_file), ""),
+                ) as single_dialog_mock:
+                    reopened_window.choose_file("RSPARAM")
+
+                self.assertEqual(single_dialog_mock.call_args.args[2], str(remembered_dir))
+            finally:
+                reopened_window.close()
+
+    def test_file_picker_falls_back_to_default_input_when_saved_folder_is_missing(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            saved_state_path = base_dir / "data" / "output" / "file_dialog_state.json"
+            saved_state_path.parent.mkdir(parents=True, exist_ok=True)
+            saved_state_path.write_text(
+                json.dumps({"last_directory": str(base_dir / "missing-folder")}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            fallback_file = base_dir / "data" / "input" / "rsparam.xlsx"
+            fallback_file.parent.mkdir(parents=True, exist_ok=True)
+            Workbook().save(fallback_file)
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                with patch(
+                    "src.ui.desktop_app.QFileDialog.getOpenFileName",
+                    return_value=(str(fallback_file), ""),
+                ) as dialog_mock:
+                    window.choose_file("RSPARAM")
+
+                self.assertEqual(dialog_mock.call_args.args[2], str(base_dir / "data" / "input"))
+            finally:
+                window.close()
 
     def test_export_run_log_to_excel_creates_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -621,13 +820,13 @@ class TestSmoke(unittest.TestCase):
             adr6_path = base_dir / "adr6.txt"
 
             usr02_path.write_text(
-                "MANDT;BNAME;UFLAG;TRDAT;LTIME;PWDINITIAL;PWDCHGDATE;PWDSETDATE\n"
-                "100;USER_A;0;20260101;080000;1;20250101;20241231\n",
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME;PWDINITIAL;PWDCHGDATE;PWDSETDATE;GLTGV;GLTGB;USTYP;LOCNT;OCOD1;PASSCODE;PWDSALTEDHASH;SECURITY_POLICY\n"
+                "100;USER_A;0;20260101;080000;1;20250101;20241231;20240101;20261231;A;2;SECRET;HASH160;SALTEDHASHVALUE;STRICT_POLICY\n",
                 encoding="utf-8",
             )
             addr_users_path.write_text(
-                "MANDT;BNAME;NAME_FIRST;NAME_LAST;NAME_TEXTC;COMPANY;ADDRNUMBER;PERSNUMBER\n"
-                "100;USER_A;Dana;Levi;Dana Levi;Ayalon;1001;2001\n",
+                "MANDT;BNAME;NAME_FIRST;NAME_LAST;NAME_TEXTC;COMPANY;ADDRNUMBER;PERSNUMBER;DEPARTMENT\n"
+                "100;USER_A;Dana;Levi;Dana Levi;Ayalon;1001;2001;Finance\n",
                 encoding="utf-8",
             )
             adr6_path.write_text(
@@ -641,27 +840,25 @@ class TestSmoke(unittest.TestCase):
             try:
                 window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
                 window.slot_widgets["ADR6_USR21"]["selected_paths"] = [str(addr_users_path), str(adr6_path)]
+                window._apply_user_preview_columns([
+                    "BNAME", "DEPARTMENT", "GLTGV", "GLTGB", "USTYP", "LOCNT", "OCOD1", "PASSCODE", "PWDSALTEDHASH", "SECURITY_POLICY"
+                ])
 
                 window.refresh_user_preview()
 
                 self.assertEqual(ValidationDesktopApp.format_rtl_text(window.user_preview_group.title()), "רשימת משתמשים שנטענו")
                 self.assertIs(window.user_preview_group.parentWidget(), window.review_tab)
                 self.assertEqual(window.user_preview_table.rowCount(), 1)
-                self.assertEqual(window.user_preview_table.item(0, 0).text(), "100")
-                self.assertEqual(window.user_preview_table.item(0, 1).text(), "USER_A")
-                self.assertEqual(window.user_preview_table.item(0, 2).text(), "Dana")
-                self.assertEqual(window.user_preview_table.item(0, 3).text(), "Levi")
-                self.assertEqual(window.user_preview_table.item(0, 4).text(), "Dana Levi")
-                self.assertEqual(window.user_preview_table.item(0, 5).text(), "Ayalon")
-                self.assertEqual(window.user_preview_table.item(0, 6).text(), "user@example.com")
-                self.assertEqual(window.user_preview_table.item(0, 7).text(), "פעיל")
-                self.assertEqual(window.user_preview_table.item(0, 8).text(), "1001")
-                self.assertEqual(window.user_preview_table.item(0, 9).text(), "2001")
-                self.assertEqual(window.user_preview_table.item(0, 10).text(), "20260101")
-                self.assertEqual(window.user_preview_table.item(0, 11).text(), "080000")
-                self.assertEqual(window.user_preview_table.item(0, 12).text(), "1")
-                self.assertEqual(window.user_preview_table.item(0, 13).text(), "20250101")
-                self.assertEqual(window.user_preview_table.item(0, 14).text(), "20241231")
+                self.assertEqual(window.user_preview_table.item(0, 0).text(), "USER_A")
+                self.assertEqual(window.user_preview_table.item(0, 1).text(), "Finance")
+                self.assertEqual(window.user_preview_table.item(0, 2).text(), "20240101")
+                self.assertEqual(window.user_preview_table.item(0, 3).text(), "20261231")
+                self.assertEqual(window.user_preview_table.item(0, 4).text(), "A")
+                self.assertEqual(window.user_preview_table.item(0, 5).text(), "2")
+                self.assertEqual(window.user_preview_table.item(0, 6).text(), "SECRET")
+                self.assertEqual(window.user_preview_table.item(0, 7).text(), "HASH160")
+                self.assertEqual(window.user_preview_table.item(0, 8).text(), "SALTEDHASHVALUE")
+                self.assertEqual(window.user_preview_table.item(0, 9).text(), "STRICT_POLICY")
             finally:
                 window.close()
 

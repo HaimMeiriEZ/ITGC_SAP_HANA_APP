@@ -52,6 +52,20 @@ def get_qt_app() -> QApplication:
     return app
 
 
+class SortableTableWidgetItem(QTableWidgetItem):
+    SORT_ROLE = Qt.UserRole + 2
+
+    def __lt__(self, other: object) -> bool:
+        if isinstance(other, QTableWidgetItem):
+            self_sort_value = self.data(self.SORT_ROLE)
+            other_sort_value = other.data(self.SORT_ROLE)
+            if self_sort_value is not None or other_sort_value is not None:
+                left = "" if self_sort_value is None else str(self_sort_value)
+                right = "" if other_sort_value is None else str(other_sort_value)
+                return left < right
+        return super().__lt__(other)
+
+
 class ValidationDesktopApp(QMainWindow):
     MULTI_FILE_SLOTS = {
         "USR02",
@@ -81,6 +95,17 @@ class ValidationDesktopApp(QMainWindow):
         {"field": "PWDINITIAL", "formal": "סיסמה ראשונית", "technical": "PWDINITIAL", "source": "USR02", "default": True, "width": 120},
         {"field": "PWDCHGDATE", "formal": "תאריך שינוי סיסמה", "technical": "PWDCHGDATE", "source": "USR02", "default": True, "width": 145},
         {"field": "PWDSETDATE", "formal": "תאריך הגדרת סיסמה", "technical": "PWDSETDATE", "source": "USR02", "default": True, "width": 145},
+        {"field": "DEPARTMENT", "formal": "מחלקה", "technical": "DEPARTMENT", "source": "USER_ADDR", "default": True, "width": 150},
+        {"field": "GLTGV", "formal": "תקף מתאריך", "technical": "GLTGV", "source": "USR02", "default": True, "width": 120},
+        {"field": "GLTGB", "formal": "תקף עד תאריך", "technical": "GLTGB", "source": "USR02", "default": True, "width": 120},
+        {"field": "USTYP", "formal": "סוג משתמש", "technical": "USTYP", "source": "USR02", "default": True, "width": 110},
+        {"field": "LOCNT", "formal": "מספר ניסיונות כניסה כושלים", "technical": "LOCNT", "source": "USR02", "default": True, "width": 125},
+        {"field": "OCOD1", "formal": "סיסמה", "technical": "OCOD1", "source": "USR02", "default": True, "width": 130},
+        {"field": "PASSCODE", "formal": "ערך Hash של סיסמה", "technical": "PASSCODE", "source": "USR02", "default": True, "width": 220},
+        {"field": "PWDSALTEDHASH", "formal": "ערך Hash מוצפן של סיסמה", "technical": "PWDSALTEDHASH", "source": "USR02", "default": True, "width": 220},
+        {"field": "SECURITY_POLICY", "formal": "מדיניות אבטחה", "technical": "SECURITY_POLICY", "source": "USR02", "default": True, "width": 160},
+        {"field": "REVIEW_STATUS", "formal": "בוצעה סקירה", "technical": "REVIEW_STATUS", "source": "סוקר", "default": True, "width": 130},
+        {"field": "REVIEW_NOTES", "formal": "הערות סוקר", "technical": "REVIEW_NOTES", "source": "סוקר", "default": True, "width": 220},
         {"field": "UFLAG", "formal": "קוד נעילה", "technical": "UFLAG", "source": "USR02", "default": False, "width": 100},
     ]
     DEFAULT_USER_PREVIEW_COLUMNS = [
@@ -88,15 +113,20 @@ class ValidationDesktopApp(QMainWindow):
         for column in USER_PREVIEW_COLUMN_DEFINITIONS
         if bool(column.get("default"))
     ]
-    CURRENT_USER_PREVIEW_SETTINGS_VERSION = 2
+    CURRENT_USER_PREVIEW_SETTINGS_VERSION = 4
     USER_PREVIEW_SETTINGS_MIGRATIONS = {
         2: ["PWDINITIAL", "PWDCHGDATE", "PWDSETDATE"],
+        3: ["DEPARTMENT", "GLTGV", "GLTGB", "USTYP", "LOCNT", "OCOD1", "PASSCODE", "PWDSALTEDHASH", "SECURITY_POLICY"],
+        4: ["REVIEW_STATUS", "REVIEW_NOTES"],
     }
     USER_PREVIEW_FILTER_OPTIONS = [
         ("all", "כלל האוכלוסייה"),
         ("active", "פעילים בתקופה הנבדקת"),
         ("inactive", "לא פעילים בתקופה הנבדקת"),
     ]
+    REVIEW_STATUS_OPTIONS = ["נבדק", "טרם נבדק", "לבירור"]
+    DEFAULT_REVIEW_STATUS = "טרם נבדק"
+    USER_PREVIEW_DATE_FIELDS = {"TRDAT", "PWDCHGDATE", "PWDSETDATE", "GLTGV", "GLTGB"}
 
     SLOT_DEFINITIONS = {
         "USR02": {
@@ -190,6 +220,10 @@ class ValidationDesktopApp(QMainWindow):
         self.summary_labels: dict[str, QLabel] = {}
         self.run_log_records: list[dict[str, object]] = []
         self._allow_user_preview_persistence = base_dir is not None or "unittest" not in sys.modules
+        self.last_file_dialog_directory = self._load_last_file_dialog_directory()
+        self._refreshing_user_preview = False
+        self.user_preview_export_path: Path | None = None
+        self.user_reviewer_state = self._load_user_reviewer_state()
         self.user_preview_visible_columns = self._load_user_preview_column_selection()
 
         self._configure_window()
@@ -280,6 +314,29 @@ class ValidationDesktopApp(QMainWindow):
         self.tabs.setDocumentMode(True)
         self.tabs.setTabPosition(QTabWidget.North)
         self.tabs.setMovable(False)
+        self.tabs.setStyleSheet(
+            """
+            QTabBar::tab {
+                background-color: #e9eef7;
+                color: #16325c;
+                border: 1px solid #b7c4d8;
+                border-bottom: none;
+                padding: 10px 18px;
+                margin-left: 2px;
+                min-width: 150px;
+                font-weight: bold;
+            }
+            QTabBar::tab:selected {
+                background-color: #6d002f;
+                color: white;
+            }
+            QTabWidget::pane {
+                border: 1px solid #c7cfda;
+                top: -1px;
+                background: #f5f7fb;
+            }
+            """
+        )
 
         self.intake_tab = QWidget()
         self.intake_tab.setLayoutDirection(Qt.RightToLeft)
@@ -310,7 +367,6 @@ class ValidationDesktopApp(QMainWindow):
         self.review_layout = QVBoxLayout(self.review_tab)
         self.review_layout.setContentsMargins(6, 6, 6, 6)
         self.review_layout.setSpacing(6)
-        self.review_layout.setAlignment(Qt.AlignTop)
 
         self.settings_tab = QWidget()
         self.settings_tab.setLayoutDirection(Qt.RightToLeft)
@@ -524,7 +580,8 @@ class ValidationDesktopApp(QMainWindow):
 
         self.user_preview_group = QGroupBox(self.format_ui_rtl_text("רשימת משתמשים שנטענו"))
         self.user_preview_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.user_preview_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.user_preview_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.user_preview_group.setMinimumHeight(460)
         user_preview_layout = QVBoxLayout(self.user_preview_group)
         user_preview_layout.setContentsMargins(8, 12, 8, 8)
         user_preview_layout.setSpacing(4)
@@ -538,6 +595,11 @@ class ValidationDesktopApp(QMainWindow):
         user_preview_actions_layout.setContentsMargins(0, 0, 0, 0)
         user_preview_actions_layout.setSpacing(8)
         user_preview_actions_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        self.user_preview_export_button = QPushButton("ייצוא סקירה לאקסל")
+        self.user_preview_export_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.user_preview_export_button.clicked.connect(lambda: self.export_user_preview_to_excel(open_after_export=True))
+        user_preview_actions_layout.addWidget(self.user_preview_export_button, 0, Qt.AlignRight)
 
         self.user_preview_columns_button = QPushButton("הוסף / מחק עמודות")
         self.user_preview_columns_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -594,20 +656,24 @@ class ValidationDesktopApp(QMainWindow):
         user_preview_layout.addWidget(self.user_preview_hint, 0, Qt.AlignTop)
 
         self.user_preview_table = QTableWidget(0, 0)
-        self.user_preview_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.user_preview_table.setEditTriggers(
+            QTableWidget.DoubleClicked | QTableWidget.EditKeyPressed | QTableWidget.SelectedClicked
+        )
         self.user_preview_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.user_preview_table.setAlternatingRowColors(True)
         self.user_preview_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.user_preview_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.user_preview_table.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
-        self.user_preview_table.setMinimumHeight(240)
-        self.user_preview_table.setMaximumHeight(340)
+        self.user_preview_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.user_preview_table.setMinimumHeight(420)
+        self.user_preview_table.setMaximumHeight(16777215)
         self._configure_user_preview_table()
+        self.user_preview_table.itemChanged.connect(self._handle_user_preview_item_changed)
         self.user_preview_status_filter.currentIndexChanged.connect(self.refresh_user_preview)
         self.audit_period_from_edit.editingFinished.connect(self.refresh_user_preview)
         self.audit_period_to_edit.editingFinished.connect(self.refresh_user_preview)
-        user_preview_layout.addWidget(self.user_preview_table, 0, Qt.AlignTop)
-        self.review_layout.addWidget(self.user_preview_group)
+        user_preview_layout.addWidget(self.user_preview_table, 1)
+        self.review_layout.addWidget(self.user_preview_group, 1)
 
         self.run_log_group = QGroupBox(self.format_ui_rtl_text("לוג קבצים שנבדקו"))
         self.run_log_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -845,23 +911,25 @@ class ValidationDesktopApp(QMainWindow):
             self.load_history.pop()
 
     def choose_file(self, slot_key: str) -> None:
+        initial_directory = self._get_last_file_dialog_directory()
         if slot_key in self.MULTI_FILE_SLOTS:
             file_paths, _ = QFileDialog.getOpenFileNames(
                 self,
                 f"בחירת קבצים עבור {slot_key}",
-                str(self.config.input_dir),
+                initial_directory,
                 "Supported files (*.txt *.csv *.xlsx *.xlsm);;All files (*.*)",
             )
         else:
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
                 f"בחירת קובץ עבור {slot_key}",
-                str(self.config.input_dir),
+                initial_directory,
                 "Supported files (*.txt *.csv *.xlsx *.xlsm);;All files (*.*)",
             )
             file_paths = [file_path] if file_path else []
 
         if file_paths:
+            self._save_last_file_dialog_directory(Path(file_paths[0]).parent)
             self.selected_slot_key = slot_key
             self.slot_widgets[slot_key]["selected_paths"] = file_paths
             self._remember_slot_load(slot_key)
@@ -918,8 +986,138 @@ class ValidationDesktopApp(QMainWindow):
         }
         return suggestions.get(slot_key, "")
 
+    def _file_dialog_state_path(self) -> Path:
+        return self.config.output_dir / "file_dialog_state.json"
+
+    def _load_last_file_dialog_directory(self) -> Path:
+        default_directory = self.config.input_dir
+        if not self._allow_user_preview_persistence:
+            return default_directory
+
+        state_path = self._file_dialog_state_path()
+        if not state_path.exists():
+            return default_directory
+
+        try:
+            raw_data = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            return default_directory
+
+        saved_directory = ""
+        if isinstance(raw_data, dict):
+            saved_directory = str(raw_data.get("last_directory", "")).strip()
+
+        candidate_directory = Path(saved_directory).expanduser() if saved_directory else default_directory
+        if candidate_directory.exists() and candidate_directory.is_dir():
+            return candidate_directory
+        return default_directory
+
+    def _save_last_file_dialog_directory(self, directory_path: object) -> None:
+        if directory_path is None:
+            return
+
+        candidate_directory = Path(str(directory_path)).expanduser()
+        if candidate_directory.is_file():
+            candidate_directory = candidate_directory.parent
+        if not candidate_directory.exists() or not candidate_directory.is_dir():
+            return
+
+        self.last_file_dialog_directory = candidate_directory
+        if not self._allow_user_preview_persistence:
+            return
+
+        state_path = self._file_dialog_state_path()
+        payload = {"last_directory": str(candidate_directory)}
+        state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _get_last_file_dialog_directory(self) -> str:
+        candidate_directory = getattr(self, "last_file_dialog_directory", self.config.input_dir)
+        if not isinstance(candidate_directory, Path) or not candidate_directory.exists() or not candidate_directory.is_dir():
+            candidate_directory = self.config.input_dir
+        return str(candidate_directory)
+
     def _user_preview_settings_path(self) -> Path:
         return self.config.output_dir / "user_preview_columns.json"
+
+    def _user_reviewer_state_path(self) -> Path:
+        return self.config.output_dir / "user_preview_reviewer_state.json"
+
+    @staticmethod
+    def _user_reviewer_state_key(mandt: object, bname: object) -> str:
+        mandt_value = "" if mandt is None else str(mandt).strip()
+        bname_value = "" if bname is None else str(bname).strip()
+        return f"{mandt_value}|{bname_value}"
+
+    @classmethod
+    def _normalize_reviewer_status(cls, value: object) -> str:
+        normalized_value = "" if value is None else str(value).strip()
+        if normalized_value in cls.REVIEW_STATUS_OPTIONS:
+            return normalized_value
+        return cls.DEFAULT_REVIEW_STATUS
+
+    @classmethod
+    def _default_reviewer_values(cls) -> dict[str, str]:
+        return {
+            "REVIEW_STATUS": cls.DEFAULT_REVIEW_STATUS,
+            "REVIEW_NOTES": "",
+        }
+
+    def _load_user_reviewer_state(self) -> dict[str, dict[str, str]]:
+        if not self._allow_user_preview_persistence:
+            return {}
+
+        state_path = self._user_reviewer_state_path()
+        if not state_path.exists():
+            return {}
+
+        try:
+            raw_data = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+        if not isinstance(raw_data, dict):
+            return {}
+
+        normalized_state: dict[str, dict[str, str]] = {}
+        for review_key, review_values in raw_data.items():
+            if not isinstance(review_values, dict):
+                continue
+            normalized_state[str(review_key)] = {
+                "REVIEW_STATUS": self._normalize_reviewer_status(review_values.get("REVIEW_STATUS")),
+                "REVIEW_NOTES": str(review_values.get("REVIEW_NOTES", "")).strip(),
+            }
+        return normalized_state
+
+    def _save_user_reviewer_state(self) -> None:
+        if not self._allow_user_preview_persistence:
+            return
+
+        state_path = self._user_reviewer_state_path()
+        state_path.write_text(
+            json.dumps(self.user_reviewer_state, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _get_reviewer_values(self, mandt: object, bname: object) -> dict[str, str]:
+        review_key = self._user_reviewer_state_key(mandt, bname)
+        stored_values = self.user_reviewer_state.get(review_key)
+        if not isinstance(stored_values, dict):
+            return self._default_reviewer_values().copy()
+        return {
+            "REVIEW_STATUS": self._normalize_reviewer_status(stored_values.get("REVIEW_STATUS")),
+            "REVIEW_NOTES": str(stored_values.get("REVIEW_NOTES", "")).strip(),
+        }
+
+    def _update_reviewer_value(self, review_key: str, field_name: str, value: object) -> None:
+        if not review_key or field_name not in {"REVIEW_STATUS", "REVIEW_NOTES"}:
+            return
+
+        current_values = self.user_reviewer_state.setdefault(review_key, self._default_reviewer_values().copy())
+        if field_name == "REVIEW_STATUS":
+            current_values[field_name] = self._normalize_reviewer_status(value)
+        else:
+            current_values[field_name] = "" if value is None else str(value).strip()
+        self._save_user_reviewer_state()
 
     def _normalize_user_preview_columns(self, selected_columns: list[str] | None) -> list[str]:
         allowed_fields = [column["field"] for column in self.USER_PREVIEW_COLUMN_DEFINITIONS]
@@ -968,6 +1166,29 @@ class ValidationDesktopApp(QMainWindow):
             if column["field"] == field_name:
                 return column
         return {"field": field_name, "formal": field_name, "technical": field_name, "source": "לא ידוע", "width": 120}
+
+    def _handle_user_preview_item_changed(self, item: QTableWidgetItem) -> None:
+        if self._refreshing_user_preview or item is None:
+            return
+
+        field_name = item.data(Qt.UserRole + 1)
+        review_key = item.data(Qt.UserRole)
+        if field_name != "REVIEW_NOTES" or not review_key:
+            return
+
+        normalized_text = self.format_rtl_text(item.text())
+        item.setToolTip(normalized_text)
+        self._update_reviewer_value(str(review_key), "REVIEW_NOTES", normalized_text)
+
+    def _get_user_preview_cell_text(self, row_index: int, column_index: int) -> str:
+        cell_widget = self.user_preview_table.cellWidget(row_index, column_index)
+        if isinstance(cell_widget, QComboBox):
+            return self.format_rtl_text(cell_widget.currentText())
+
+        item = self.user_preview_table.item(row_index, column_index)
+        if item is None:
+            return ""
+        return self.format_rtl_text(item.text())
 
     def _configure_user_preview_table(self) -> None:
         self.user_preview_visible_columns = self._normalize_user_preview_columns(self.user_preview_visible_columns)
@@ -1129,6 +1350,19 @@ class ValidationDesktopApp(QMainWindow):
                 continue
         return None
 
+    @classmethod
+    def _format_user_preview_value_for_display(cls, field_name: str, value: object) -> str:
+        _ = field_name
+        return "" if value is None else str(value).strip()
+
+    @classmethod
+    def _get_user_preview_sort_value(cls, field_name: str, value: object) -> str:
+        normalized_value = "" if value is None else str(value).strip()
+        if field_name in cls.USER_PREVIEW_DATE_FIELDS:
+            parsed_date = cls._parse_user_preview_date(normalized_value)
+            return parsed_date.strftime("%Y%m%d") if parsed_date is not None else ""
+        return normalized_value.casefold()
+
     def _get_user_preview_filter_mode(self) -> str:
         filter_widget = getattr(self, "user_preview_status_filter", None)
         if isinstance(filter_widget, QComboBox):
@@ -1188,9 +1422,17 @@ class ValidationDesktopApp(QMainWindow):
                 "STATUS": self._format_user_status(raw_uflag),
                 "TRDAT": self._get_row_value(row, "TRDAT"),
                 "LTIME": self._get_row_value(row, "LTIME"),
+                "GLTGV": self._get_row_value(row, "GLTGV"),
+                "GLTGB": self._get_row_value(row, "GLTGB"),
+                "USTYP": self._get_row_value(row, "USTYP"),
+                "LOCNT": self._get_row_value(row, "LOCNT"),
                 "PWDINITIAL": self._get_row_value(row, "PWDINITIAL"),
                 "PWDCHGDATE": self._get_row_value(row, "PWDCHGDATE"),
                 "PWDSETDATE": self._get_row_value(row, "PWDSETDATE"),
+                "OCOD1": self._get_row_value(row, "OCOD1"),
+                "PASSCODE": self._get_row_value(row, "PASSCODE"),
+                "PWDSALTEDHASH": self._get_row_value(row, "PWDSALTEDHASH"),
+                "SECURITY_POLICY": self._get_row_value(row, "SECURITY_POLICY"),
             }
 
         for row in combined_rows:
@@ -1219,13 +1461,14 @@ class ValidationDesktopApp(QMainWindow):
                     "NAME_LAST": "",
                     "NAME_TEXTC": "",
                     "COMPANY": "",
+                    "DEPARTMENT": "",
                     "ADDRNUMBER": "",
                     "PERSNUMBER": "",
                     "SMTP_ADDR": "",
                 },
             )
 
-            for field_name in ["NAME_FIRST", "NAME_LAST", "NAME_TEXTC", "COMPANY", "ADDRNUMBER", "PERSNUMBER", "SMTP_ADDR"]:
+            for field_name in ["NAME_FIRST", "NAME_LAST", "NAME_TEXTC", "COMPANY", "DEPARTMENT", "ADDRNUMBER", "PERSNUMBER", "SMTP_ADDR"]:
                 field_value = self._get_row_value(row, field_name)
                 if field_value and not current_entry[field_name]:
                     current_entry[field_name] = field_value
@@ -1240,6 +1483,9 @@ class ValidationDesktopApp(QMainWindow):
         for key in ordered_keys:
             usr_entry = usr02_map.get(key, {})
             addr_entry = addr_users_map.get(key, {})
+            merged_mandt = usr_entry.get("MANDT") or addr_entry.get("MANDT", "")
+            merged_bname = usr_entry.get("BNAME") or addr_entry.get("BNAME", "")
+            review_values = self._get_reviewer_values(merged_mandt, merged_bname)
             email_value = (
                 addr_entry.get("SMTP_ADDR", "")
                 or email_by_addr.get(addr_entry.get("ADDRNUMBER", ""), "")
@@ -1247,12 +1493,13 @@ class ValidationDesktopApp(QMainWindow):
             )
             preview_rows.append(
                 {
-                    "MANDT": usr_entry.get("MANDT") or addr_entry.get("MANDT", ""),
-                    "BNAME": usr_entry.get("BNAME") or addr_entry.get("BNAME", ""),
+                    "MANDT": merged_mandt,
+                    "BNAME": merged_bname,
                     "NAME_FIRST": addr_entry.get("NAME_FIRST", ""),
                     "NAME_LAST": addr_entry.get("NAME_LAST", ""),
                     "NAME_TEXTC": addr_entry.get("NAME_TEXTC", ""),
                     "COMPANY": addr_entry.get("COMPANY", ""),
+                    "DEPARTMENT": addr_entry.get("DEPARTMENT", ""),
                     "SMTP_ADDR": email_value,
                     "STATUS": usr_entry.get("STATUS", "לא זמין"),
                     "UFLAG": usr_entry.get("UFLAG", ""),
@@ -1260,9 +1507,19 @@ class ValidationDesktopApp(QMainWindow):
                     "PERSNUMBER": addr_entry.get("PERSNUMBER", ""),
                     "TRDAT": usr_entry.get("TRDAT", ""),
                     "LTIME": usr_entry.get("LTIME", ""),
+                    "GLTGV": usr_entry.get("GLTGV", ""),
+                    "GLTGB": usr_entry.get("GLTGB", ""),
+                    "USTYP": usr_entry.get("USTYP", ""),
+                    "LOCNT": usr_entry.get("LOCNT", ""),
                     "PWDINITIAL": usr_entry.get("PWDINITIAL", ""),
                     "PWDCHGDATE": usr_entry.get("PWDCHGDATE", ""),
                     "PWDSETDATE": usr_entry.get("PWDSETDATE", ""),
+                    "OCOD1": usr_entry.get("OCOD1", ""),
+                    "PASSCODE": usr_entry.get("PASSCODE", ""),
+                    "PWDSALTEDHASH": usr_entry.get("PWDSALTEDHASH", ""),
+                    "SECURITY_POLICY": usr_entry.get("SECURITY_POLICY", ""),
+                    "REVIEW_STATUS": review_values.get("REVIEW_STATUS", self.DEFAULT_REVIEW_STATUS),
+                    "REVIEW_NOTES": review_values.get("REVIEW_NOTES", ""),
                 }
             )
 
@@ -1270,6 +1527,8 @@ class ValidationDesktopApp(QMainWindow):
 
     def refresh_user_preview(self) -> None:
         self._configure_user_preview_table()
+        self._refreshing_user_preview = True
+        self.user_preview_table.blockSignals(True)
         self.user_preview_table.setSortingEnabled(False)
 
         try:
@@ -1316,18 +1575,46 @@ class ValidationDesktopApp(QMainWindow):
             for preview_row in rows_to_display:
                 row_index = self.user_preview_table.rowCount()
                 self.user_preview_table.insertRow(row_index)
+                review_key = self._user_reviewer_state_key(preview_row.get("MANDT", ""), preview_row.get("BNAME", ""))
                 for column, field_name in enumerate(self.user_preview_visible_columns):
                     value = preview_row.get(field_name, "") or ""
-                    item = QTableWidgetItem(self.format_rtl_text(value))
+
+                    if field_name == "REVIEW_STATUS":
+                        combo_box = QComboBox()
+                        combo_box.setLayoutDirection(Qt.RightToLeft)
+                        combo_box.setMinimumWidth(120)
+                        for status_value in self.REVIEW_STATUS_OPTIONS:
+                            combo_box.addItem(self.format_rtl_text(status_value))
+                        combo_box.setCurrentText(self._normalize_reviewer_status(value))
+                        combo_box.currentTextChanged.connect(
+                            lambda selected_text, current_key=review_key: self._update_reviewer_value(
+                                current_key,
+                                "REVIEW_STATUS",
+                                selected_text,
+                            )
+                        )
+                        self.user_preview_table.setCellWidget(row_index, column, combo_box)
+                        continue
+
+                    display_value = self._format_user_preview_value_for_display(field_name, value)
+                    item = SortableTableWidgetItem(self.format_rtl_text(display_value))
+                    item.setData(SortableTableWidgetItem.SORT_ROLE, self._get_user_preview_sort_value(field_name, value))
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                    item.setToolTip(self.format_rtl_text(value))
-                    if field_name == "STATUS":
+                    item.setToolTip(self.format_rtl_text(display_value))
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+
+                    if field_name == "REVIEW_NOTES":
+                        item.setFlags(item.flags() | Qt.ItemIsEditable)
+                        item.setData(Qt.UserRole, review_key)
+                        item.setData(Qt.UserRole + 1, field_name)
+                    elif field_name == "STATUS":
                         if value == "פעיל":
                             item.setBackground(QColor("#eaf7ea"))
                         elif "אי-התאמה" in value:
                             item.setBackground(QColor("#fff4cc"))
                         elif value == "נעול":
                             item.setBackground(QColor("#fdecec"))
+
                     self.user_preview_table.setItem(row_index, column, item)
 
             self.user_preview_table.resizeColumnsToContents()
@@ -1338,6 +1625,8 @@ class ValidationDesktopApp(QMainWindow):
                     max(self.user_preview_table.columnWidth(column_index), default_width),
                 )
         finally:
+            self.user_preview_table.blockSignals(False)
+            self._refreshing_user_preview = False
             self.user_preview_table.setSortingEnabled(True)
 
     def run_validation(self) -> None:
@@ -1745,6 +2034,38 @@ class ValidationDesktopApp(QMainWindow):
 
         if open_after_export:
             QMessageBox.information(self, "הייצוא הושלם", f"קובץ התיעוד נשמר בהצלחה:\n{export_path}")
+
+        return export_path
+
+    def export_user_preview_to_excel(self, open_after_export: bool = False) -> Path | None:
+        if self.user_preview_table.rowCount() == 0 or self.user_preview_table.columnCount() == 0:
+            QMessageBox.warning(self, "אין נתונים לייצוא", "טרם נטענו משתמשים לסקירה לצורך ייצוא לאקסל.")
+            return None
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = self.format_rtl_text("סקירת משתמשים")
+
+        headers = [
+            self.format_rtl_text(self.user_preview_table.horizontalHeaderItem(column_index).text())
+            if self.user_preview_table.horizontalHeaderItem(column_index) is not None
+            else ""
+            for column_index in range(self.user_preview_table.columnCount())
+        ]
+        sheet.append(headers)
+
+        for row_index in range(self.user_preview_table.rowCount()):
+            sheet.append([
+                self._get_user_preview_cell_text(row_index, column_index)
+                for column_index in range(self.user_preview_table.columnCount())
+            ])
+
+        export_path = self.config.output_dir / f"users_review_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        workbook.save(export_path)
+        self.user_preview_export_path = export_path
+
+        if open_after_export:
+            QMessageBox.information(self, "הייצוא הושלם", f"קובץ הסקירה נשמר בהצלחה:\n{export_path}")
 
         return export_path
 
