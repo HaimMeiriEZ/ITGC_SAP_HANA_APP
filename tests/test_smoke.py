@@ -6,7 +6,7 @@ import unittest
 
 from openpyxl import Workbook, load_workbook
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QDialog, QHeaderView, QScrollArea, QSizePolicy
+from PySide6.QtWidgets import QApplication, QDialog, QHeaderView, QPlainTextEdit, QScrollArea, QSizePolicy
 
 from src.models.validation_result import ValidationIssue, ValidationResult
 from src.pipeline import process_file
@@ -243,6 +243,90 @@ class TestSmoke(unittest.TestCase):
             users_layout = window.category_sections["טבלאות משתמשים"].layout()
             self.assertGreaterEqual(users_layout.columnStretch(1), 1)
             self.assertGreaterEqual(users_layout.columnStretch(2), 2)
+        finally:
+            window.close()
+
+    def test_generic_and_super_users_settings_are_persisted(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            generic_editor = window.system_settings_widgets.get("generic_users")
+            self.assertIsInstance(generic_editor, QPlainTextEdit)
+            self.assertEqual(generic_editor.toPlainText().splitlines(), ["SAP", "DDIC", "TMSADM", "SAPCPIC"])
+
+            super_users_table = window.system_settings_widgets.get("super_users")
+            self.assertIsNotNone(super_users_table)
+            self.assertEqual(super_users_table.rowCount(), 0)
+            window._append_super_user_row(super_users_table)
+            self.assertIsNotNone(super_users_table.item(0, 0))
+            self.assertIsNotNone(super_users_table.item(0, 1))
+            super_users_table.item(0, 0).setText("100")
+            super_users_table.item(0, 1).setText("SUPERA")
+
+            settings = window._collect_system_settings_from_form()
+            self.assertEqual(settings["super_users"], [{"MANDT": "100", "BNAME": "SUPERA"}])
+            self.assertIn("SAP", settings["generic_users"])
+        finally:
+            window.close()
+
+    def test_generic_and_super_user_findings_are_created_for_active_unlocked_users(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            window._current_system_settings = lambda: {
+                "generic_users": ["GENERIC1"],
+                "super_users": [{"MANDT": "200", "BNAME": "SUPER1"}],
+                "user_review_period": {"start_date": "2026-01-01", "end_date": "2026-03-31"},
+            }
+
+            generic_entry = {
+                "MANDT": "100",
+                "BNAME": "GENERIC1",
+                "UFLAG": "0",
+                "TRDAT": "2026-02-15",
+                "GLTGV": "2025-01-01",
+                "GLTGB": "2027-01-01",
+            }
+            finding_text = window._build_user_findings_description(generic_entry, "2026-02-15")
+            self.assertIn("משתמש גנרי פעיל ולא נעול", finding_text)
+
+            super_entry = {
+                "MANDT": "200",
+                "BNAME": "SUPER1",
+                "UFLAG": "0",
+                "TRDAT": "2026-02-15",
+                "GLTGV": "2025-01-01",
+                "GLTGB": "2027-01-01",
+            }
+            finding_text = window._build_user_findings_description(super_entry, "2026-02-15")
+            self.assertIn("משתמש על פעיל ולא נעול", finding_text)
+        finally:
+            window.close()
+
+    def test_system_settings_sections_are_disabled_without_source_selection(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            self.assertFalse(window.system_settings_sections["user_review_period"].isEnabled())
+            self.assertFalse(window.system_settings_unavailable_labels["user_review_period"].isHidden())
+            self.assertFalse(window.system_settings_sections["critical_roles"].isEnabled())
+            self.assertFalse(window.system_settings_unavailable_labels["critical_roles"].isHidden())
+        finally:
+            window.close()
+
+    def test_system_settings_section_enables_when_relevant_source_is_loaded(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            self.assertFalse(window.system_settings_sections["user_review_period"].isEnabled())
+            window.slot_widgets["USR02"]["selected_paths"] = ["C:/temp/usr02_100.txt"]
+            window._apply_system_settings_availability()
+            self.assertTrue(window.system_settings_sections["user_review_period"].isEnabled())
+            self.assertTrue(window.system_settings_unavailable_labels["user_review_period"].isHidden())
+
+            window.clear_slot_selection("USR02")
+            self.assertFalse(window.system_settings_sections["user_review_period"].isEnabled())
+            self.assertFalse(window.system_settings_unavailable_labels["user_review_period"].isHidden())
         finally:
             window.close()
 

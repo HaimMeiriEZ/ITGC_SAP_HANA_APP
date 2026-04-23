@@ -3,18 +3,21 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime
+import copy
+from datetime import datetime, date
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
     QComboBox,
+    QDateEdit,
+    QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -29,6 +32,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QPlainTextEdit,
     QTabWidget,
     QTextEdit,
     QProgressBar,
@@ -216,6 +220,18 @@ class ValidationDesktopApp(QMainWindow):
         },
     }
 
+    SETTINGS_SECTION_DEPENDENCIES = {
+        "user_review_period": set(),
+        "super_users": set(),
+        "generic_users": set(),
+        "critical_roles": set(),
+        "critical_privileges": set(),
+        "password_policy_defaults": set(),
+        "user_type_rules": set(),
+        "file_mappings": set(),
+        "inactive_days_threshold": set(),
+    }
+
     def __init__(self, base_dir: Path | None = None) -> None:
         super().__init__()
         self.config = AppConfig.default(base_dir or Path.cwd())
@@ -236,9 +252,18 @@ class ValidationDesktopApp(QMainWindow):
         self.user_preview_export_path: Path | None = None
         self.user_reviewer_state = self._load_user_reviewer_state()
         self.user_preview_visible_columns = self._load_user_preview_column_selection()
+        self.system_settings_widgets: dict[str, object] = {}
+        self.system_settings_sections: dict[str, QGroupBox] = {}
+        self.system_settings_unavailable_labels: dict[str, QLabel] = {}
+        self.system_settings_file_mapping_order: list[str] = []
 
         self._configure_window()
         self._build_ui()
+        self._load_system_settings_into_form(
+            self._current_system_settings(),
+            load_review_period=self._system_settings_path().exists(),
+        )
+        self._apply_system_settings_availability()
 
     @staticmethod
     def format_rtl_text(text: object) -> str:
@@ -381,20 +406,38 @@ class ValidationDesktopApp(QMainWindow):
 
         self.settings_tab = QWidget()
         self.settings_tab.setLayoutDirection(Qt.RightToLeft)
-        self.settings_layout = QVBoxLayout(self.settings_tab)
-        self.settings_layout.setContentsMargins(12, 12, 12, 12)
+        self.settings_tab_layout = QVBoxLayout(self.settings_tab)
+        self.settings_tab_layout.setContentsMargins(12, 12, 12, 12)
+        self.settings_tab_layout.setSpacing(0)
+
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setWidgetResizable(True)
+        self.settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.settings_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.settings_scroll.setMinimumHeight(520)
+        self.settings_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        self.settings_content = QWidget()
+        self.settings_content.setLayoutDirection(Qt.RightToLeft)
+        self.settings_layout = QVBoxLayout(self.settings_content)
+        self.settings_layout.setContentsMargins(0, 0, 0, 0)
         self.settings_layout.setSpacing(10)
+
         self.settings_intro_label = QLabel(
             self.format_ui_rtl_text("בטאב זה ניתן לנהל את הגדרות הביקורת והעמודות הנדרשות לכל משבצת.")
         )
         self.settings_intro_label.setWordWrap(True)
         self.settings_intro_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
         self.settings_layout.addWidget(self.settings_intro_label)
+        self._build_system_settings_sections()
+
+        self.settings_scroll.setWidget(self.settings_content)
+        self.settings_tab_layout.addWidget(self.settings_scroll)
 
         self.tabs.addTab(self.intake_tab, self.format_rtl_text("קליטת קבצים"))
-        self.tabs.addTab(self.analysis_tab, self.format_rtl_text("ביצוע ניתוח לביקורת"))
-        self.tabs.addTab(self.review_tab, self.format_rtl_text("סקירת דוח משתמשים"))
         self.tabs.addTab(self.settings_tab, self.format_rtl_text("הגדרות מערכת לביקורת"))
+        self.tabs.addTab(self.review_tab, self.format_rtl_text("סקירת דוח משתמשים"))
+        self.tabs.addTab(self.analysis_tab, self.format_rtl_text("ביצוע ניתוח לביקורת"))
         main_layout.addWidget(self.tabs)
 
         self.slots_group = QGroupBox(self.format_ui_rtl_text("מקורות קלט לבדיקת SAP HANA APP"))
@@ -897,6 +940,453 @@ class ValidationDesktopApp(QMainWindow):
     def _default_extraction_date() -> str:
         return datetime.now().strftime("%Y-%m-%d")
 
+    def _build_system_settings_sections(self) -> None:
+        buttons_row = QWidget()
+        buttons_layout = QHBoxLayout(buttons_row)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(8)
+        buttons_layout.addStretch(1)
+
+        self.settings_reset_btn = QPushButton(self.format_ui_rtl_text("טען ברירות מחדל"))
+        self.settings_reset_btn.clicked.connect(self._reset_system_settings_form)
+        self.settings_save_btn = QPushButton(self.format_ui_rtl_text("שמור הגדרות"))
+        self.settings_save_btn.clicked.connect(self._save_system_settings)
+        buttons_layout.addWidget(self.settings_save_btn)
+        buttons_layout.addWidget(self.settings_reset_btn)
+        self.settings_layout.addWidget(buttons_row)
+
+        review_group, review_layout, review_unavailable_label = self._build_settings_group(
+            "טווח בחינה לסקירת משתמשים",
+            "הגדרה מרכזית של טווח תקופת הבחינה, מסונכרנת עם מסך סקירת המשתמשים.",
+        )
+        review_form = QFormLayout()
+        review_form.setLabelAlignment(Qt.AlignRight)
+        review_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+
+        start_widget = QDateEdit()
+        start_widget.setLayoutDirection(Qt.LeftToRight)
+        start_widget.setDisplayFormat("yyyy-MM-dd")
+        start_widget.setCalendarPopup(True)
+        end_widget = QDateEdit()
+        end_widget.setLayoutDirection(Qt.LeftToRight)
+        end_widget.setDisplayFormat("yyyy-MM-dd")
+        end_widget.setCalendarPopup(True)
+
+        self.system_settings_widgets["user_review_period.start_date"] = start_widget
+        self.system_settings_widgets["user_review_period.end_date"] = end_widget
+        review_form.addRow("מתאריך", start_widget)
+        review_form.addRow("עד תאריך", end_widget)
+        review_layout.addLayout(review_form)
+
+        self.settings_layout.addWidget(review_group)
+        self.system_settings_sections["user_review_period"] = review_group
+        self.system_settings_unavailable_labels["user_review_period"] = review_unavailable_label
+
+        super_users_group, super_users_table, super_users_unavailable_label = self._build_super_users_section()
+        self.settings_layout.addWidget(super_users_group)
+        self.system_settings_widgets["super_users"] = super_users_table
+        self.system_settings_sections["super_users"] = super_users_group
+        self.system_settings_unavailable_labels["super_users"] = super_users_unavailable_label
+
+        generic_users_group = self._add_settings_text_list_section("generic_users", "משתמשים גנריים", "רשימה מופרדת שורות")
+        self.system_settings_sections["generic_users"] = generic_users_group
+
+        self._add_settings_text_list_section("critical_roles", "תפקידים קריטיים", "רשימה מופרדת שורות")
+        self._add_settings_text_list_section("critical_privileges", "הרשאות קריטיות", "רשימה מופרדת שורות")
+
+        password_group, password_layout, password_unavailable_label = self._build_settings_group(
+            "ברירות מחדל למדיניות סיסמה",
+            "ערכים לוגיים לבקרות סיסמה ב-APP (כאשר נתוני המקור זמינים).",
+        )
+        password_grid = QGridLayout()
+        password_fields = [
+            "minimal_password_length",
+            "maximum_invalid_connect_attempts",
+            "password_expire_warning_time",
+            "max_password_age_days",
+            "initial_password_change_max_days",
+            "force_first_password_change",
+        ]
+        for index, field_name in enumerate(password_fields):
+            row = index // 2
+            col = (index % 2) * 2
+            label = QLabel(field_name)
+            if field_name == "force_first_password_change":
+                widget = QComboBox()
+                widget.addItems(["TRUE", "FALSE"])
+            else:
+                widget = QLineEdit()
+            self.system_settings_widgets[f"password_policy_defaults.{field_name}"] = widget
+            password_grid.addWidget(label, row, col)
+            password_grid.addWidget(widget, row, col + 1)
+        password_layout.addLayout(password_grid)
+        self.settings_layout.addWidget(password_group)
+        self.system_settings_sections["password_policy_defaults"] = password_group
+        self.system_settings_unavailable_labels["password_policy_defaults"] = password_unavailable_label
+
+        user_type_group, user_type_layout, user_type_unavailable_label = self._build_settings_group(
+            "כללי סיווג משתמשים",
+            "הגדרת מיפוי ערכי USTYP לקבוצות שימוש בביקורת.",
+        )
+        for rule_name in ["Dialog", "System", "Communication", "Service", "Reference"]:
+            label = QLabel(rule_name)
+            editor = QPlainTextEdit()
+            editor.setMinimumHeight(50)
+            self.system_settings_widgets[f"user_type_rules.{rule_name}"] = editor
+            user_type_layout.addWidget(label)
+            user_type_layout.addWidget(editor)
+        self.settings_layout.addWidget(user_type_group)
+        self.system_settings_sections["user_type_rules"] = user_type_group
+        self.system_settings_unavailable_labels["user_type_rules"] = user_type_unavailable_label
+
+        mapping_group, mapping_layout, mapping_unavailable_label = self._build_settings_group(
+            "מיפוי קבצים",
+            "התאמת שמות קבצים צפויים לכל משבצת, עבור וריאציות ייצוא בין כלים.",
+        )
+        mapping_form = QFormLayout()
+        mapping_form.setLabelAlignment(Qt.AlignRight)
+        mapping_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        self.system_settings_file_mapping_order = list(self.SLOT_DEFINITIONS.keys())
+        for slot_key in self.system_settings_file_mapping_order:
+            metadata = self.SLOT_DEFINITIONS[slot_key]
+            display_name = str(metadata.get("label", slot_key))
+            field_widget = QLineEdit()
+            field_widget.setLayoutDirection(Qt.LeftToRight)
+            self.system_settings_widgets[f"file_mappings.{slot_key}"] = field_widget
+            mapping_form.addRow(self.format_ui_rtl_text(display_name), field_widget)
+        mapping_layout.addLayout(mapping_form)
+        self.settings_layout.addWidget(mapping_group)
+        self.system_settings_sections["file_mappings"] = mapping_group
+        self.system_settings_unavailable_labels["file_mappings"] = mapping_unavailable_label
+
+        threshold_group, threshold_layout, threshold_unavailable_label = self._build_settings_group(
+            "הגדרות נוספות",
+            "סף חוסר פעילות משמש לבניית ממצאים אוטומטיים בסקירת משתמשים.",
+        )
+        threshold_form = QFormLayout()
+        threshold_form.setLabelAlignment(Qt.AlignRight)
+        threshold_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        threshold_widget = QLineEdit()
+        self.system_settings_widgets["inactive_days_threshold"] = threshold_widget
+        threshold_form.addRow("סף חוסר פעילות (ימים)", threshold_widget)
+        threshold_layout.addLayout(threshold_form)
+        self.settings_layout.addWidget(threshold_group)
+        self.system_settings_sections["inactive_days_threshold"] = threshold_group
+        self.system_settings_unavailable_labels["inactive_days_threshold"] = threshold_unavailable_label
+
+    def _build_settings_group(self, title: str, description: str | None = None) -> tuple[QGroupBox, QVBoxLayout, QLabel]:
+        group = QGroupBox(self.format_ui_rtl_text(title))
+        group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(10, 14, 10, 10)
+        layout.setSpacing(8)
+        if description:
+            description_label = QLabel(self.format_ui_rtl_text(description))
+            description_label.setWordWrap(True)
+            description_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+            layout.addWidget(description_label)
+
+        unavailable_label = QLabel(self.format_ui_rtl_text("הגדרה זו לא זמינה ללא קובץ מקור רלוונטי"))
+        unavailable_label.setWordWrap(True)
+        unavailable_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        unavailable_label.setStyleSheet("color: gray; font-style: italic;")
+        unavailable_label.setVisible(False)
+        layout.addWidget(unavailable_label)
+        return group, layout, unavailable_label
+
+    def _build_super_users_section(self) -> tuple[QGroupBox, QTableWidget, QLabel]:
+        group, layout, unavailable_label = self._build_settings_group(
+            "משתמשיי על",
+            "רשימה של משתמשים בעלי גישה גבוהה. יש להזין CLIENT ו-BNAME.",
+        )
+        table = QTableWidget(0, 2)
+        table.setHorizontalHeaderLabels(["CLIENT", "משתמש"])
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QTableWidget.SingleSelection)
+        table.setMinimumHeight(140)
+        layout.addWidget(table)
+
+        control_row = QWidget()
+        control_layout = QHBoxLayout(control_row)
+        control_layout.setContentsMargins(0, 0, 0, 0)
+        control_layout.setSpacing(8)
+        control_layout.addStretch(1)
+
+        add_button = QPushButton(self.format_ui_rtl_text("הוסף שורה"))
+        remove_button = QPushButton(self.format_ui_rtl_text("הסר שורה"))
+        add_button.clicked.connect(lambda: self._append_super_user_row(table))
+        remove_button.clicked.connect(lambda: self._remove_selected_super_user_row(table))
+        control_layout.addWidget(remove_button)
+        control_layout.addWidget(add_button)
+        layout.addWidget(control_row)
+
+        return group, table, unavailable_label
+
+    def _append_super_user_row(self, table: QTableWidget) -> None:
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setItem(row, 0, QTableWidgetItem(""))
+        table.setItem(row, 1, QTableWidgetItem(""))
+
+    def _remove_selected_super_user_row(self, table: QTableWidget) -> None:
+        selected_rows = sorted((index.row() for index in table.selectionModel().selectedRows()), reverse=True)
+        for row_index in selected_rows:
+            table.removeRow(row_index)
+
+    def _add_settings_text_list_section(self, key: str, title: str, description: str) -> QGroupBox:
+        group, group_layout, unavailable_label = self._build_settings_group(title, description)
+        editor = QPlainTextEdit()
+        editor.setMinimumHeight(90)
+        self.system_settings_widgets[key] = editor
+        group_layout.addWidget(editor)
+        self.settings_layout.addWidget(group)
+        self.system_settings_sections[key] = group
+        self.system_settings_unavailable_labels[key] = unavailable_label
+        return group
+
+    @staticmethod
+    def _safe_int(value: object, fallback: int) -> int:
+        try:
+            return int(str(value).strip())
+        except Exception:
+            return fallback
+
+    def _system_settings_path(self) -> Path:
+        return self.config.output_dir / "system_settings.json"
+
+    def _default_system_settings(self) -> dict[str, object]:
+        return {
+            "generic_users": ["SAP", "DDIC", "TMSADM", "SAPCPIC"],
+            "super_users": [],
+            "critical_roles": ["SAP_ALL", "SAP_NEW"],
+            "critical_privileges": ["S_TABU_DIS", "S_USER_GRP", "S_USER_AGR"],
+            "password_policy_defaults": {
+                "minimal_password_length": 8,
+                "maximum_invalid_connect_attempts": 6,
+                "password_expire_warning_time": 14,
+                "max_password_age_days": 90,
+                "initial_password_change_max_days": 2,
+                "force_first_password_change": "TRUE",
+            },
+            "inactive_days_threshold": 90,
+            "user_review_period": {
+                "start_date": datetime.now().replace(month=1, day=1).strftime("%Y-%m-%d"),
+                "end_date": datetime.now().replace(month=12, day=31).strftime("%Y-%m-%d"),
+            },
+            "user_type_rules": {
+                "Dialog": ["A"],
+                "System": ["B"],
+                "Communication": ["C"],
+                "Service": ["S"],
+                "Reference": ["L"],
+            },
+            "file_mappings": {
+                slot_key: str(metadata.get("expected_file", ""))
+                for slot_key, metadata in self.SLOT_DEFINITIONS.items()
+            },
+        }
+
+    def _current_system_settings(self) -> dict[str, object]:
+        defaults = self._default_system_settings()
+        settings_path = self._system_settings_path()
+        if not settings_path.exists():
+            return defaults
+        try:
+            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+        except Exception:
+            return defaults
+        if not isinstance(loaded, dict):
+            return defaults
+        if "generic_users" not in loaded and "critical_users" in loaded:
+            loaded["generic_users"] = loaded.get("critical_users", [])
+        merged = copy.deepcopy(defaults)
+        for key, value in loaded.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key].update(value)
+            else:
+                merged[key] = value
+        return merged
+
+    def _sync_review_filters_from_settings(self, settings: dict[str, object]) -> None:
+        period_cfg = settings.get("user_review_period", {}) if isinstance(settings, dict) else {}
+        start_text = str(period_cfg.get("start_date", "")).strip()
+        end_text = str(period_cfg.get("end_date", "")).strip()
+        if hasattr(self, "audit_period_from_edit") and start_text:
+            self.audit_period_from_edit.setText(start_text)
+        if hasattr(self, "audit_period_to_edit") and end_text:
+            self.audit_period_to_edit.setText(end_text)
+
+    def _load_system_settings_into_form(self, settings: dict[str, object], load_review_period: bool = True) -> None:
+        settings = settings or self._default_system_settings()
+
+        def _fill_lines(key: str) -> None:
+            editor = self.system_settings_widgets.get(key)
+            values = settings.get(key, [])
+            if isinstance(editor, QPlainTextEdit):
+                editor.setPlainText("\n".join(str(item).strip() for item in values if str(item).strip()))
+
+        _fill_lines("generic_users")
+        _fill_lines("critical_roles")
+        _fill_lines("critical_privileges")
+
+        super_users_table = self.system_settings_widgets.get("super_users")
+        super_users = settings.get("super_users", []) if isinstance(settings, dict) else []
+        if isinstance(super_users_table, QTableWidget):
+            super_users_table.setRowCount(0)
+            if isinstance(super_users, list):
+                for super_user in super_users:
+                    if isinstance(super_user, dict):
+                        mandt = str(super_user.get("MANDT", "")).strip()
+                        bname = str(super_user.get("BNAME", "")).strip()
+                        if mandt or bname:
+                            row = super_users_table.rowCount()
+                            super_users_table.insertRow(row)
+                            super_users_table.setItem(row, 0, QTableWidgetItem(mandt))
+                            super_users_table.setItem(row, 1, QTableWidgetItem(bname))
+
+        if load_review_period:
+            period_cfg = settings.get("user_review_period", {}) if isinstance(settings, dict) else {}
+            start_text = str(period_cfg.get("start_date", self._default_extraction_date())).strip()
+            end_text = str(period_cfg.get("end_date", self._default_extraction_date())).strip()
+
+            start_widget = self.system_settings_widgets.get("user_review_period.start_date")
+            end_widget = self.system_settings_widgets.get("user_review_period.end_date")
+            if isinstance(start_widget, QDateEdit):
+                date_value = QDate.fromString(start_text, "yyyy-MM-dd")
+                start_widget.setDate(date_value if date_value.isValid() else QDate.currentDate())
+            if isinstance(end_widget, QDateEdit):
+                date_value = QDate.fromString(end_text, "yyyy-MM-dd")
+                end_widget.setDate(date_value if date_value.isValid() else QDate.currentDate())
+
+        for mapping_key in self.system_settings_file_mapping_order:
+            widget = self.system_settings_widgets.get(f"file_mappings.{mapping_key}")
+            file_mappings = settings.get("file_mappings", {})
+            if isinstance(widget, QLineEdit) and isinstance(file_mappings, dict):
+                widget.setText(str(file_mappings.get(mapping_key, "")))
+
+        threshold_widget = self.system_settings_widgets.get("inactive_days_threshold")
+        if isinstance(threshold_widget, QLineEdit):
+            threshold_widget.setText(str(settings.get("inactive_days_threshold", 90)))
+
+        password_defaults = settings.get("password_policy_defaults", {}) if isinstance(settings, dict) else {}
+        if isinstance(password_defaults, dict):
+            for key, value in password_defaults.items():
+                widget = self.system_settings_widgets.get(f"password_policy_defaults.{key}")
+                if isinstance(widget, QComboBox):
+                    widget.setCurrentText(str(value))
+                elif isinstance(widget, QLineEdit):
+                    widget.setText(str(value))
+
+        user_type_rules = settings.get("user_type_rules", {}) if isinstance(settings, dict) else {}
+        if isinstance(user_type_rules, dict):
+            for rule_name, values in user_type_rules.items():
+                widget = self.system_settings_widgets.get(f"user_type_rules.{rule_name}")
+                if isinstance(widget, QPlainTextEdit):
+                    widget.setPlainText("\n".join(str(item).strip() for item in values if str(item).strip()))
+
+    def _collect_system_settings_from_form(self) -> dict[str, object]:
+        def _lines_from_editor(editor: object) -> list[str]:
+            if not isinstance(editor, QPlainTextEdit):
+                return []
+            return [line.strip() for line in editor.toPlainText().splitlines() if line.strip()]
+
+        settings = self._default_system_settings()
+        settings["generic_users"] = _lines_from_editor(self.system_settings_widgets.get("generic_users"))
+        settings["critical_roles"] = _lines_from_editor(self.system_settings_widgets.get("critical_roles"))
+        settings["critical_privileges"] = _lines_from_editor(self.system_settings_widgets.get("critical_privileges"))
+
+        super_users_table = self.system_settings_widgets.get("super_users")
+        super_users: list[dict[str, str]] = []
+        if isinstance(super_users_table, QTableWidget):
+            for row_index in range(super_users_table.rowCount()):
+                mandt_item = super_users_table.item(row_index, 0)
+                bname_item = super_users_table.item(row_index, 1)
+                mandt_text = str(mandt_item.text()).strip() if isinstance(mandt_item, QTableWidgetItem) else ""
+                bname_text = str(bname_item.text()).strip() if isinstance(bname_item, QTableWidgetItem) else ""
+                if mandt_text or bname_text:
+                    super_users.append({"MANDT": mandt_text, "BNAME": bname_text})
+        settings["super_users"] = super_users
+
+        period_start_widget = self.system_settings_widgets.get("user_review_period.start_date")
+        period_end_widget = self.system_settings_widgets.get("user_review_period.end_date")
+        if isinstance(period_start_widget, QDateEdit) and isinstance(period_end_widget, QDateEdit):
+            settings["user_review_period"] = {
+                "start_date": period_start_widget.date().toPython().isoformat(),
+                "end_date": period_end_widget.date().toPython().isoformat(),
+            }
+
+        file_mappings = {}
+        for mapping_key in self.system_settings_file_mapping_order:
+            widget = self.system_settings_widgets.get(f"file_mappings.{mapping_key}")
+            if isinstance(widget, QLineEdit):
+                file_mappings[mapping_key] = widget.text().strip()
+        settings["file_mappings"] = file_mappings
+
+        threshold_widget = self.system_settings_widgets.get("inactive_days_threshold")
+        if isinstance(threshold_widget, QLineEdit):
+            settings["inactive_days_threshold"] = self._safe_int(threshold_widget.text(), 90)
+
+        password_defaults = {}
+        for field_name in [
+            "minimal_password_length",
+            "maximum_invalid_connect_attempts",
+            "password_expire_warning_time",
+            "max_password_age_days",
+            "initial_password_change_max_days",
+            "force_first_password_change",
+        ]:
+            widget = self.system_settings_widgets.get(f"password_policy_defaults.{field_name}")
+            if isinstance(widget, QComboBox):
+                password_defaults[field_name] = widget.currentText().strip()
+            elif isinstance(widget, QLineEdit):
+                password_defaults[field_name] = self._safe_int(widget.text(), int(self._default_system_settings()["password_policy_defaults"][field_name]))
+        settings["password_policy_defaults"] = password_defaults
+
+        user_type_rules = {}
+        for rule_name in ["Dialog", "System", "Communication", "Service", "Reference"]:
+            user_type_rules[rule_name] = _lines_from_editor(self.system_settings_widgets.get(f"user_type_rules.{rule_name}"))
+        settings["user_type_rules"] = user_type_rules
+
+        return settings
+
+    def _save_system_settings(self) -> None:
+        try:
+            settings = self._collect_system_settings_from_form()
+            settings_path = self._system_settings_path()
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            settings_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._sync_review_filters_from_settings(settings)
+            self.refresh_user_preview()
+            QMessageBox.information(self, "הצלחה", "הגדרות המערכת נשמרו בהצלחה.")
+        except Exception as error:
+            QMessageBox.critical(self, "שגיאת הגדרות", f"לא ניתן לשמור את הגדרות המערכת.\n\n{error}")
+
+    def _reset_system_settings_form(self) -> None:
+        defaults = self._default_system_settings()
+        self._load_system_settings_into_form(defaults)
+        self._apply_system_settings_availability()
+
+    def _available_selected_slots(self) -> set[str]:
+        return {
+            slot_key
+            for slot_key, widget_data in self.slot_widgets.items()
+            if list(widget_data.get("selected_paths", []))
+        }
+
+    def _apply_system_settings_availability(self) -> None:
+        available_slots = self._available_selected_slots()
+        for section_key, section_widget in self.system_settings_sections.items():
+            required_slots = self.SETTINGS_SECTION_DEPENDENCIES.get(section_key, set())
+            is_available = not required_slots or bool(available_slots.intersection(required_slots))
+            section_widget.setVisible(True)
+            section_widget.setEnabled(is_available)
+            if section_key in self.system_settings_unavailable_labels:
+                self.system_settings_unavailable_labels[section_key].setVisible(not is_available)
+            section_widget.setToolTip(
+                "" if is_available else "לא זמין ללא קובץ מקור רלוונטי עבור התיבה הזו"
+            )
+
     def _build_issue_preview(self, issues: list) -> str:
         if not issues:
             return "ללא שגיאות"
@@ -936,30 +1426,134 @@ class ValidationDesktopApp(QMainWindow):
         normalized_value = "" if password_flag is None else str(password_flag).strip().upper()
         return normalized_value in {"X", "1", "TRUE", "YES", "Y"}
 
-    def _build_user_findings_description(self, usr_entry: dict[str, str], extraction_date_text: str) -> str:
-        if not self._is_a_dialog_user(usr_entry.get("USTYP", "")):
-            return ""
+    def _is_user_locked(self, uflag: object) -> bool:
+        normalized_value = "" if uflag is None else str(uflag).strip()
+        if normalized_value in {"", "0", "00"}:
+            return False
+        try:
+            return int(normalized_value) != 0
+        except ValueError:
+            return True
 
-        findings: list[str] = []
-        extraction_date = self._parse_user_preview_date(extraction_date_text)
+    def _validity_period_overlaps(
+        self,
+        gltgv_value: object,
+        gltgb_value: object,
+        period_start: date | None,
+        period_end: date | None,
+    ) -> bool:
+        if period_start is None or period_end is None:
+            return False
+
+        gltgv = self._parse_user_preview_date(gltgv_value)
+        gltgb = self._parse_user_preview_date(gltgb_value)
+        if gltgv is None and gltgb is None:
+            return False
+
+        valid_from = gltgv.date() if gltgv is not None else datetime.min.date()
+        valid_to = gltgb.date() if gltgb is not None else datetime.max.date()
+        return valid_from <= period_end and valid_to >= period_start
+
+    def _is_user_active_in_period(
+        self,
+        usr_entry: dict[str, str],
+        period_start: date | None,
+        period_end: date | None,
+    ) -> bool:
+        if period_start is None or period_end is None:
+            return False
+
         last_login_date = self._parse_user_preview_date(usr_entry.get("TRDAT", ""))
-        password_change_date = self._parse_user_preview_date(usr_entry.get("PWDCHGDATE", ""))
-        password_set_date = self._parse_user_preview_date(usr_entry.get("PWDSETDATE", ""))
+        if last_login_date is not None and period_start <= last_login_date.date() <= period_end:
+            return True
 
-        if extraction_date is not None and last_login_date is not None:
-            inactivity_days = (extraction_date.date() - last_login_date.date()).days
-            if inactivity_days > 90:
-                findings.append("משתמש לא פעיל מעל 90 יום")
+        return self._validity_period_overlaps(
+            usr_entry.get("GLTGV", ""),
+            usr_entry.get("GLTGB", ""),
+            period_start,
+            period_end,
+        )
 
-        if last_login_date is not None and password_change_date is not None:
-            password_gap_days = (last_login_date.date() - password_change_date.date()).days
-            if password_gap_days > 90:
-                findings.append("סיסמה לא הוחלפה מעל 90 יום")
+    def _is_generic_user(self, bname: object, settings: dict[str, object]) -> bool:
+        if not bname or not isinstance(settings, dict):
+            return False
+        normalized_name = str(bname).strip().casefold()
+        generic_users = settings.get("generic_users", [])
+        if not isinstance(generic_users, list):
+            return False
+        return any(str(item).strip().casefold() == normalized_name for item in generic_users)
 
-        if extraction_date is not None and password_set_date is not None and self._has_initial_password(usr_entry.get("PWDINITIAL", "")):
-            initial_password_age_days = (extraction_date.date() - password_set_date.date()).days
-            if initial_password_age_days > 2:
-                findings.append("סיסמה ראשונית לא הוחלפה תוך 48 שעות")
+    def _is_super_user(self, mandt: object, bname: object, settings: dict[str, object]) -> bool:
+        if not bname or not isinstance(settings, dict):
+            return False
+        normalized_mandt = str(mandt).strip()
+        normalized_bname = str(bname).strip().casefold()
+        super_users = settings.get("super_users", [])
+        if not isinstance(super_users, list):
+            return False
+        for row in super_users:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("MANDT", "")).strip() == normalized_mandt and str(row.get("BNAME", "")).strip().casefold() == normalized_bname:
+                return True
+        return False
+
+    def _build_user_findings_description(self, usr_entry: dict[str, str], extraction_date_text: str) -> str:
+        findings: list[str] = []
+        settings = self._current_system_settings()
+        period_cfg = settings.get("user_review_period", {}) if isinstance(settings, dict) else {}
+        start_date = self._parse_user_preview_date(period_cfg.get("start_date", ""))
+        end_date = self._parse_user_preview_date(period_cfg.get("end_date", ""))
+        period_start = start_date.date() if start_date is not None else None
+        period_end = end_date.date() if end_date is not None else None
+
+        is_super_user = self._is_super_user(usr_entry.get("MANDT", ""), usr_entry.get("BNAME", ""), settings)
+        is_generic_user = self._is_generic_user(usr_entry.get("BNAME", ""), settings)
+        is_locked = self._is_user_locked(usr_entry.get("UFLAG", ""))
+        is_active = self._is_user_active_in_period(usr_entry, period_start, period_end)
+
+        if (is_super_user or is_generic_user) and not is_locked and is_active:
+            if is_super_user and is_generic_user:
+                findings.append("משתמש על / גנרי פעיל ולא נעול")
+            elif is_super_user:
+                findings.append("משתמש על פעיל ולא נעול")
+            else:
+                findings.append("משתמש גנרי פעיל ולא נעול")
+
+        if self._is_a_dialog_user(usr_entry.get("USTYP", "")):
+            inactivity_threshold = self._safe_int(settings.get("inactive_days_threshold", 90), 90)
+            password_policy = settings.get("password_policy_defaults", {}) if isinstance(settings, dict) else {}
+            max_password_age_days = self._safe_int(
+                password_policy.get("max_password_age_days", 90) if isinstance(password_policy, dict) else 90,
+                90,
+            )
+            initial_password_change_max_days = self._safe_int(
+                password_policy.get("initial_password_change_max_days", 2) if isinstance(password_policy, dict) else 2,
+                2,
+            )
+
+            extraction_date = self._parse_user_preview_date(extraction_date_text)
+            last_login_date = self._parse_user_preview_date(usr_entry.get("TRDAT", ""))
+            password_change_date = self._parse_user_preview_date(usr_entry.get("PWDCHGDATE", ""))
+            password_set_date = self._parse_user_preview_date(usr_entry.get("PWDSETDATE", ""))
+
+            if extraction_date is not None and last_login_date is not None:
+                inactivity_days = (extraction_date.date() - last_login_date.date()).days
+                if inactivity_days > inactivity_threshold:
+                    findings.append(f"משתמש לא פעיל מעל {inactivity_threshold} יום")
+
+            if last_login_date is not None and password_change_date is not None:
+                password_gap_days = (last_login_date.date() - password_change_date.date()).days
+                if password_gap_days > max_password_age_days:
+                    findings.append(f"סיסמה לא הוחלפה מעל {max_password_age_days} יום")
+
+            if extraction_date is not None and password_set_date is not None and self._has_initial_password(usr_entry.get("PWDINITIAL", "")):
+                initial_password_age_days = (extraction_date.date() - password_set_date.date()).days
+                if initial_password_age_days > initial_password_change_max_days:
+                    if initial_password_change_max_days == 2:
+                        findings.append("סיסמה ראשונית לא הוחלפה תוך 48 שעות")
+                    else:
+                        findings.append(f"סיסמה ראשונית לא הוחלפה תוך {initial_password_change_max_days} ימים")
 
         return " | ".join(findings)
 
@@ -1130,6 +1724,7 @@ class ValidationDesktopApp(QMainWindow):
                 self.required_columns_edit.setText("")
 
         self.refresh_user_preview()
+        self._apply_system_settings_availability()
 
     def clear_last_loaded_slot(self) -> None:
         while self.load_history:
@@ -1165,6 +1760,7 @@ class ValidationDesktopApp(QMainWindow):
             self._update_slot_path_label(slot_key, file_paths)
             self.required_columns_edit.setText(self._suggest_required_columns(slot_key))
             self.refresh_user_preview()
+            self._apply_system_settings_availability()
 
     def _parse_required_columns(self, raw_value: str | None = None) -> list[str]:
         value = self.required_columns_edit.text() if raw_value is None else raw_value
