@@ -445,25 +445,274 @@ class TestSmoke(unittest.TestCase):
                 self.assertIsNotNone(reviewer_combo)
                 self.assertEqual(reviewer_combo.currentText(), "טרם נבדק")
 
-                reviewer_combo.setCurrentText("נבדק")
+                reviewer_combo.setCurrentText("נבדק - תקין")
                 notes_item = window.user_preview_table.item(0, 3)
                 notes_item.setText("נסקר ואושר")
                 window.refresh_user_preview()
 
                 reviewer_combo = window.user_preview_table.cellWidget(0, 2)
-                self.assertEqual(reviewer_combo.currentText(), "נבדק")
+                self.assertEqual(reviewer_combo.currentText(), "נבדק - תקין")
                 self.assertEqual(window.user_preview_table.item(0, 3).text(), "נסקר ואושר")
 
                 state_path = base_dir / "data" / "output" / "user_preview_reviewer_state.json"
                 self.assertTrue(state_path.exists())
                 state_data = json.loads(state_path.read_text(encoding="utf-8"))
                 self.assertIn("100|USER_A", state_data)
-                self.assertEqual(state_data["100|USER_A"]["REVIEW_STATUS"], "נבדק")
+                self.assertEqual(state_data["100|USER_A"]["REVIEW_STATUS"], "נבדק - תקין")
                 self.assertEqual(state_data["100|USER_A"]["REVIEW_NOTES"], "נסקר ואושר")
             finally:
                 window.close()
 
+    def test_user_preview_builds_findings_description_for_a_dialog_users(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME;USTYP;PWDINITIAL;PWDCHGDATE;PWDSETDATE\n"
+                "100;DIALOG_OLD;0;20250101;080000;A;X;20240901;20240901\n"
+                "100;SYSTEM_OK;0;20250430;090000;B;;;20250430\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window.slot_widgets["USR02"]["extraction_date_edit"].setText("2025-05-01")
+                window._apply_user_preview_columns(["BNAME", "USTYP", "FINDINGS_DESCRIPTION"])
+                window.refresh_user_preview()
+
+                self.assertEqual(window.user_preview_table.columnCount(), 3)
+                self.assertEqual(window.user_preview_table.horizontalHeaderItem(2).text(), "תיאור ממצאים")
+                self.assertEqual(window.user_preview_table.rowCount(), 2)
+
+                findings_text = window.user_preview_table.item(0, 2).text()
+                self.assertEqual(window.user_preview_table.item(0, 0).text(), "DIALOG_OLD")
+                self.assertIn("משתמש לא פעיל מעל 90 יום", findings_text)
+                self.assertIn("סיסמה לא הוחלפה מעל 90 יום", findings_text)
+                self.assertIn("סיסמה ראשונית לא הוחלפה תוך 48 שעות", findings_text)
+                self.assertIn("|", findings_text)
+                self.assertEqual(window.user_preview_table.item(1, 2).text(), "")
+            finally:
+                window.close()
+
     def test_export_user_preview_to_excel_creates_file_with_reviewer_columns(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "100;USER_A;0;20260101;080000\n"
+                "100;USER_B;64;20260201;090000\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                # Show only 2 columns on screen — export must still produce all columns
+                window._apply_user_preview_columns(["BNAME", "STATUS"])
+                window.refresh_user_preview()
+
+                self.assertEqual(window.user_preview_table.columnCount(), 2)
+
+                # Set reviewer values via state (simulating on-screen edits)
+                key_a = window._user_reviewer_state_key("100", "USER_A")
+                key_b = window._user_reviewer_state_key("100", "USER_B")
+                window.user_reviewer_state[key_a] = {"REVIEW_STATUS": "נבדק - לא תקין", "REVIEW_NOTES": "נדרשת בדיקה"}
+                window.user_reviewer_state[key_b] = {"REVIEW_STATUS": "נבדק - תקין", "REVIEW_NOTES": ""}
+
+                export_path = window.export_user_preview_to_excel()
+
+                self.assertIsNotNone(export_path)
+                self.assertTrue(export_path.exists())
+                self.assertIn("users_review_", export_path.name)
+
+                wb = load_workbook(export_path)
+                self.assertIn("סקירת משתמשים", wb.sheetnames)
+                ws = wb["סקירת משתמשים"]
+
+                # Export uses EXPORT_REVIEW_FIELDS (14 specific fields)
+                field_to_col_def = {col["field"]: col for col in ValidationDesktopApp.USER_PREVIEW_COLUMN_DEFINITIONS}
+                export_formal_names = [
+                    str(field_to_col_def[f]["formal"])
+                    for f in ValidationDesktopApp.EXPORT_REVIEW_FIELDS
+                    if f in field_to_col_def
+                ]
+                header_row = [ws.cell(1, c).value for c in range(1, len(export_formal_names) + 1)]
+                self.assertEqual(header_row, export_formal_names)
+
+                # Both users appear regardless of filter
+                bname_col = next(i + 1 for i, h in enumerate(header_row) if h == "משתמש")
+                exported_bnames = {ws.cell(r, bname_col).value for r in range(2, ws.max_row + 1)}
+                self.assertEqual(exported_bnames, {"USER_A", "USER_B"})
+
+                # Reviewer values are present
+                status_col = next(i + 1 for i, h in enumerate(header_row) if h == "בוצעה סקירה")
+                notes_col = next(i + 1 for i, h in enumerate(header_row) if h == "הערות סוקר")
+                status_values = {ws.cell(r, bname_col).value: ws.cell(r, status_col).value for r in range(2, ws.max_row + 1)}
+                notes_values = {ws.cell(r, bname_col).value: ws.cell(r, notes_col).value for r in range(2, ws.max_row + 1)}
+                self.assertEqual(status_values["USER_A"], "נבדק - לא תקין")
+                self.assertEqual(status_values["USER_B"], "נבדק - תקין")
+                self.assertEqual(notes_values["USER_A"], "נדרשת בדיקה")
+
+                # Data Validation dropdown on REVIEW_STATUS column
+                from openpyxl.utils import get_column_letter
+                status_col_letter = get_column_letter(status_col)
+                dv_sqrefs = [str(dv.sqref) for dv in ws.data_validations.dataValidation]
+                self.assertTrue(
+                    any(status_col_letter in sqref for sqref in dv_sqrefs),
+                    msg=f"Expected Data Validation on column {status_col_letter}, found: {dv_sqrefs}",
+                )
+            finally:
+                window.close()
+
+    def test_import_user_review_from_excel_overwrites_reviewer_state(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "100;USER_A;0;20260101;080000\n"
+                "100;USER_B;0;20260201;090000\n",
+                encoding="utf-8",
+            )
+
+            # Build the xlsx to import from (simulate a previously exported file)
+            import_xlsx = base_dir / "review_import.xlsx"
+            wb_out = Workbook()
+            ws_out = wb_out.active
+            ws_out.append(["משתמש", "CLIENT", "בוצעה סקירה", "הערות סוקר"])  # formal names
+            ws_out.append(["USER_A", "100", "נבדק - תקין", "סוקר ואושר"])
+            ws_out.append(["USER_B", "100", "לבירור", ""])  # old value → should normalize to "טרם נבדק"
+            wb_out.save(import_xlsx)
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "REVIEW_NOTES"])
+                window.refresh_user_preview()
+
+                # Before import — both should be default
+                combo_before = window.user_preview_table.cellWidget(0, 2)
+                self.assertEqual(combo_before.currentText(), "טרם נבדק")
+
+                with patch("src.ui.desktop_app.QFileDialog.getOpenFileName", return_value=(str(import_xlsx), "")), patch(
+                    "src.ui.desktop_app.QMessageBox.information"
+                ), patch("src.ui.desktop_app.QMessageBox.warning"):
+                    window.import_user_review_from_excel()
+
+                # After import — values must be overwritten from file
+                bname_col_idx = window.user_preview_visible_columns.index("BNAME")
+                status_col_idx = window.user_preview_visible_columns.index("REVIEW_STATUS")
+                notes_col_idx = window.user_preview_visible_columns.index("REVIEW_NOTES")
+
+                rows_by_bname = {}
+                for row_idx in range(window.user_preview_table.rowCount()):
+                    bname_val = window.user_preview_table.item(row_idx, bname_col_idx).text()
+                    rows_by_bname[bname_val] = row_idx
+
+                # Table keeps priority sorting after import: "טרם נבדק" rows are shown first.
+                first_bname = window.user_preview_table.item(0, bname_col_idx).text()
+                self.assertEqual(first_bname, "USER_B")
+
+                combo_a = window.user_preview_table.cellWidget(rows_by_bname["USER_A"], status_col_idx)
+                self.assertEqual(combo_a.currentText(), "נבדק - תקין")
+                self.assertEqual(window.user_preview_table.item(rows_by_bname["USER_A"], notes_col_idx).text(), "סוקר ואושר")
+
+                combo_b = window.user_preview_table.cellWidget(rows_by_bname["USER_B"], status_col_idx)
+                self.assertEqual(combo_b.currentText(), "טרם נבדק")  # "לבירור" normalizes to default
+
+                # State must be persisted to JSON
+                state_path = base_dir / "data" / "output" / "user_preview_reviewer_state.json"
+                self.assertTrue(state_path.exists())
+                state_data = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertEqual(state_data["100|USER_A"]["REVIEW_STATUS"], "נבדק - תקין")
+                self.assertEqual(state_data["100|USER_A"]["REVIEW_NOTES"], "סוקר ואושר")
+                self.assertEqual(state_data["100|USER_B"]["REVIEW_STATUS"], "טרם נבדק")
+            finally:
+                window.close()
+
+    def test_user_review_progress_summary_counts_and_percentage(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "100;USER_A;0;20260101;080000\n"
+                "100;USER_B;0;20260201;090000\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "REVIEW_NOTES"])
+                window.refresh_user_preview()
+
+                # Initial state: both users are "טרם נבדק"
+                self.assertEqual(window.user_review_total_label.text(), window.format_ui_rtl_text('סה"כ משתמשים בדוח: 2'))
+                self.assertEqual(window.user_review_reviewed_label.text(), window.format_ui_rtl_text("משתמשים שנבדקו: 0"))
+                self.assertEqual(window.user_review_unreviewed_label.text(), window.format_ui_rtl_text("משתמשים שטרם נבדקו: 2"))
+                self.assertEqual(window.user_review_progress_bar.value(), 0)
+                self.assertEqual(window.user_review_progress_bar.format(), "0%")
+
+                status_col_idx = window.user_preview_visible_columns.index("REVIEW_STATUS")
+                combo = window.user_preview_table.cellWidget(0, status_col_idx)
+                combo.setCurrentText("נבדק - תקין")
+
+                # Live update after changing one user to reviewed.
+                self.assertEqual(window.user_review_total_label.text(), window.format_ui_rtl_text('סה"כ משתמשים בדוח: 2'))
+                self.assertEqual(window.user_review_reviewed_label.text(), window.format_ui_rtl_text("משתמשים שנבדקו: 1"))
+                self.assertEqual(window.user_review_unreviewed_label.text(), window.format_ui_rtl_text("משתמשים שטרם נבדקו: 1"))
+                self.assertEqual(window.user_review_progress_bar.value(), 1)
+                self.assertEqual(window.user_review_progress_bar.format(), "50%")
+            finally:
+                window.close()
+
+    def test_user_review_progress_summary_updates_after_import(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "100;USER_A;0;20260101;080000\n"
+                "100;USER_B;0;20260201;090000\n",
+                encoding="utf-8",
+            )
+
+            import_xlsx = base_dir / "review_import_progress.xlsx"
+            wb_out = Workbook()
+            ws_out = wb_out.active
+            ws_out.append(["משתמש", "CLIENT", "בוצעה סקירה", "הערות סוקר"])
+            ws_out.append(["USER_A", "100", "נבדק - תקין", "בוצעה סקירה מלאה"])
+            ws_out.append(["USER_B", "100", "טרם נבדק", ""])
+            wb_out.save(import_xlsx)
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "REVIEW_NOTES"])
+                window.refresh_user_preview()
+
+                with patch("src.ui.desktop_app.QFileDialog.getOpenFileName", return_value=(str(import_xlsx), "")), patch(
+                    "src.ui.desktop_app.QMessageBox.information"
+                ), patch("src.ui.desktop_app.QMessageBox.warning"):
+                    window.import_user_review_from_excel()
+
+                self.assertEqual(window.user_review_total_label.text(), window.format_ui_rtl_text('סה"כ משתמשים בדוח: 2'))
+                self.assertEqual(window.user_review_reviewed_label.text(), window.format_ui_rtl_text("משתמשים שנבדקו: 1"))
+                self.assertEqual(window.user_review_unreviewed_label.text(), window.format_ui_rtl_text("משתמשים שטרם נבדקו: 1"))
+                self.assertEqual(window.user_review_progress_bar.value(), 1)
+                self.assertEqual(window.user_review_progress_bar.format(), "50%")
+            finally:
+                window.close()
+
+    def test_review_row_highlight_for_invalid_without_notes(self) -> None:
         with TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)
             usr02_path = base_dir / "usr02_100.txt"
@@ -480,22 +729,34 @@ class TestSmoke(unittest.TestCase):
                 window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "REVIEW_NOTES"])
                 window.refresh_user_preview()
 
-                reviewer_combo = window.user_preview_table.cellWidget(0, 2)
-                reviewer_combo.setCurrentText("לבירור")
-                window.user_preview_table.item(0, 3).setText("נדרשת בדיקה נוספת")
+                status_col_idx = window.user_preview_visible_columns.index("REVIEW_STATUS")
+                notes_col_idx = window.user_preview_visible_columns.index("REVIEW_NOTES")
 
-                export_path = window.export_user_preview_to_excel()
+                # Set to "נבדק - לא תקין" with no notes → warning highlight expected
+                combo = window.user_preview_table.cellWidget(0, status_col_idx)
+                combo.setCurrentText("נבדק - לא תקין")
 
-                self.assertIsNotNone(export_path)
-                self.assertTrue(export_path.exists())
-                self.assertIn("users_review_", export_path.name)
-                workbook = load_workbook(export_path)
-                self.assertIn("סקירת משתמשים", workbook.sheetnames)
-                self.assertEqual(workbook["סקירת משתמשים"]["A1"].value, "CLIENT")
-                self.assertEqual(workbook["סקירת משתמשים"]["C1"].value, "בוצעה סקירה")
-                self.assertEqual(workbook["סקירת משתמשים"]["D1"].value, "הערות סוקר")
-                self.assertEqual(workbook["סקירת משתמשים"]["C2"].value, "לבירור")
-                self.assertEqual(workbook["סקירת משתמשים"]["D2"].value, "נדרשת בדיקה נוספת")
+                notes_item = window.user_preview_table.item(0, notes_col_idx)
+                self.assertIsNotNone(notes_item)
+                # Background should be warning color
+                from PySide6.QtGui import QColor
+                warning_color = QColor("#fff0c2")
+                self.assertEqual(notes_item.background().color().name(), warning_color.name())
+
+                # Add notes → highlight should clear
+                notes_item.setText("נבדקה ונמצאה בעיה - טופלה")
+                window._handle_user_preview_item_changed(notes_item)
+                notes_item2 = window.user_preview_table.item(0, notes_col_idx)
+                clear_color = QColor(0, 0, 0, 0)
+                self.assertEqual(notes_item2.background().color().name(), clear_color.name())
+
+                # "טרם נבדק" should mark the full row with light-blue background.
+                combo.setCurrentText("טרם נבדק")
+                bname_col_idx = window.user_preview_visible_columns.index("BNAME")
+                bname_item = window.user_preview_table.item(0, bname_col_idx)
+                self.assertIsNotNone(bname_item)
+                unreviewed_color = QColor("#d6e8ff")
+                self.assertEqual(bname_item.background().color().name(), unreviewed_color.name())
             finally:
                 window.close()
 

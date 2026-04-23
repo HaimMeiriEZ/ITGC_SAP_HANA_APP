@@ -6,7 +6,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import PatternFill
+from openpyxl.worksheet.datavalidation import DataValidation
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
@@ -29,6 +31,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTabWidget,
     QTextEdit,
+    QProgressBar,
     QVBoxLayout,
     QWidget,
     QHeaderView,
@@ -104,7 +107,8 @@ class ValidationDesktopApp(QMainWindow):
         {"field": "PASSCODE", "formal": "ערך Hash של סיסמה", "technical": "PASSCODE", "source": "USR02", "default": True, "width": 220},
         {"field": "PWDSALTEDHASH", "formal": "ערך Hash מוצפן של סיסמה", "technical": "PWDSALTEDHASH", "source": "USR02", "default": True, "width": 220},
         {"field": "SECURITY_POLICY", "formal": "מדיניות אבטחה", "technical": "SECURITY_POLICY", "source": "USR02", "default": True, "width": 160},
-        {"field": "REVIEW_STATUS", "formal": "בוצעה סקירה", "technical": "REVIEW_STATUS", "source": "סוקר", "default": True, "width": 130},
+        {"field": "REVIEW_STATUS", "formal": "בוצעה סקירה", "technical": "REVIEW_STATUS", "source": "סוקר", "default": True, "width": 165},
+        {"field": "FINDINGS_DESCRIPTION", "formal": "תיאור ממצאים", "technical": "FINDINGS_DESCRIPTION", "source": "מערכת", "default": True, "width": 280},
         {"field": "REVIEW_NOTES", "formal": "הערות סוקר", "technical": "REVIEW_NOTES", "source": "סוקר", "default": True, "width": 220},
         {"field": "UFLAG", "formal": "קוד נעילה", "technical": "UFLAG", "source": "USR02", "default": False, "width": 100},
     ]
@@ -113,20 +117,27 @@ class ValidationDesktopApp(QMainWindow):
         for column in USER_PREVIEW_COLUMN_DEFINITIONS
         if bool(column.get("default"))
     ]
-    CURRENT_USER_PREVIEW_SETTINGS_VERSION = 4
+    CURRENT_USER_PREVIEW_SETTINGS_VERSION = 5
     USER_PREVIEW_SETTINGS_MIGRATIONS = {
         2: ["PWDINITIAL", "PWDCHGDATE", "PWDSETDATE"],
         3: ["DEPARTMENT", "GLTGV", "GLTGB", "USTYP", "LOCNT", "OCOD1", "PASSCODE", "PWDSALTEDHASH", "SECURITY_POLICY"],
         4: ["REVIEW_STATUS", "REVIEW_NOTES"],
+        5: ["FINDINGS_DESCRIPTION"],
     }
     USER_PREVIEW_FILTER_OPTIONS = [
         ("all", "כלל האוכלוסייה"),
         ("active", "פעילים בתקופה הנבדקת"),
         ("inactive", "לא פעילים בתקופה הנבדקת"),
     ]
-    REVIEW_STATUS_OPTIONS = ["נבדק", "טרם נבדק", "לבירור"]
+    REVIEW_STATUS_OPTIONS = ["טרם נבדק", "נבדק - תקין", "נבדק - לא תקין"]
     DEFAULT_REVIEW_STATUS = "טרם נבדק"
+    REVIEWED_STATUSES = {"נבדק - תקין", "נבדק - לא תקין"}
     USER_PREVIEW_DATE_FIELDS = {"TRDAT", "PWDCHGDATE", "PWDSETDATE", "GLTGV", "GLTGB"}
+    EXPORT_REVIEW_FIELDS = [
+        "MANDT", "BNAME", "NAME_TEXTC", "SMTP_ADDR", "STATUS", "USTYP",
+        "GLTGV", "GLTGB", "TRDAT", "PWDSETDATE", "PWDCHGDATE",
+        "FINDINGS_DESCRIPTION", "REVIEW_STATUS", "REVIEW_NOTES",
+    ]
 
     SLOT_DEFINITIONS = {
         "USR02": {
@@ -601,6 +612,11 @@ class ValidationDesktopApp(QMainWindow):
         self.user_preview_export_button.clicked.connect(lambda: self.export_user_preview_to_excel(open_after_export=True))
         user_preview_actions_layout.addWidget(self.user_preview_export_button, 0, Qt.AlignRight)
 
+        self.user_preview_import_button = QPushButton("ייבוא סקירה מאקסל")
+        self.user_preview_import_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.user_preview_import_button.clicked.connect(self.import_user_review_from_excel)
+        user_preview_actions_layout.addWidget(self.user_preview_import_button, 0, Qt.AlignRight)
+
         self.user_preview_columns_button = QPushButton("הוסף / מחק עמודות")
         self.user_preview_columns_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.user_preview_columns_button.clicked.connect(self.show_user_preview_column_dialog)
@@ -654,6 +670,59 @@ class ValidationDesktopApp(QMainWindow):
         self.user_preview_hint.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.user_preview_hint.setMaximumHeight(44)
         user_preview_layout.addWidget(self.user_preview_hint, 0, Qt.AlignTop)
+
+        self.user_review_progress_group = QGroupBox(self.format_ui_rtl_text("סיכום התקדמות סקירה"))
+        self.user_review_progress_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.user_review_progress_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        user_review_progress_layout = QVBoxLayout(self.user_review_progress_group)
+        user_review_progress_layout.setContentsMargins(8, 8, 8, 8)
+        user_review_progress_layout.setSpacing(6)
+
+        user_review_counts_row = QWidget()
+        user_review_counts_row.setLayoutDirection(Qt.RightToLeft)
+        user_review_counts_layout = QHBoxLayout(user_review_counts_row)
+        user_review_counts_layout.setContentsMargins(0, 0, 0, 0)
+        user_review_counts_layout.setSpacing(14)
+        user_review_counts_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        self.user_review_total_label = QLabel(self.format_ui_rtl_text("סה\"כ משתמשים בדוח: 0"))
+        self.user_review_total_label.setStyleSheet("font-weight: bold;")
+        self.user_review_reviewed_label = QLabel(self.format_ui_rtl_text("משתמשים שנבדקו: 0"))
+        self.user_review_reviewed_label.setStyleSheet("font-weight: bold; color: #2e7d32;")
+        self.user_review_unreviewed_label = QLabel(self.format_ui_rtl_text("משתמשים שטרם נבדקו: 0"))
+        self.user_review_unreviewed_label.setStyleSheet("font-weight: bold; color: #1565c0;")
+
+        user_review_counts_layout.addWidget(self.user_review_total_label, 0, Qt.AlignRight)
+        user_review_counts_layout.addWidget(self.user_review_reviewed_label, 0, Qt.AlignRight)
+        user_review_counts_layout.addWidget(self.user_review_unreviewed_label, 0, Qt.AlignRight)
+        user_review_counts_layout.addStretch(1)
+        user_review_progress_layout.addWidget(user_review_counts_row)
+
+        self.user_review_progress_bar = QProgressBar()
+        self.user_review_progress_bar.setMinimum(0)
+        self.user_review_progress_bar.setMaximum(100)
+        self.user_review_progress_bar.setValue(0)
+        self.user_review_progress_bar.setTextVisible(True)
+        self.user_review_progress_bar.setAlignment(Qt.AlignCenter)
+        self.user_review_progress_bar.setFormat("0%")
+        self.user_review_progress_bar.setStyleSheet(
+            "QProgressBar {"
+            "border: 1px solid #b0bec5; border-radius: 4px;"
+            "background-color: #f5f7fa; text-align: center;"
+            "font-weight: bold; color: #0d47a1;"
+            "}"
+            "QProgressBar::chunk {"
+            "background-color: #42a5f5; border-radius: 3px;"
+            "}"
+        )
+        user_review_progress_layout.addWidget(self.user_review_progress_bar)
+
+        self.user_review_progress_percent_label = QLabel(self.format_ui_rtl_text("התקדמות השלמת סקירה: 0%"))
+        self.user_review_progress_percent_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.user_review_progress_percent_label.setStyleSheet("font-weight: bold; color: #0d47a1;")
+        user_review_progress_layout.addWidget(self.user_review_progress_percent_label)
+
+        user_preview_layout.addWidget(self.user_review_progress_group, 0, Qt.AlignTop)
 
         self.user_preview_table = QTableWidget(0, 0)
         self.user_preview_table.setEditTriggers(
@@ -856,6 +925,166 @@ class ValidationDesktopApp(QMainWindow):
             date_text = date_edit.text().strip()
             return date_text or "לא צוין"
         return "לא צוין"
+
+    @staticmethod
+    def _is_a_dialog_user(user_type: object) -> bool:
+        normalized_value = "" if user_type is None else str(user_type).strip().upper()
+        return normalized_value == "A"
+
+    @staticmethod
+    def _has_initial_password(password_flag: object) -> bool:
+        normalized_value = "" if password_flag is None else str(password_flag).strip().upper()
+        return normalized_value in {"X", "1", "TRUE", "YES", "Y"}
+
+    def _build_user_findings_description(self, usr_entry: dict[str, str], extraction_date_text: str) -> str:
+        if not self._is_a_dialog_user(usr_entry.get("USTYP", "")):
+            return ""
+
+        findings: list[str] = []
+        extraction_date = self._parse_user_preview_date(extraction_date_text)
+        last_login_date = self._parse_user_preview_date(usr_entry.get("TRDAT", ""))
+        password_change_date = self._parse_user_preview_date(usr_entry.get("PWDCHGDATE", ""))
+        password_set_date = self._parse_user_preview_date(usr_entry.get("PWDSETDATE", ""))
+
+        if extraction_date is not None and last_login_date is not None:
+            inactivity_days = (extraction_date.date() - last_login_date.date()).days
+            if inactivity_days > 90:
+                findings.append("משתמש לא פעיל מעל 90 יום")
+
+        if last_login_date is not None and password_change_date is not None:
+            password_gap_days = (last_login_date.date() - password_change_date.date()).days
+            if password_gap_days > 90:
+                findings.append("סיסמה לא הוחלפה מעל 90 יום")
+
+        if extraction_date is not None and password_set_date is not None and self._has_initial_password(usr_entry.get("PWDINITIAL", "")):
+            initial_password_age_days = (extraction_date.date() - password_set_date.date()).days
+            if initial_password_age_days > 2:
+                findings.append("סיסמה ראשונית לא הוחלפה תוך 48 שעות")
+
+        return " | ".join(findings)
+
+    @staticmethod
+    def _export_sort_key(preview_row: dict[str, str]) -> int:
+        is_locked = preview_row.get("STATUS", "") == "נעול"
+        has_findings = bool(preview_row.get("FINDINGS_DESCRIPTION", "").strip())
+        is_reviewed = preview_row.get("REVIEW_STATUS", "") in ValidationDesktopApp.REVIEWED_STATUSES
+        is_not_ok = preview_row.get("REVIEW_STATUS", "") == "נבדק - לא תקין"
+        has_notes = bool(preview_row.get("REVIEW_NOTES", "").strip())
+        if not is_locked and has_findings and (not is_reviewed or (is_not_ok and not has_notes)):
+            return 1
+        if not is_locked and not is_reviewed:
+            return 2
+        if not is_locked and is_reviewed and has_notes:
+            return 3
+        if not is_locked and is_reviewed and not has_findings and not has_notes:
+            return 4
+        return 5
+
+    def _update_review_row_highlight(self, row_index: int) -> None:
+        review_status_col: int | None = None
+        notes_col: int | None = None
+        for col_idx, field_name in enumerate(self.user_preview_visible_columns):
+            if field_name == "REVIEW_STATUS":
+                review_status_col = col_idx
+            elif field_name == "REVIEW_NOTES":
+                notes_col = col_idx
+
+        review_status_text = ""
+        if review_status_col is not None:
+            combo = self.user_preview_table.cellWidget(row_index, review_status_col)
+            if isinstance(combo, QComboBox):
+                review_status_text = self.format_rtl_text(combo.currentText())
+
+        notes_text = ""
+        if notes_col is not None:
+            notes_item = self.user_preview_table.item(row_index, notes_col)
+            if notes_item is not None:
+                notes_text = notes_item.text().strip()
+
+        is_not_reviewed = review_status_text == "טרם נבדק"
+        is_not_ok = review_status_text == "נבדק - לא תקין"
+        needs_warning = is_not_ok and not notes_text
+
+        unreviewed_color = QColor("#d6e8ff")
+        warning_color = QColor("#fff0c2")
+        clear_color = QColor(0, 0, 0, 0)
+
+        for col_idx, field_name in enumerate(self.user_preview_visible_columns):
+            combo = self.user_preview_table.cellWidget(row_index, col_idx)
+            item = self.user_preview_table.item(row_index, col_idx)
+
+            if is_not_reviewed:
+                if isinstance(combo, QComboBox):
+                    combo.setStyleSheet("background-color: #d6e8ff;")
+                elif item is not None:
+                    item.setBackground(unreviewed_color)
+                continue
+
+            if needs_warning and field_name in {"REVIEW_STATUS", "REVIEW_NOTES"}:
+                if isinstance(combo, QComboBox):
+                    combo.setStyleSheet("background-color: #fff0c2;")
+                elif item is not None:
+                    item.setBackground(warning_color)
+                continue
+
+            if isinstance(combo, QComboBox):
+                combo.setStyleSheet("")
+            elif item is not None:
+                if field_name == "STATUS":
+                    status_value = item.text()
+                    if status_value == "פעיל":
+                        item.setBackground(QColor("#eaf7ea"))
+                    elif "אי-התאמה" in status_value:
+                        item.setBackground(QColor("#fff4cc"))
+                    elif status_value == "נעול":
+                        item.setBackground(QColor("#fdecec"))
+                    else:
+                        item.setBackground(clear_color)
+                else:
+                    item.setBackground(clear_color)
+
+    def _get_user_preview_row_review_status(self, row_index: int) -> str:
+        try:
+            review_status_col = self.user_preview_visible_columns.index("REVIEW_STATUS")
+        except ValueError:
+            return self.DEFAULT_REVIEW_STATUS
+
+        combo = self.user_preview_table.cellWidget(row_index, review_status_col)
+        if isinstance(combo, QComboBox):
+            return self._normalize_reviewer_status(combo.currentText())
+
+        item = self.user_preview_table.item(row_index, review_status_col)
+        if item is not None:
+            return self._normalize_reviewer_status(item.text())
+        return self.DEFAULT_REVIEW_STATUS
+
+    def _update_user_review_progress_summary(self, total: int, reviewed: int, unreviewed: int) -> None:
+        total = max(0, int(total))
+        reviewed = max(0, int(reviewed))
+        unreviewed = max(0, int(unreviewed))
+        if reviewed + unreviewed != total:
+            unreviewed = max(0, total - reviewed)
+
+        percent_complete = int(round((reviewed / total) * 100)) if total > 0 else 0
+
+        self.user_review_total_label.setText(self.format_ui_rtl_text(f"סה\"כ משתמשים בדוח: {total}"))
+        self.user_review_reviewed_label.setText(self.format_ui_rtl_text(f"משתמשים שנבדקו: {reviewed}"))
+        self.user_review_unreviewed_label.setText(self.format_ui_rtl_text(f"משתמשים שטרם נבדקו: {unreviewed}"))
+        self.user_review_progress_percent_label.setText(
+            self.format_ui_rtl_text(f"התקדמות השלמת סקירה: {percent_complete}%")
+        )
+
+        self.user_review_progress_bar.setMaximum(max(total, 1))
+        self.user_review_progress_bar.setValue(min(reviewed, max(total, 1)))
+        self.user_review_progress_bar.setFormat(f"{percent_complete}%")
+
+    def _refresh_user_review_progress_summary_from_table(self) -> None:
+        total_rows = self.user_preview_table.rowCount()
+        reviewed_rows = 0
+        for row_index in range(total_rows):
+            if self._get_user_preview_row_review_status(row_index) in self.REVIEWED_STATUSES:
+                reviewed_rows += 1
+        self._update_user_review_progress_summary(total_rows, reviewed_rows, total_rows - reviewed_rows)
 
     def _update_slot_path_label(self, slot_key: str, file_paths: list[str] | None = None) -> None:
         widget_data = self.slot_widgets.get(slot_key, {})
@@ -1179,6 +1408,7 @@ class ValidationDesktopApp(QMainWindow):
         normalized_text = self.format_rtl_text(item.text())
         item.setToolTip(normalized_text)
         self._update_reviewer_value(str(review_key), "REVIEW_NOTES", normalized_text)
+        self._update_review_row_highlight(item.row())
 
     def _get_user_preview_cell_text(self, row_index: int, column_index: int) -> str:
         cell_widget = self.user_preview_table.cellWidget(row_index, column_index)
@@ -1479,6 +1709,7 @@ class ValidationDesktopApp(QMainWindow):
             ordered_keys = sorted(list(addr_users_map.keys()), key=lambda item: (item[0], item[1]))
 
         preview_rows: list[dict[str, str]] = []
+        extraction_date_text = self._get_slot_extraction_date("USR02")
 
         for key in ordered_keys:
             usr_entry = usr02_map.get(key, {})
@@ -1486,6 +1717,7 @@ class ValidationDesktopApp(QMainWindow):
             merged_mandt = usr_entry.get("MANDT") or addr_entry.get("MANDT", "")
             merged_bname = usr_entry.get("BNAME") or addr_entry.get("BNAME", "")
             review_values = self._get_reviewer_values(merged_mandt, merged_bname)
+            findings_description = self._build_user_findings_description(usr_entry, extraction_date_text)
             email_value = (
                 addr_entry.get("SMTP_ADDR", "")
                 or email_by_addr.get(addr_entry.get("ADDRNUMBER", ""), "")
@@ -1519,6 +1751,7 @@ class ValidationDesktopApp(QMainWindow):
                     "PWDSALTEDHASH": usr_entry.get("PWDSALTEDHASH", ""),
                     "SECURITY_POLICY": usr_entry.get("SECURITY_POLICY", ""),
                     "REVIEW_STATUS": review_values.get("REVIEW_STATUS", self.DEFAULT_REVIEW_STATUS),
+                    "FINDINGS_DESCRIPTION": findings_description,
                     "REVIEW_NOTES": review_values.get("REVIEW_NOTES", ""),
                 }
             )
@@ -1544,6 +1777,7 @@ class ValidationDesktopApp(QMainWindow):
                         "לא זוהו עדיין משתמשים להצגה. יש לטעון קובצי USR02 ו-ADR6 / USER_ADDR."
                     )
                 )
+                self._update_user_review_progress_summary(0, 0, 0)
                 return
 
             filtered_rows, filter_note = self._filter_user_preview_rows(preview_rows)
@@ -1570,7 +1804,10 @@ class ValidationDesktopApp(QMainWindow):
                     )
 
             if not rows_to_display:
+                self._update_user_review_progress_summary(0, 0, 0)
                 return
+
+            rows_to_display = sorted(rows_to_display, key=self._export_sort_key)
 
             for preview_row in rows_to_display:
                 row_index = self.user_preview_table.rowCount()
@@ -1582,15 +1819,15 @@ class ValidationDesktopApp(QMainWindow):
                     if field_name == "REVIEW_STATUS":
                         combo_box = QComboBox()
                         combo_box.setLayoutDirection(Qt.RightToLeft)
-                        combo_box.setMinimumWidth(120)
+                        combo_box.setMinimumWidth(150)
                         for status_value in self.REVIEW_STATUS_OPTIONS:
                             combo_box.addItem(self.format_rtl_text(status_value))
                         combo_box.setCurrentText(self._normalize_reviewer_status(value))
                         combo_box.currentTextChanged.connect(
-                            lambda selected_text, current_key=review_key: self._update_reviewer_value(
-                                current_key,
-                                "REVIEW_STATUS",
-                                selected_text,
+                            lambda selected_text, current_key=review_key, r_idx=row_index: (
+                                self._update_reviewer_value(current_key, "REVIEW_STATUS", selected_text),
+                                self._update_review_row_highlight(r_idx) if not self._refreshing_user_preview else None,
+                                self._refresh_user_review_progress_summary_from_table() if not self._refreshing_user_preview else None,
                             )
                         )
                         self.user_preview_table.setCellWidget(row_index, column, combo_box)
@@ -1607,15 +1844,12 @@ class ValidationDesktopApp(QMainWindow):
                         item.setFlags(item.flags() | Qt.ItemIsEditable)
                         item.setData(Qt.UserRole, review_key)
                         item.setData(Qt.UserRole + 1, field_name)
-                    elif field_name == "STATUS":
-                        if value == "פעיל":
-                            item.setBackground(QColor("#eaf7ea"))
-                        elif "אי-התאמה" in value:
-                            item.setBackground(QColor("#fff4cc"))
-                        elif value == "נעול":
-                            item.setBackground(QColor("#fdecec"))
 
                     self.user_preview_table.setItem(row_index, column, item)
+
+                self._update_review_row_highlight(row_index)
+
+            self._refresh_user_review_progress_summary_from_table()
 
             self.user_preview_table.resizeColumnsToContents()
             for column_index, field_name in enumerate(self.user_preview_visible_columns):
@@ -2038,27 +2272,67 @@ class ValidationDesktopApp(QMainWindow):
         return export_path
 
     def export_user_preview_to_excel(self, open_after_export: bool = False) -> Path | None:
-        if self.user_preview_table.rowCount() == 0 or self.user_preview_table.columnCount() == 0:
+        usr02_rows = self._load_preview_rows("USR02")
+        combined_rows = self._load_preview_rows("ADR6_USR21")
+        if not usr02_rows and not combined_rows:
             QMessageBox.warning(self, "אין נתונים לייצוא", "טרם נטענו משתמשים לסקירה לצורך ייצוא לאקסל.")
             return None
+
+        all_preview_rows = self._build_user_preview_rows(usr02_rows, combined_rows)
+        if not all_preview_rows:
+            QMessageBox.warning(self, "אין נתונים לייצוא", "טרם נטענו משתמשים לסקירה לצורך ייצוא לאקסל.")
+            return None
+
+        field_to_col_def = {col["field"]: col for col in self.USER_PREVIEW_COLUMN_DEFINITIONS}
+        export_field_names = [f for f in self.EXPORT_REVIEW_FIELDS if f in field_to_col_def]
+        export_formal_names = [str(field_to_col_def[f]["formal"]) for f in export_field_names]
+
+        sorted_rows = sorted(all_preview_rows, key=self._export_sort_key)
 
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = self.format_rtl_text("סקירת משתמשים")
+        sheet.append(export_formal_names)
 
-        headers = [
-            self.format_rtl_text(self.user_preview_table.horizontalHeaderItem(column_index).text())
-            if self.user_preview_table.horizontalHeaderItem(column_index) is not None
-            else ""
-            for column_index in range(self.user_preview_table.columnCount())
-        ]
-        sheet.append(headers)
+        review_status_col_index: int | None = None
+        review_notes_col_index: int | None = None
+        for idx, field in enumerate(export_field_names):
+            if field == "REVIEW_STATUS":
+                review_status_col_index = idx + 1  # 1-based Excel column
+            elif field == "REVIEW_NOTES":
+                review_notes_col_index = idx + 1  # 1-based Excel column
 
-        for row_index in range(self.user_preview_table.rowCount()):
+        total_data_rows = len(sorted_rows)
+        for preview_row in sorted_rows:
             sheet.append([
-                self._get_user_preview_cell_text(row_index, column_index)
-                for column_index in range(self.user_preview_table.columnCount())
+                preview_row.get(field, "") or ""
+                for field in export_field_names
             ])
+
+        if review_status_col_index is not None and total_data_rows > 0:
+            from openpyxl.utils import get_column_letter
+            col_letter = get_column_letter(review_status_col_index)
+            dv_formula = '"' + ",".join(self.REVIEW_STATUS_OPTIONS) + '"'
+            dv = DataValidation(
+                type="list",
+                formula1=dv_formula,
+                allow_blank=True,
+                showDropDown=False,
+            )
+            dv.sqref = f"{col_letter}2:{col_letter}{total_data_rows + 1}"
+            sheet.add_data_validation(dv)
+
+        if total_data_rows > 0 and (review_status_col_index is not None or review_notes_col_index is not None):
+            from openpyxl.utils import get_column_letter  # noqa: F811
+            warning_fill = PatternFill("solid", fgColor="FFF0C2")
+            for excel_row_idx, preview_row in enumerate(sorted_rows, start=2):
+                is_not_ok = preview_row.get("REVIEW_STATUS", "") == "נבדק - לא תקין"
+                has_notes = bool((preview_row.get("REVIEW_NOTES", "") or "").strip())
+                if is_not_ok and not has_notes:
+                    if review_status_col_index is not None:
+                        sheet.cell(row=excel_row_idx, column=review_status_col_index).fill = warning_fill
+                    if review_notes_col_index is not None:
+                        sheet.cell(row=excel_row_idx, column=review_notes_col_index).fill = warning_fill
 
         export_path = self.config.output_dir / f"users_review_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         workbook.save(export_path)
@@ -2068,6 +2342,101 @@ class ValidationDesktopApp(QMainWindow):
             QMessageBox.information(self, "הייצוא הושלם", f"קובץ הסקירה נשמר בהצלחה:\n{export_path}")
 
         return export_path
+
+    def import_user_review_from_excel(self) -> None:
+        initial_directory = self._get_last_file_dialog_directory()
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "ייבוא סקירת משתמשים מאקסל",
+            initial_directory,
+            "Excel files (*.xlsx *.xlsm);;All files (*.*)",
+        )
+        if not file_path:
+            return
+
+        try:
+            workbook = load_workbook(file_path, read_only=True, data_only=True)
+        except Exception as exc:
+            QMessageBox.warning(self, "שגיאת ייבוא", f"לא ניתן לפתוח את קובץ האקסל:\n{exc}")
+            return
+
+        sheet = workbook.active
+        if sheet is None:
+            QMessageBox.warning(self, "שגיאת ייבוא", "הגיליון הפעיל בקובץ ריק או לא נמצא.")
+            workbook.close()
+            return
+
+        rows_iter = iter(sheet.iter_rows(values_only=True))
+        raw_headers = next(rows_iter, None)
+        if raw_headers is None:
+            QMessageBox.warning(self, "שגיאת ייבוא", "הקובץ ריק - לא נמצאו כותרות.")
+            workbook.close()
+            return
+
+        headers = [str(h).strip() if h is not None else "" for h in raw_headers]
+
+        FORMAL_TO_FIELD = {
+            str(col["formal"]).strip(): str(col["field"])
+            for col in self.USER_PREVIEW_COLUMN_DEFINITIONS
+        }
+        TECHNICAL_FIELDS = {str(col["field"]) for col in self.USER_PREVIEW_COLUMN_DEFINITIONS}
+
+        def _resolve(header: str) -> str | None:
+            if header in TECHNICAL_FIELDS:
+                return header
+            return FORMAL_TO_FIELD.get(header)
+
+        col_map: dict[str, int] = {}
+        for col_idx, header in enumerate(headers):
+            field = _resolve(header)
+            if field and field not in col_map:
+                col_map[field] = col_idx
+
+        required_fields = {"BNAME", "REVIEW_STATUS"}
+        if not required_fields.issubset(col_map.keys()):
+            missing = required_fields - col_map.keys()
+            QMessageBox.warning(
+                self,
+                "שגיאת ייבוא",
+                f"הקובץ חסר עמודות נדרשות: {', '.join(sorted(missing))}\n"
+                "ודא שהקובץ יוצא מהכלי ומכיל את עמודות הסקירה.",
+            )
+            workbook.close()
+            return
+
+        mandt_col = col_map.get("MANDT")
+        bname_col = col_map["BNAME"]
+        status_col = col_map["REVIEW_STATUS"]
+        notes_col = col_map.get("REVIEW_NOTES")
+
+        imported_count = 0
+        for row_values in rows_iter:
+            bname = str(row_values[bname_col]).strip() if bname_col < len(row_values) and row_values[bname_col] is not None else ""
+            if not bname:
+                continue
+            mandt = str(row_values[mandt_col]).strip() if mandt_col is not None and mandt_col < len(row_values) and row_values[mandt_col] is not None else ""
+            review_key = self._user_reviewer_state_key(mandt, bname)
+
+            raw_status = row_values[status_col] if status_col < len(row_values) else None
+            status_value = self._normalize_reviewer_status(str(raw_status).strip() if raw_status is not None else "")
+
+            raw_notes = row_values[notes_col] if notes_col is not None and notes_col < len(row_values) else None
+            notes_value = str(raw_notes).strip() if raw_notes is not None else ""
+
+            current = self.user_reviewer_state.setdefault(review_key, self._default_reviewer_values().copy())
+            current["REVIEW_STATUS"] = status_value
+            current["REVIEW_NOTES"] = notes_value
+            imported_count += 1
+
+        workbook.close()
+        self._save_user_reviewer_state()
+        self.refresh_user_preview()
+
+        QMessageBox.information(
+            self,
+            "הייבוא הושלם",
+            f"יובאו בהצלחה {imported_count} שורות מקובץ הסקירה.",
+        )
 
     def open_output_folder(self) -> None:
         self._open_path(self.config.output_dir)
