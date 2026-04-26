@@ -136,6 +136,13 @@ class ValidationDesktopApp(QMainWindow):
     REVIEW_STATUS_OPTIONS = ["טרם נבדק", "נבדק - תקין", "נבדק - לא תקין"]
     DEFAULT_REVIEW_STATUS = "טרם נבדק"
     REVIEWED_STATUSES = {"נבדק - תקין", "נבדק - לא תקין"}
+    USER_TYPE_RULES = {
+        "Dialog": ["A"],
+        "System": ["B"],
+        "Communication": ["C"],
+        "Service": ["S"],
+        "Reference": ["L"],
+    }
     USER_PREVIEW_DATE_FIELDS = {"TRDAT", "PWDCHGDATE", "PWDSETDATE", "GLTGV", "GLTGB"}
     EXPORT_REVIEW_FIELDS = [
         "MANDT", "BNAME", "NAME_TEXTC", "SMTP_ADDR", "STATUS", "USTYP",
@@ -227,7 +234,6 @@ class ValidationDesktopApp(QMainWindow):
         "critical_roles": set(),
         "critical_privileges": set(),
         "password_policy_defaults": set(),
-        "user_type_rules": set(),
         "file_mappings": set(),
         "inactive_days_threshold": set(),
     }
@@ -991,8 +997,8 @@ class ValidationDesktopApp(QMainWindow):
         generic_users_group = self._add_settings_text_list_section("generic_users", "משתמשים גנריים", "רשימה מופרדת שורות")
         self.system_settings_sections["generic_users"] = generic_users_group
 
-        self._add_settings_text_list_section("critical_roles", "תפקידים קריטיים", "רשימה מופרדת שורות")
-        self._add_settings_text_list_section("critical_privileges", "הרשאות קריטיות", "רשימה מופרדת שורות")
+        self._add_settings_text_list_section("critical_roles", "פרופילים משתמשיי על", "רשימה מופרדת שורות")
+        self._add_settings_text_list_section("critical_privileges", "הרשאות על", "רשימה מופרדת שורות")
 
         password_group, password_layout, password_unavailable_label = self._build_settings_group(
             "ברירות מחדל למדיניות סיסמה",
@@ -1000,22 +1006,36 @@ class ValidationDesktopApp(QMainWindow):
         )
         password_grid = QGridLayout()
         password_fields = [
-            "minimal_password_length",
-            "maximum_invalid_connect_attempts",
-            "password_expire_warning_time",
-            "max_password_age_days",
-            "initial_password_change_max_days",
-            "force_first_password_change",
+            ("minimal_password_length", "אורך סיסמה מינימלי"),
+            ("maximum_invalid_connect_attempts", "login/fails_to_session_end - מקסימום ניסיונות כושלים"),
+            ("max_password_age_days", "תוקף סיסמה (ימים)"),
+            ("password_max_idle_initial", "מספר הימים לתוקף סיסמה ראשונית"),
+            ("password_change_for_SSO", "חובת שינוי סיסמה ראשונית SSO"),
+            ("login/fails_to_user_lock", "מקסימום ניסיונות כושלים נעילת משתמש"),
+            ("password_history_size", "היסטוריית סיסמאות"),
+            ("min_password_digits", "ספרות מינימליות"),
+            ("min_password_letters", "אותיות מינימליות"),
+            ("min_password_lowercase", "אותיות קטנות מינימליות"),
+            ("min_password_uppercase", "אותיות גדולות מינימליות"),
+            ("min_password_specials", "תווים מיוחדים מינימליים"),
+            ("failed_user_auto_unlock", "שיחרור אוטומטי של משתמש נעול"),
+            ("rdisp/gui_auto_logout", "התנתקות אוטומטית GUI")
         ]
-        for index, field_name in enumerate(password_fields):
+        for index, (field_name, label_text) in enumerate(password_fields):
             row = index // 2
             col = (index % 2) * 2
-            label = QLabel(field_name)
-            if field_name == "force_first_password_change":
+            label = QLabel(self.format_ui_rtl_text(label_text))
+            widget: object
+            if field_name in {"password_change_for_SSO", "failed_user_auto_unlock"}:
                 widget = QComboBox()
                 widget.addItems(["TRUE", "FALSE"])
             else:
                 widget = QLineEdit()
+                if isinstance(widget, QLineEdit):
+                    widget.setLayoutDirection(Qt.LeftToRight)
+                    widget.setMaxLength(6)
+            if hasattr(widget, "setMaximumWidth"):
+                widget.setMaximumWidth(120)
             self.system_settings_widgets[f"password_policy_defaults.{field_name}"] = widget
             password_grid.addWidget(label, row, col)
             password_grid.addWidget(widget, row, col + 1)
@@ -1023,21 +1043,6 @@ class ValidationDesktopApp(QMainWindow):
         self.settings_layout.addWidget(password_group)
         self.system_settings_sections["password_policy_defaults"] = password_group
         self.system_settings_unavailable_labels["password_policy_defaults"] = password_unavailable_label
-
-        user_type_group, user_type_layout, user_type_unavailable_label = self._build_settings_group(
-            "כללי סיווג משתמשים",
-            "הגדרת מיפוי ערכי USTYP לקבוצות שימוש בביקורת.",
-        )
-        for rule_name in ["Dialog", "System", "Communication", "Service", "Reference"]:
-            label = QLabel(rule_name)
-            editor = QPlainTextEdit()
-            editor.setMinimumHeight(50)
-            self.system_settings_widgets[f"user_type_rules.{rule_name}"] = editor
-            user_type_layout.addWidget(label)
-            user_type_layout.addWidget(editor)
-        self.settings_layout.addWidget(user_type_group)
-        self.system_settings_sections["user_type_rules"] = user_type_group
-        self.system_settings_unavailable_labels["user_type_rules"] = user_type_unavailable_label
 
         mapping_group, mapping_layout, mapping_unavailable_label = self._build_settings_group(
             "מיפוי קבצים",
@@ -1167,19 +1172,23 @@ class ValidationDesktopApp(QMainWindow):
                 "password_expire_warning_time": 14,
                 "max_password_age_days": 90,
                 "initial_password_change_max_days": 2,
-                "force_first_password_change": "TRUE",
+                "password_change_for_SSO": "TRUE",
+                "password_max_idle_initial": 0,
+                "login/fails_to_user_lock": 0,
+                "password_history_size": 5,
+                "min_password_digits": 0,
+                "min_password_letters": 0,
+                "min_password_lowercase": 0,
+                "min_password_uppercase": 0,
+                "min_password_specials": 0,
+                "failed_user_auto_unlock": "FALSE",
+                "fails_to_session_end": 0,
+                "rdisp/gui_auto_logout": 0,
             },
             "inactive_days_threshold": 90,
             "user_review_period": {
                 "start_date": datetime.now().replace(month=1, day=1).strftime("%Y-%m-%d"),
                 "end_date": datetime.now().replace(month=12, day=31).strftime("%Y-%m-%d"),
-            },
-            "user_type_rules": {
-                "Dialog": ["A"],
-                "System": ["B"],
-                "Communication": ["C"],
-                "Service": ["S"],
-                "Reference": ["L"],
             },
             "file_mappings": {
                 slot_key: str(metadata.get("expected_file", ""))
@@ -1278,13 +1287,6 @@ class ValidationDesktopApp(QMainWindow):
                 elif isinstance(widget, QLineEdit):
                     widget.setText(str(value))
 
-        user_type_rules = settings.get("user_type_rules", {}) if isinstance(settings, dict) else {}
-        if isinstance(user_type_rules, dict):
-            for rule_name, values in user_type_rules.items():
-                widget = self.system_settings_widgets.get(f"user_type_rules.{rule_name}")
-                if isinstance(widget, QPlainTextEdit):
-                    widget.setPlainText("\n".join(str(item).strip() for item in values if str(item).strip()))
-
     def _collect_system_settings_from_form(self) -> dict[str, object]:
         def _lines_from_editor(editor: object) -> list[str]:
             if not isinstance(editor, QPlainTextEdit):
@@ -1331,22 +1333,26 @@ class ValidationDesktopApp(QMainWindow):
         for field_name in [
             "minimal_password_length",
             "maximum_invalid_connect_attempts",
-            "password_expire_warning_time",
             "max_password_age_days",
-            "initial_password_change_max_days",
-            "force_first_password_change",
+            "password_max_idle_initial",
+            "password_change_for_SSO",
+            "login/fails_to_user_lock",
+            "password_history_size",
+            "min_password_digits",
+            "min_password_letters",
+            "min_password_lowercase",
+            "min_password_uppercase",
+            "min_password_specials",
+            "failed_user_auto_unlock",
+            "rdisp/gui_auto_logout",
         ]:
             widget = self.system_settings_widgets.get(f"password_policy_defaults.{field_name}")
             if isinstance(widget, QComboBox):
                 password_defaults[field_name] = widget.currentText().strip()
             elif isinstance(widget, QLineEdit):
-                password_defaults[field_name] = self._safe_int(widget.text(), int(self._default_system_settings()["password_policy_defaults"][field_name]))
+                default_value = self._default_system_settings()["password_policy_defaults"].get(field_name, 0)
+                password_defaults[field_name] = self._safe_int(widget.text(), int(default_value))
         settings["password_policy_defaults"] = password_defaults
-
-        user_type_rules = {}
-        for rule_name in ["Dialog", "System", "Communication", "Service", "Reference"]:
-            user_type_rules[rule_name] = _lines_from_editor(self.system_settings_widgets.get(f"user_type_rules.{rule_name}"))
-        settings["user_type_rules"] = user_type_rules
 
         return settings
 
@@ -1419,7 +1425,7 @@ class ValidationDesktopApp(QMainWindow):
     @staticmethod
     def _is_a_dialog_user(user_type: object) -> bool:
         normalized_value = "" if user_type is None else str(user_type).strip().upper()
-        return normalized_value == "A"
+        return normalized_value in ValidationDesktopApp.USER_TYPE_RULES.get("Dialog", [])
 
     @staticmethod
     def _has_initial_password(password_flag: object) -> bool:
