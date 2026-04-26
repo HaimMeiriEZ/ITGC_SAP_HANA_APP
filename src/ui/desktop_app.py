@@ -494,7 +494,7 @@ class ValidationDesktopApp(QMainWindow):
                 f"""
                 QGroupBox {{
                     font-weight: bold;
-                    border: 1px solid {palette['border']};
+                    border: 2px solid {palette['border']};
                     border-radius: 10px;
                     margin-top: 14px;
                     padding-top: 18px;
@@ -505,8 +505,9 @@ class ValidationDesktopApp(QMainWindow):
                     subcontrol-position: top left;
                     padding: 4px 12px;
                     background-color: {palette['header']};
-                    color: #16325c;
+                    color: white;
                     border-radius: 6px;
+                    font-weight: bold;
                 }}
                 """
             )
@@ -529,13 +530,12 @@ class ValidationDesktopApp(QMainWindow):
             category_button.setMinimumHeight(34)
             category_button.setToolTip(self.format_rtl_text(f"הרצת בדיקה עבור קבוצת {category}"))
             category_button.setStyleSheet(
-                f"background-color: {palette['button']}; border: 1px solid {palette['border']};"
+                f"background-color: {palette['button']}; border: 2px solid {palette['border']}; color: white; font-weight: bold;"
             )
             category_button.clicked.connect(
                 lambda _checked=False, cat=category: self.run_category_validation(cat)
             )
             self.category_run_buttons[category] = category_button
-            category_layout.addWidget(category_button, 0, 0)
 
             section_row = 1
             for slot_key, metadata in self.SLOT_DEFINITIONS.items():
@@ -635,6 +635,10 @@ class ValidationDesktopApp(QMainWindow):
                     "extraction_date_label": extraction_date_label,
                 }
 
+            # Add the 'הרץ בדיקה' button at the last row, spanning all columns
+            category_layout.setRowMinimumHeight(section_row, 40)
+            category_layout.addWidget(category_button, section_row, 0, 1, 4, alignment=Qt.AlignRight)
+            section_row += 1
             category_section.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             slots_layout.addWidget(category_section, current_row, 0, 1, 4)
             current_row += 1
@@ -949,13 +953,8 @@ class ValidationDesktopApp(QMainWindow):
         return categories
 
     def _category_palette(self, category: str) -> dict[str, str]:
-        palettes = {
-            "טבלאות משתמשים": {"header": "#e8f1ff", "button": "#dce9ff", "border": "#a9c2eb"},
-            "טבלאות הרשאות כלליות": {"header": "#ede8ff", "button": "#e4dcff", "border": "#b8acec"},
-            "טבלאות שינויים": {"header": "#e9faf1", "button": "#d9f3e5", "border": "#a8d8bd"},
-            "מדיניות סיסמאות": {"header": "#fff3df", "button": "#ffe8bf", "border": "#e6c98b"},
-        }
-        return palettes.get(category, {"header": "#eef3fb", "button": "#e1eaf7", "border": "#bfd0e6"})
+        # Unified palette: active tab color (burgundy)
+        return {"header": "#6d002f", "button": "#6d002f", "border": "#6d002f"}
 
     @staticmethod
     def _default_extraction_date() -> str:
@@ -2227,6 +2226,10 @@ class ValidationDesktopApp(QMainWindow):
         end_text = self.audit_period_to_edit.text().strip() if hasattr(self, "audit_period_to_edit") else ""
         if not start_text or not end_text:
             return preview_rows, "כדי לסנן לפי פעילות בתקופה יש להזין תאריך התחלה ותאריך סיום."
+        if not start_text:
+            start_text = self._default_extraction_date()
+        if not end_text:
+            end_text = self._default_extraction_date()
 
         start_date = self._parse_user_preview_date(start_text)
         end_date = self._parse_user_preview_date(end_text)
@@ -2391,7 +2394,7 @@ class ValidationDesktopApp(QMainWindow):
             if not preview_rows:
                 self.user_preview_hint.setText(
                     self.format_ui_rtl_text(
-                        "לא זוהו עדיין משתמשים להצגה. יש לטעון קובצי USR02 ו-ADR6 / USER_ADDR."
+                        "לא זוהו עדיין משתמשים להצגה. יש לטעון קבצי USR02 ו-ADR6 / USER_ADDR."
                     )
                 )
                 self._update_user_review_progress_summary(0, 0, 0)
