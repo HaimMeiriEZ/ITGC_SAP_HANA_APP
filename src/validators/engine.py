@@ -26,9 +26,13 @@ class ValidationEngine:
         }
         detected_profile = detect_validation_profile(source_name, rows)
         required_value_columns = filter_required_value_columns(detected_profile, self.required_columns)
+        required_column_aliases = {
+            column: get_column_aliases(column)
+            for column in required_value_columns
+        }
 
-        for column in required_value_columns:
-            if not matches_column_alias(available_columns, column):
+        for column, aliases in required_column_aliases.items():
+            if not any(alias in available_columns for alias in aliases):
                 issues.append(
                     ValidationIssue(
                         row_number=0,
@@ -38,7 +42,7 @@ class ValidationEngine:
                 )
 
         present_required_columns = [
-            column for column in required_value_columns if matches_column_alias(available_columns, column)
+            column for column, aliases in required_column_aliases.items() if any(alias in available_columns for alias in aliases)
         ]
 
         for row_number, row in enumerate(rows, start=1):
@@ -49,7 +53,7 @@ class ValidationEngine:
             }
             for column in present_required_columns:
                 value = None
-                for candidate in get_column_aliases(column):
+                for candidate in required_column_aliases[column]:
                     if candidate not in normalized_row:
                         continue
                     candidate_value = normalized_row.get(candidate)

@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Any
 
 from src.models.validation_result import ValidationIssue
@@ -226,6 +227,7 @@ def filter_required_value_columns(profile: str | None, required_columns: list[st
     ]
 
 
+@lru_cache(maxsize=None)
 def get_column_aliases(candidate: str) -> list[str]:
     normalized_candidate = normalize_name(candidate)
     aliases = [normalized_candidate]

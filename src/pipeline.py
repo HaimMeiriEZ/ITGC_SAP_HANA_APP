@@ -79,7 +79,7 @@ def _process_agr1251_in_batches(paths: list[Path], engine: ValidationEngine, sou
         if suffix in {".txt", ".csv"}:
             batches = TextFileReader().read_in_batches(path, chunk_size=AGR_1251_BATCH_SIZE)
         elif suffix in {".xlsx", ".xlsm"}:
-            batches = [_read_rows(path)]
+            batches = ExcelFileReader().read_in_batches(path, chunk_size=AGR_1251_BATCH_SIZE)
         else:
             raise ValueError(f"Unsupported file type: {suffix}")
 

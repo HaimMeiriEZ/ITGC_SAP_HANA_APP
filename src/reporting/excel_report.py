@@ -32,29 +32,20 @@ class ExcelReportWriter:
     def _write_summary(sheet, result: ValidationResult, source_file: Path) -> None:
         generated_at = datetime.now()
 
-        sheet["A1"] = "מדד"
-        sheet["B1"] = "ערך"
-        sheet["A2"] = "שורות שנבדקו"
-        sheet["B2"] = result.summary.total_rows
-        sheet["A3"] = "שורות תקינות"
-        sheet["B3"] = result.summary.valid_rows
-        sheet["A4"] = "שורות שגויות"
-        sheet["B4"] = result.summary.invalid_rows
-        sheet["A5"] = "הקובץ תקין"
-        sheet["B5"] = result.summary.is_valid
-        sheet["A6"] = "קובץ מקור"
+        sheet.append(["מדד", "ערך"])
+        sheet.append(["שורות שנבדקו", result.summary.total_rows])
+        sheet.append(["שורות תקינות", result.summary.valid_rows])
+        sheet.append(["שורות שגויות", result.summary.invalid_rows])
+        sheet.append(["הקובץ תקין", result.summary.is_valid])
         if result.source_files:
-            sheet["B6"] = result.source_files[0] if len(result.source_files) == 1 else f"{result.source_files[0]} ועוד {len(result.source_files) - 1}"
+            source_label = result.source_files[0] if len(result.source_files) == 1 else f"{result.source_files[0]} ועוד {len(result.source_files) - 1}"
         else:
-            sheet["B6"] = source_file.name
-        sheet["A7"] = "פרופיל בדיקה"
-        sheet["B7"] = result.detected_profile or "GENERIC"
-        sheet["A8"] = "מספר קבצים שנבחרו"
-        sheet["B8"] = max(len(result.source_files), 1)
-        sheet["A9"] = "תאריך הפקה"
-        sheet["B9"] = generated_at.strftime("%Y-%m-%d")
-        sheet["A10"] = "שעת הפקה"
-        sheet["B10"] = generated_at.strftime("%H:%M:%S")
+            source_label = source_file.name
+        sheet.append(["קובץ מקור", source_label])
+        sheet.append(["פרופיל בדיקה", result.detected_profile or "GENERIC"])
+        sheet.append(["מספר קבצים שנבחרו", max(len(result.source_files), 1)])
+        sheet.append(["תאריך הפקה", generated_at.strftime("%Y-%m-%d")])
+        sheet.append(["שעת הפקה", generated_at.strftime("%H:%M:%S")])
 
     @staticmethod
     def _write_issues(sheet, issues: Iterable[ValidationIssue]) -> None:

@@ -280,7 +280,7 @@ class ValidationDesktopApp(QMainWindow):
     def format_ui_rtl_text(text: object) -> str:
         normalized_text = ValidationDesktopApp.format_rtl_text(text).strip()
         if normalized_text and re.search(r"[\u0590-\u05FF]", normalized_text):
-            return f"\u200f{normalized_text}"
+            return f"\u202B{normalized_text}\u202C"
         return normalized_text
 
     def _configure_window(self) -> None:
@@ -298,32 +298,42 @@ class ValidationDesktopApp(QMainWindow):
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(12)
 
-        self.app_title_label = QLabel(self.format_ui_rtl_text("כלי להערכת בקרות ITGC בסביבת SAP HANA APP"))
-        self.app_title_label.setLayoutDirection(Qt.RightToLeft)
-        self.app_title_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.app_title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        _title_container = QWidget()
+        _title_container.setLayoutDirection(Qt.LeftToRight)
+        _title_row = QHBoxLayout(_title_container)
+        _title_row.setContentsMargins(0, 0, 0, 0)
+        _title_row.setSpacing(0)
+        self.app_title_label = QLabel("כלי להערכת בקרות ITGC בסביבת SAP HANA APP")
         self.app_title_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #16325c;")
-        main_layout.addWidget(self.app_title_label)
+        _title_row.addStretch(1)
+        _title_row.addWidget(self.app_title_label)
+        main_layout.addWidget(_title_container)
 
-        self.header_label = QLabel(self.format_ui_rtl_text("מסך בדיקת קלטי SAP HANA DB"))
-        self.header_label.setLayoutDirection(Qt.RightToLeft)
-        self.header_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.header_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        _header_container = QWidget()
+        _header_container.setLayoutDirection(Qt.LeftToRight)
+        _header_row = QHBoxLayout(_header_container)
+        _header_row.setContentsMargins(0, 0, 0, 0)
+        _header_row.setSpacing(0)
+        self.header_label = QLabel("מסך בדיקת קלטי SAP HANA DB")
         self.header_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #16325c;")
+        _header_row.addStretch(1)
+        _header_row.addWidget(self.header_label)
 
-        self.hint_label = QLabel(
-            self.format_ui_rtl_text(
-                "בחר קבצים לפי המשבצת המתאימה. כוכבית מציינת משבצת חובה. חובה לציין את תאריך ההפקה של הקבצים. ניתן להריץ בדיקה נפרדת לכל קבוצת קבצים בלי להמתין לטעינת כל הדוחות."
-            )
+        self.hint_label = QTextEdit()
+        self.hint_label.setReadOnly(True)
+        self.hint_label.setHtml(
+            '<p dir="rtl" style="color: #4f5d73; margin: 0; padding: 0;">'
+            "בחר קבצים לפי המשבצת המתאימה. כוכבית מציינת משבצת חובה. חובה לציין את תאריך ההפקה של הקבצים. ניתן להריץ בדיקה נפרדת לכל קבוצת קבצים בלי להמתין לטעינת כל הדוחות."
+            "</p>"
         )
-        self.hint_label.setLayoutDirection(Qt.RightToLeft)
-        self.hint_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
-        self.hint_label.setWordWrap(True)
-        self.hint_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.hint_label.setStyleSheet("color: #4f5d73;")
+        self.hint_label.setFixedHeight(46)
+        self.hint_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.hint_label.setStyleSheet(
+            "background: transparent; border: none; padding: 0;"
+        )
 
         self.actions_row = QWidget()
-        self.actions_row.setLayoutDirection(Qt.RightToLeft)
+        self.actions_row.setLayoutDirection(Qt.LeftToRight)
         self.actions_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         buttons_layout = QHBoxLayout(self.actions_row)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
@@ -385,7 +395,7 @@ class ValidationDesktopApp(QMainWindow):
         self.intake_layout = QVBoxLayout(self.intake_tab)
         self.intake_layout.setContentsMargins(8, 8, 8, 8)
         self.intake_layout.setSpacing(10)
-        self.intake_layout.addWidget(self.header_label)
+        self.intake_layout.addWidget(_header_container)
         self.intake_layout.addWidget(self.hint_label)
         self.intake_layout.addWidget(self.actions_row)
 
@@ -398,6 +408,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_ui_rtl_text("לאחר טעינת הקבצים ניתן לבצע ניתוח לביקורת ולסקור כאן את הממצאים המרכזיים.")
         )
         self.analysis_hint_label.setWordWrap(True)
+        self.analysis_hint_label.setLayoutDirection(Qt.LeftToRight)
         self.analysis_hint_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
         self.analysis_layout.addWidget(self.analysis_hint_label)
         self.audit_run_button = QPushButton(self.format_ui_rtl_text("בצע ניתוח לביקורת עבור המשבצת שנבחרה"))
@@ -433,6 +444,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_ui_rtl_text("בטאב זה ניתן לנהל את הגדרות הביקורת והעמודות הנדרשות לכל משבצת.")
         )
         self.settings_intro_label.setWordWrap(True)
+        self.settings_intro_label.setLayoutDirection(Qt.LeftToRight)
         self.settings_intro_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
         self.settings_layout.addWidget(self.settings_intro_label)
         self._build_system_settings_sections()
@@ -447,7 +459,7 @@ class ValidationDesktopApp(QMainWindow):
         main_layout.addWidget(self.tabs)
 
         self.slots_group = QGroupBox(self.format_ui_rtl_text("מקורות קלט לבדיקת SAP HANA APP"))
-        self.slots_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.slots_group.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.slots_group.setLayoutDirection(Qt.RightToLeft)
         slots_group_layout = QVBoxLayout(self.slots_group)
         slots_group_layout.setContentsMargins(8, 18, 8, 8)
@@ -456,7 +468,7 @@ class ValidationDesktopApp(QMainWindow):
         self.slots_scroll.setWidgetResizable(True)
         self.slots_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.slots_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-        self.slots_scroll.setMinimumHeight(520)
+        self.slots_scroll.setMinimumHeight(280)
         self.slots_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         slots_container = QWidget()
@@ -477,7 +489,7 @@ class ValidationDesktopApp(QMainWindow):
         for category in self._ordered_categories():
             palette = self._category_palette(category)
             category_section = QGroupBox(self.format_ui_rtl_text(category))
-            category_section.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            category_section.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             category_section.setStyleSheet(
                 f"""
                 QGroupBox {{
@@ -490,7 +502,7 @@ class ValidationDesktopApp(QMainWindow):
                 }}
                 QGroupBox::title {{
                     subcontrol-origin: margin;
-                    subcontrol-position: top right;
+                    subcontrol-position: top left;
                     padding: 4px 12px;
                     background-color: {palette['header']};
                     color: #16325c;
@@ -532,20 +544,20 @@ class ValidationDesktopApp(QMainWindow):
 
                 display_name = metadata.get("label", slot_key)
                 slot_title = QLabel(self.format_ui_rtl_text(f"{display_name}{' *' if metadata['required'] else ''}"))
-                slot_title.setLayoutDirection(Qt.RightToLeft)
+                slot_title.setLayoutDirection(Qt.LeftToRight)
                 slot_title.setAlignment(Qt.AlignRight | Qt.AlignTop)
                 slot_title.setStyleSheet("font-weight: bold;")
                 slot_title.setMinimumWidth(110)
 
                 description = QLabel(self.format_ui_rtl_text(metadata["description"]))
-                description.setLayoutDirection(Qt.RightToLeft)
+                description.setLayoutDirection(Qt.LeftToRight)
                 description.setAlignment(Qt.AlignRight | Qt.AlignTop)
                 description.setWordWrap(True)
                 description.setMinimumHeight(34)
                 description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
                 sample = QLabel(self.format_ui_rtl_text(f"קובץ צפוי: {metadata['expected_file']}"))
-                sample.setLayoutDirection(Qt.RightToLeft)
+                sample.setLayoutDirection(Qt.LeftToRight)
                 sample.setAlignment(Qt.AlignRight | Qt.AlignTop)
                 sample.setWordWrap(True)
                 sample.setStyleSheet("color: #5b6573;")
@@ -636,7 +648,8 @@ class ValidationDesktopApp(QMainWindow):
         self.slots_scroll.setWidget(slots_container)
         slots_group_layout.addWidget(self.slots_scroll)
 
-        self.intake_layout.addWidget(self.slots_group)
+        self.slots_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.intake_layout.addWidget(self.slots_group, 1)
 
         self.user_preview_group = QGroupBox(self.format_ui_rtl_text("רשימת משתמשים שנטענו"))
         self.user_preview_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -794,7 +807,7 @@ class ValidationDesktopApp(QMainWindow):
         self.review_layout.addWidget(self.user_preview_group, 1)
 
         self.run_log_group = QGroupBox(self.format_ui_rtl_text("לוג קבצים שנבדקו"))
-        self.run_log_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.run_log_group.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         run_log_layout = QVBoxLayout(self.run_log_group)
         run_log_layout.setContentsMargins(12, 18, 12, 12)
         self.run_log_table = QTableWidget(0, 10)
@@ -818,11 +831,13 @@ class ValidationDesktopApp(QMainWindow):
         self.run_log_table.setAlternatingRowColors(True)
         self.run_log_table.setWordWrap(True)
         self.run_log_table.setTextElideMode(Qt.ElideMiddle)
-        self.run_log_table.setMinimumHeight(260)
+        self.run_log_table.setMinimumHeight(160)
         self.run_log_table.setToolTip("לחיצה כפולה על שורה תפתח פירוט מלא עבור הקובץ")
         self.run_log_table.cellDoubleClicked.connect(self.show_log_details)
         run_log_layout.addWidget(self.run_log_table)
-        self.intake_layout.addWidget(self.run_log_group)
+        self.run_log_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.run_log_group.setMaximumHeight(320)
+        self.intake_layout.addWidget(self.run_log_group, 0)
 
         self.required_columns_group = QGroupBox(self.format_ui_rtl_text("עמודות חובה לבדיקה"))
         self.required_columns_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -898,7 +913,7 @@ class ValidationDesktopApp(QMainWindow):
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                subcontrol-position: top right;
+                subcontrol-position: top left;
                 padding: 0 10px;
                 background-color: #f5f7fb;
             }
