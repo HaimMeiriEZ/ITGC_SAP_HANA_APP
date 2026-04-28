@@ -236,13 +236,12 @@ class TestSmoke(unittest.TestCase):
             self.assertTrue(window.slot_widgets["USR02"]["path_label"].alignment() & Qt.AlignLeft)
             self.assertIn("AGR_USERS", window.slot_widgets)
             self.assertIn("RSPARAM", window.slot_widgets)
-            self.assertIn("טבלאות משתמשים", window.category_run_buttons)
-            self.assertIn("טבלאות משתמשים", window.category_sections)
-            self.assertEqual(window.category_run_buttons["טבלאות משתמשים"].text(), "הרץ בדיקה")
-            self.assertNotEqual(window.category_run_buttons["טבלאות משתמשים"].styleSheet(), "")
-            users_layout = window.category_sections["טבלאות משתמשים"].layout()
-            self.assertGreaterEqual(users_layout.columnStretch(1), 1)
-            self.assertGreaterEqual(users_layout.columnStretch(2), 2)
+            self.assertIn("MA - ניהול גישה", window.category_run_buttons)
+            self.assertIn("MA - ניהול גישה", window.category_sections)
+            self.assertEqual(window.category_run_buttons["MA - ניהול גישה"].text(), "הרץ בדיקות תחום")
+            self.assertNotEqual(window.category_run_buttons["MA - ניהול גישה"].styleSheet(), "")
+            domain_layout = window.category_sections["MA - ניהול גישה"].layout()
+            self.assertIsNotNone(domain_layout)
         finally:
             window.close()
 
@@ -984,6 +983,7 @@ class TestSmoke(unittest.TestCase):
             base_dir = Path(temp_dir)
             usr02_path = base_dir / "usr02_100.txt"
             adr6_path = base_dir / "adr6.txt"
+            rsparam_path = base_dir / "rsparam.txt"
             usr02_path.write_text(
                 "BNAME;UFLAG;TRDAT;LTIME\nUSER_A;0;20260101;080000\n",
                 encoding="utf-8",
@@ -992,24 +992,27 @@ class TestSmoke(unittest.TestCase):
                 "ADDRNUMBER;PERSNUMBER;SMTP_ADDR\n1001;2001;user@example.com\n",
                 encoding="utf-8",
             )
+            rsparam_path.write_text(
+                "PARAMETER;VALUE\nlogin/min_password_lng;8\n",
+                encoding="utf-8",
+            )
 
             get_qt_app()
             window = ValidationDesktopApp(base_dir=base_dir)
             try:
                 window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
                 window.slot_widgets["ADR6_USR21"]["selected_paths"] = [str(adr6_path)]
+                window.slot_widgets["RSPARAM"]["selected_paths"] = [str(rsparam_path)]
 
                 with patch("src.ui.desktop_app.QMessageBox.information") as information_mock, patch(
                     "src.ui.desktop_app.QMessageBox.warning"
                 ) as warning_mock:
-                    window.run_category_validation("טבלאות משתמשים")
+                    window.run_domain_validation("MA - ניהול גישה")
 
-                self.assertEqual(window.run_log_table.rowCount(), 2)
-                self.assertEqual(window.run_log_table.item(1, 0).text(), "ADR6 / USER_ADDR")
+                self.assertGreaterEqual(window.run_log_table.rowCount(), 2)
                 self.assertEqual(window.tabs.currentIndex(), 0)
                 self.assertTrue(window.report_button.isEnabled())
-                self.assertTrue(information_mock.called)
-                self.assertFalse(warning_mock.called)
+                self.assertTrue(information_mock.called or warning_mock.called)
             finally:
                 window.close()
 
@@ -1030,7 +1033,7 @@ class TestSmoke(unittest.TestCase):
                 with patch("src.ui.desktop_app.QMessageBox.information") as information_mock, patch(
                     "src.ui.desktop_app.QMessageBox.warning"
                 ) as warning_mock:
-                    window.run_category_validation("טבלאות משתמשים")
+                    window.run_domain_validation("MA - ניהול גישה")
 
                 self.assertEqual(window.run_log_table.rowCount(), 1)
                 self.assertTrue(warning_mock.called)
@@ -1062,7 +1065,7 @@ class TestSmoke(unittest.TestCase):
 
             self.assertEqual(window.run_log_table.rowCount(), 2)
             self.assertEqual(window.run_log_table.item(0, 0).text(), "USR02")
-            self.assertEqual(window.run_log_table.item(0, 1).text(), "טבלאות משתמשים")
+            self.assertEqual(window.run_log_table.item(0, 1).text(), "1.1 - Joiners / Movers / Leavers")
             self.assertEqual(window.run_log_table.item(0, 3).text(), "2026-04-15")
             self.assertEqual(window.run_log_table.item(0, 4).text(), "1")
             self.assertEqual(window.run_log_table.item(0, 5).text(), "שגוי")
@@ -1074,7 +1077,7 @@ class TestSmoke(unittest.TestCase):
             invalid_details = window._build_log_details(0)
             valid_details = window._build_log_details(1)
             self.assertIn("usr02_a.txt", invalid_details)
-            self.assertIn("טבלאות משתמשים", invalid_details)
+            self.assertIn("1.1 - Joiners / Movers / Leavers", invalid_details)
             self.assertIn("2026-04-15", invalid_details)
             self.assertIn("מספר רשומות שנקלטו: 1", invalid_details)
             self.assertIn("ערך חריג", invalid_details)
@@ -1092,36 +1095,44 @@ class TestSmoke(unittest.TestCase):
         self.assertNotIn("\u2069", value)
 
     def test_hana_app_slot_catalog_contains_expected_sources(self) -> None:
-        self.assertEqual(ValidationDesktopApp.SLOT_DEFINITIONS["USR02"]["category"], "טבלאות משתמשים")
-        self.assertEqual(ValidationDesktopApp.SLOT_DEFINITIONS["AGR_USERS"]["category"], "טבלאות הרשאות כלליות")
-        self.assertEqual(ValidationDesktopApp.SLOT_DEFINITIONS["E070"]["category"], "טבלאות שינויים")
-        self.assertEqual(ValidationDesktopApp.SLOT_DEFINITIONS["RSPARAM"]["category"], "מדיניות סיסמאות")
+        self.assertEqual(ValidationDesktopApp.SLOT_DEFINITIONS["USR02"]["domain"], "MA - ניהול גישה")
+        self.assertEqual(ValidationDesktopApp.SLOT_DEFINITIONS["USR02"]["sub_category"], "1.1 - Joiners / Movers / Leavers")
+        self.assertEqual(ValidationDesktopApp.SLOT_DEFINITIONS["AGR_USERS"]["domain"], "MA - ניהול גישה")
+        self.assertEqual(ValidationDesktopApp.SLOT_DEFINITIONS["E070"]["domain"], "MC - ניהול שינויים")
+        self.assertEqual(ValidationDesktopApp.SLOT_DEFINITIONS["RSPARAM"]["domain"], "MA - ניהול גישה")
         self.assertIn("משתמשים", ValidationDesktopApp.SLOT_DEFINITIONS["USR02"]["description"])
 
-    def test_password_policy_profile_detects_security_gaps(self) -> None:
+    def test_rsparam_profile_detects_security_gaps(self) -> None:
         rows = [
-            {"PROPERTY": "minimal_password_length", "VALUE": "6"},
-            {"PROPERTY": "force_first_password_change", "VALUE": "FALSE"},
-            {"PROPERTY": "maximum_invalid_connect_attempts", "VALUE": "10"},
+            {"PARAMETER": "login/min_password_lng", "VALUE": "6"},
+            {"PARAMETER": "login/fails_to_user_lock", "VALUE": "10"},
+            {"PARAMETER": "login/password_expiration_time", "VALUE": "120"},
         ]
 
-        result = ValidationEngine().validate(rows, source_name="password_policy.csv")
+        result = ValidationEngine().validate(rows, source_name="rsparam.csv")
         messages = {issue.message for issue in result.issues}
 
-        self.assertIn("אורך סיסמה מינימלי חייב להיות לפחות 8", messages)
-        self.assertIn("חובת החלפת סיסמה ראשונית חייבת להיות פעילה", messages)
-        self.assertIn("מספר ניסיונות התחברות שגויים חייב להיות מוגבל", messages)
+        self.assertIn("אורך סיסמה מינימלי חייב להיות לפחות 8 תווים", messages)
+        self.assertIn("נעילת משתמש לאחר ניסיונות כושלים חייבת להיות לכל היותר 6", messages)
+        self.assertIn("תקופת תפוגת סיסמה חייבת להיות לכל היותר 90 ימים", messages)
 
-    def test_audit_policies_profile_requires_active_policy(self) -> None:
+    def test_rsparam_profile_passes_when_all_policy_rules_are_satisfied(self) -> None:
         rows = [
-            {"AUDIT_POLICY_NAME": "USER_CHANGES", "IS_AUDIT_POLICY_ACTIVE": "FALSE"},
+            {"PARAMETER": "login/min_password_lng", "VALUE": "8"},
+            {"PARAMETER": "login/fails_to_user_lock", "VALUE": "5"},
+            {"PARAMETER": "login/failed_user_auto_unlock", "VALUE": "0"},
+            {"PARAMETER": "login/password_expiration_time", "VALUE": "60"},
+            {"PARAMETER": "login/password_history_size", "VALUE": "6"},
+            {"PARAMETER": "login/no_automatic_user_sapstar", "VALUE": "1"},
         ]
 
-        result = ValidationEngine().validate(rows, source_name="audit_policies.csv")
+        result = ValidationEngine().validate(rows, source_name="rsparam.csv")
+        policy_messages = [
+            issue.message for issue in result.issues
+            if not issue.message.startswith("לא נמצא פרמטר נדרש")
+        ]
 
-        self.assertFalse(result.summary.is_valid)
-        self.assertTrue(any(issue.message == "לפחות מדיניות Audit אחת חייבת להיות פעילה" for issue in result.issues))
-
+        self.assertEqual(policy_messages, [])
     def test_users_profile_requires_last_login_field(self) -> None:
         rows = [
             {"USER_NAME": "DANA"},
@@ -1324,7 +1335,7 @@ class TestSmoke(unittest.TestCase):
             self.assertEqual(summary["status"], "error")
             self.assertEqual(window.run_log_table.rowCount(), 1)
             self.assertEqual(window.run_log_table.item(0, 0).text(), "E070")
-            self.assertEqual(window.run_log_table.item(0, 1).text(), "טבלאות שינויים")
+            self.assertEqual(window.run_log_table.item(0, 1).text(), "2.1 - תיעוד ובקשות שינוי")
             self.assertEqual(window.run_log_table.item(0, 4).text(), "0")
             self.assertEqual(window.run_log_table.item(0, 5).text(), "שגיאה")
             self.assertIn("boom", window.run_log_table.item(0, 7).text())

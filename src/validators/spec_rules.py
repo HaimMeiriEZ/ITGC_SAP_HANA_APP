@@ -17,9 +17,6 @@ PROFILE_REQUIRED_COLUMNS: dict[str, list[str]] = {
     "STMS": ["TRKORR"],
     "RSPARAM": ["PARAMETER", "VALUE"],
     "TPFET": ["PARAMETER", "VALUE"],
-    "M_PASSWORD_POLICY": ["PROPERTY", "VALUE"],
-    "GRANTED_PRIVILEGES": ["GRANTEE", "PRIVILEGE"],
-    "AUDIT_POLICIES": ["AUDIT_POLICY_NAME", "IS_AUDIT_POLICY_ACTIVE"],
 }
 
 PROFILE_REQUIRED_ANY_GROUPS: dict[str, list[tuple[str, ...]]] = {
@@ -29,11 +26,6 @@ PROFILE_REQUIRED_ANY_GROUPS: dict[str, list[tuple[str, ...]]] = {
     "E070": [("AS4DATE", "TRFUNCTION")],
     "RSPARAM": [("PARAMETER", "NAME")],
     "TPFET": [("PARAMETER", "NAME")],
-    "M_INIFILE_CONTENTS": [
-        ("SECTION", "SECTION_NAME"),
-        ("KEY", "KEY_NAME", "PARAMETER_NAME", "PROPERTY"),
-        ("VALUE", "CONFIGURED_VALUE", "CURRENT_VALUE"),
-    ],
 }
 
 PROFILE_OPTIONAL_VALUE_COLUMNS: dict[str, set[str]] = {
@@ -154,39 +146,15 @@ PROFILE_STRUCTURE_RULES: dict[str, dict[str, Any]] = {
     },
 }
 
-PASSWORD_POLICY_RULES = [
-    ("minimal_password_length", 8, "minimum", "אורך סיסמה מינימלי חייב להיות לפחות 8"),
-    ("force_first_password_change", "TRUE", "exact", "חובת החלפת סיסמה ראשונית חייבת להיות פעילה"),
-    ("maximum_invalid_connect_attempts", 6, "maximum", "מספר ניסיונות התחברות שגויים חייב להיות מוגבל"),
-    ("last_used_passwords", 5, "minimum", "היסטוריית סיסמאות חייבת לכלול לפחות 5 ערכים"),
-    ("password_lock_for_system_user", "TRUE", "exact", "נעילת משתמשי SYSTEM חייבת להיות פעילה"),
-    ("detailed_error_on_connect", "FALSE", "exact", "אין לחשוף הודעות שגיאה מפורטות בהתחברות"),
+SAP_APP_RSPARAM_RULES = [
+    # (parameter_name, expected_value, rule_type, message)
+    ("login/min_password_lng", 8, "minimum", "אורך סיסמה מינימלי חייב להיות לפחות 8 תווים"),
+    ("login/fails_to_user_lock", 6, "maximum", "נעילת משתמש לאחר ניסיונות כושלים חייבת להיות לכל היותר 6"),
+    ("login/failed_user_auto_unlock", 0, "maximum", "ביטול נעילה אוטומטי לאחר כישלון חייב להיות מבוטל (0)"),
+    ("login/password_expiration_time", 90, "maximum", "תקופת תפוגת סיסמה חייבת להיות לכל היותר 90 ימים"),
+    ("login/password_history_size", 5, "minimum", "היסטוריית סיסמאות חייבת לכלול לפחות 5 ערכים"),
+    ("login/no_automatic_user_sapstar", 1, "minimum", "פרמטר SAP* האוטומטי חייב להיות מבוטל (1)"),
 ]
-
-INI_SECURITY_RULES = [
-    ("global.ini", "auditing configuration", "global_auditing_state", "true", "exact", "Audit trail גלובלי חייב להיות פעיל"),
-    ("global.ini", "persistence", "log_mode", "normal", "exact", "Log mode חייב להיות NORMAL"),
-    ("indexserver.ini", "password policy", "detailed_error_on_connect", "false", "exact", "אין לחשוף הודעות שגיאה מפורטות בהתחברות"),
-    ("indexserver.ini", "password policy", "password_lock_for_system_user", "true", "exact", "נעילת משתמשי SYSTEM חייבת להיות פעילה"),
-    ("indexserver.ini", "password policy", "force_first_password_change", "true", "exact", "חובת החלפת סיסמה ראשונית חייבת להיות פעילה"),
-    ("indexserver.ini", "password policy", "minimal_password_length", 8, "minimum", "אורך סיסמה מינימלי חייב להיות לפחות 8"),
-    ("indexserver.ini", "password policy", "maximum_invalid_connect_attempts", 6, "maximum", "מספר ניסיונות התחברות שגויים חייב להיות מוגבל"),
-    ("indexserver.ini", "password policy", "last_used_passwords", 5, "minimum", "היסטוריית סיסמאות חייבת לכלול לפחות 5 ערכים"),
-    ("indexserver.ini", "password policy", "password_expire_warning_time", 14, "minimum", "יש להתריע מראש לפני פקיעת סיסמה"),
-]
-
-CRITICAL_PRIVILEGES = {
-    "AUDIT ADMIN",
-    "AUDIT OPERATOR",
-    "DATA ADMIN",
-    "INIFILE ADMIN",
-    "LOG ADMIN",
-    "ROLE ADMIN",
-    "SERVICE ADMIN",
-    "TRUST ADMIN",
-    "USER ADMIN",
-    "BACKUP ADMIN",
-}
 
 SAP_ITGC_RELEVANT_PARAMETERS = {
     "login/min_password_lng",
@@ -289,16 +257,6 @@ def detect_validation_profile(source_name: str | None, rows: list[dict[str, Any]
         return "AGR_USERS"
     if matches_column_alias(columns, "BNAME") and matches_column_alias(columns, "PROFILE"):
         return "UST04"
-    if matches_column_alias(columns, "TRKORR") and matches_column_alias(columns, "AS4USER"):
-        return "E070"
-    if {"PROPERTY", "VALUE"}.issubset(columns):
-        return "M_PASSWORD_POLICY"
-    if {"AUDIT_POLICY_NAME", "IS_AUDIT_POLICY_ACTIVE"}.issubset(columns):
-        return "AUDIT_POLICIES"
-    if {"GRANTEE", "PRIVILEGE"}.issubset(columns):
-        return "GRANTED_PRIVILEGES"
-    if ({"SECTION", "KEY", "VALUE"}.issubset(columns) or {"SECTION_NAME", "KEY_NAME", "CONFIGURED_VALUE"}.issubset(columns)):
-        return "M_INIFILE_CONTENTS"
     if matches_column_alias(columns, "USER_NAME"):
         return "USERS"
 
@@ -333,14 +291,8 @@ def build_profile_issues(profile: str | None, rows: list[dict[str, Any]]) -> lis
                 )
             )
 
-    if profile == "M_PASSWORD_POLICY":
-        issues.extend(_evaluate_password_policy(rows))
-    elif profile == "AUDIT_POLICIES":
-        issues.extend(_evaluate_audit_policies(rows))
-    elif profile == "M_INIFILE_CONTENTS":
-        issues.extend(_evaluate_ini_contents(rows))
-    elif profile == "GRANTED_PRIVILEGES":
-        issues.extend(_evaluate_critical_privileges(rows))
+    if profile in ("RSPARAM", "TPFET"):
+        issues.extend(_evaluate_rsparam_policy(rows))
 
     return issues
 
@@ -426,89 +378,25 @@ def _parse_numeric(value: object) -> float | None:
         return None
 
 
-def _evaluate_password_policy(rows: list[dict[str, Any]]) -> list[ValidationIssue]:
+def _evaluate_rsparam_policy(rows: list[dict[str, Any]]) -> list[ValidationIssue]:
+    """Evaluate SAP APP (ABAP) password policy parameters from RSPARAM / TPFET data."""
     issues: list[ValidationIssue] = []
-    property_map: dict[str, tuple[int, object]] = {}
+    param_map: dict[str, tuple[int, object]] = {}
 
     for row_number, row in enumerate(rows, start=1):
-        property_column = _find_column_name(row, ("PROPERTY",))
+        param_column = _find_column_name(row, ("PARAMETER", "NAME"))
         value_column = _find_column_name(row, ("VALUE",))
-        if property_column and value_column:
-            property_map[normalize_text(row[property_column])] = (row_number, row[value_column])
+        if param_column and value_column:
+            param_map[normalize_text(row[param_column])] = (row_number, row[value_column])
 
-    for property_name, expected, rule_type, message in PASSWORD_POLICY_RULES:
-        if property_name not in property_map:
-            issues.append(ValidationIssue(row_number=0, column_name=property_name, message=f"לא נמצא פרמטר נדרש: {property_name}"))
+    for param_name, expected, rule_type, message in SAP_APP_RSPARAM_RULES:
+        if param_name not in param_map:
+            issues.append(ValidationIssue(row_number=0, column_name=param_name, message=f"לא נמצא פרמטר נדרש: {param_name}"))
             continue
 
-        row_number, actual_value = property_map[property_name]
+        row_number, actual_value = param_map[param_name]
         if not _compare_values(actual_value, expected, rule_type):
-            issues.append(ValidationIssue(row_number=row_number, column_name=property_name, message=message))
-
-    return issues
-
-
-def _evaluate_audit_policies(rows: list[dict[str, Any]]) -> list[ValidationIssue]:
-    active_found = False
-    for row in rows:
-        active_column = _find_column_name(row, ("IS_AUDIT_POLICY_ACTIVE",))
-        if active_column and normalize_text(row.get(active_column, "")) in {"true", "yes", "1"}:
-            active_found = True
-            break
-
-    if active_found:
-        return []
-
-    return [ValidationIssue(row_number=0, column_name="IS_AUDIT_POLICY_ACTIVE", message="לפחות מדיניות Audit אחת חייבת להיות פעילה")]
-
-
-def _evaluate_ini_contents(rows: list[dict[str, Any]]) -> list[ValidationIssue]:
-    issues: list[ValidationIssue] = []
-
-    for expected_file, expected_section, expected_key, expected_value, rule_type, message in INI_SECURITY_RULES:
-        matched = False
-        for row_number, row in enumerate(rows, start=1):
-            file_column = _find_column_name(row, ("FILE_NAME", "LAYER_FILE_NAME"))
-            section_column = _find_column_name(row, ("SECTION", "SECTION_NAME"))
-            key_column = _find_column_name(row, ("KEY", "KEY_NAME", "PARAMETER_NAME", "PROPERTY"))
-            value_column = _find_column_name(row, ("VALUE", "CONFIGURED_VALUE", "CURRENT_VALUE"))
-
-            if not section_column or not key_column or not value_column:
-                continue
-
-            file_matches = True if not file_column else normalize_text(row[file_column]) == normalize_text(expected_file)
-            section_matches = normalize_text(row[section_column]) == normalize_text(expected_section)
-            key_matches = normalize_text(row[key_column]) == normalize_text(expected_key)
-
-            if file_matches and section_matches and key_matches:
-                matched = True
-                if not _compare_values(row[value_column], expected_value, rule_type):
-                    issues.append(ValidationIssue(row_number=row_number, column_name=expected_key, message=message))
-                break
-
-        if not matched:
-            issues.append(ValidationIssue(row_number=0, column_name=expected_key, message=f"לא נמצאה הגדרה נדרשת: {expected_key}"))
-
-    return issues
-
-
-def _evaluate_critical_privileges(rows: list[dict[str, Any]]) -> list[ValidationIssue]:
-    issues: list[ValidationIssue] = []
-    for row_number, row in enumerate(rows, start=1):
-        grantee_column = _find_column_name(row, ("GRANTEE",))
-        privilege_column = _find_column_name(row, ("PRIVILEGE",))
-        if not grantee_column or not privilege_column:
-            continue
-
-        privilege_name = normalize_name(row[privilege_column])
-        if privilege_name in CRITICAL_PRIVILEGES:
-            issues.append(
-                ValidationIssue(
-                    row_number=row_number,
-                    column_name=row[grantee_column],
-                    message=f"זוהתה הרשאה קריטית הדורשת סקירה: {row[privilege_column]}",
-                )
-            )
+            issues.append(ValidationIssue(row_number=row_number, column_name=param_name, message=message))
 
     return issues
 

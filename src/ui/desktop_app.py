@@ -155,78 +155,144 @@ class ValidationDesktopApp(QMainWindow):
 
     SLOT_DEFINITIONS = {
         "USR02": {
-            "category": "טבלאות משתמשים",
+            "domain": "MA - ניהול גישה",
+            "sub_category": "1.1 - Joiners / Movers / Leavers",
             "description": "משתמשים - מקור חובה לבדיקות גישה, סטטוס ותאריכי התחברות.",
             "expected_file": "usr02_100.txt",
             "required": True,
         },
         "ADR6_USR21": {
             "label": "ADR6 / USER_ADDR",
-            "category": "טבלאות משתמשים",
+            "domain": "MA - ניהול גישה",
+            "sub_category": "1.1 - Joiners / Movers / Leavers",
             "description": "ניתן להזין קובצי ADR6 או USER_ADDR או את שניהם יחד לצורך העשרת נתוני המשתמשים מתוך USR02.",
             "expected_file": "adr6.txt או user_addr.txt",
             "required": False,
         },
         "AGR_USERS": {
-            "category": "טבלאות הרשאות כלליות",
+            "domain": "MA - ניהול גישה",
+            "sub_category": "1.2 - סקר הרשאות תקופתי",
             "description": "רולים-משתמשים - מיפוי המשתמשים לרולים במערכת.",
             "expected_file": "agr_users_100.txt",
             "required": True,
         },
         "AGR_1251": {
-            "category": "טבלאות הרשאות כלליות",
+            "domain": "MA - ניהול גישה",
+            "sub_category": "1.2 - סקר הרשאות תקופתי",
             "description": "רולים-אובייקטי הרשאה - זיהוי אובייקטי הרשאות רגישים.",
             "expected_file": "agr_1251_100.txt",
             "required": True,
         },
         "AGR_1252": {
-            "category": "טבלאות הרשאות כלליות",
+            "domain": "MA - ניהול גישה",
+            "sub_category": "1.2 - סקר הרשאות תקופתי",
             "description": "רולים-טרנזקציות - זיהוי גישות עסקיות וטרנזקציות.",
             "expected_file": "agr_1252_100.txt",
             "required": False,
         },
         "AGR_DEFINE": {
-            "category": "טבלאות הרשאות כלליות",
+            "domain": "MA - ניהול גישה",
+            "sub_category": "1.2 - סקר הרשאות תקופתי",
             "description": "רולים מורחב - מידע כללי על הגדרת הרול.",
             "expected_file": "agr_define.txt",
             "required": False,
         },
         "UST04": {
-            "category": "טבלאות הרשאות כלליות",
+            "domain": "MA - ניהול גישה",
+            "sub_category": "1.2 - סקר הרשאות תקופתי",
             "description": "פרופילים-משתמשים - שיוך פרופילים ישיר למשתמשים.",
             "expected_file": "ust04.txt",
             "required": False,
         },
-        "E070": {
-            "category": "טבלאות שינויים",
-            "description": "רשימת שינויים - נתוני transport requests ושינויים בסביבה.",
-            "expected_file": "e070_100.txt",
-            "required": True,
-        },
-        "T000": {
-            "category": "טבלאות שינויים",
-            "description": "לוג פעילות שינוי SCC4 - בקרות שינוי ברמת client.",
-            "expected_file": "t000.txt",
-            "required": False,
-        },
-        "STMS": {
-            "category": "טבלאות שינויים",
-            "description": "רשימת שינויים שהועברה דרך SCC4 או STMS.",
-            "expected_file": "stms.txt",
-            "required": False,
-        },
         "RSPARAM": {
-            "category": "מדיניות סיסמאות",
+            "domain": "MA - ניהול גישה",
+            "sub_category": "1.3 - משתמשי-על ומדיניות סיסמאות",
             "description": "פרמטרים סיסטמאיים - פרמטרי אבטחה והקשחת מערכת.",
             "expected_file": "rsparam.xlsx",
             "required": True,
         },
         "TPFET": {
             "label": "TPFET / RZ10",
-            "category": "מדיניות סיסמאות",
+            "domain": "MA - ניהול גישה",
+            "sub_category": "1.3 - משתמשי-על ומדיניות סיסמאות",
             "description": "פרמטרים סיסטמאיים נוספים, כולל פרופילי login כגון RZ10.",
             "expected_file": "rz10.txt",
             "required": False,
+        },
+        "E070": {
+            "domain": "MC - ניהול שינויים",
+            "sub_category": "2.1 - תיעוד ובקשות שינוי",
+            "description": "רשימת שינויים - נתוני transport requests ושינויים בסביבה.",
+            "expected_file": "e070_100.txt",
+            "required": True,
+        },
+        "T000": {
+            "domain": "MC - ניהול שינויים",
+            "sub_category": "2.3 - הפרדת סביבות DEV/QA/PRD",
+            "description": "לוג פעילות שינוי SCC4 - בקרות שינוי ברמת client.",
+            "expected_file": "t000.txt",
+            "required": False,
+        },
+        "STMS": {
+            "domain": "MC - ניהול שינויים",
+            "sub_category": "2.4 - Import לסביבת ייצור",
+            "description": "רשימת שינויים שהועברה דרך SCC4 או STMS.",
+            "expected_file": "stms.txt",
+            "required": False,
+        },
+    }
+
+    DOMAIN_DEFINITIONS: dict[str, Any] = {
+        "MA - ניהול גישה": {
+            "in_development": False,
+            "sub_categories": [
+                {
+                    "key": "1.1 - Joiners / Movers / Leavers",
+                    "description": "תהליכי הצטרפות, שינוי תפקיד ועזיבה — ווידוא שקיים אישור מנהל ושהגישה הוסרה בזמן.",
+                },
+                {
+                    "key": "1.2 - סקר הרשאות תקופתי",
+                    "description": "ביצוע סקר הרשאות תקופתי על ידי גורמים עסקיים (Business Owners) לווידוא נחיצות ההרשאות.",
+                },
+                {
+                    "key": "1.3 - משתמשי-על ומדיניות סיסמאות",
+                    "description": "ניהול משתמשי-על (BASIS, SAP*, DDIC) ובדיקת פרמטרי מדיניות סיסמאות במערכת.",
+                },
+            ],
+        },
+        "MC - ניהול שינויים": {
+            "in_development": False,
+            "sub_categories": [
+                {
+                    "key": "2.1 - תיעוד ובקשות שינוי",
+                    "description": "תיעוד בקשת השינוי ואישור עסקי לפני הפיתוח.",
+                },
+                {
+                    "key": "2.3 - הפרדת סביבות DEV/QA/PRD",
+                    "description": "הפרדה בין סביבת הפיתוח (DEV), הבחינה (QA) והייצור (PRD).",
+                },
+                {
+                    "key": "2.4 - Import לסביבת ייצור",
+                    "description": "בחינה של תהליך ה-Import לסביבת הייצור ומי מורשה לבצע אותו (בדרך כלל צוות ה-Basis).",
+                },
+            ],
+        },
+        "MO - ניהול תפעולי": {
+            "in_development": True,
+            "sub_categories": [
+                {
+                    "key": "3.1 - ניטור תהליכי רקע (Batch Jobs)",
+                    "description": "בודקים מה קורה אם ג'וב קריטי נכשל והאם יש בקרה על שינוי לוחות זמנים של ג'ובים.",
+                },
+                {
+                    "key": "3.2 - גיבויים ושחזור (Backups)",
+                    "description": "ווידוא שהגיבויים מבוצעים כסדרם ושיש שחזור תקופתי מוצלח (Restoration Test).",
+                },
+                {
+                    "key": "3.3 - ניהול תקלות (Incidents)",
+                    "description": "תהליך הטיפול בתקלות מערכת ותיעודן.",
+                },
+            ],
         },
     }
 
@@ -500,11 +566,13 @@ class ValidationDesktopApp(QMainWindow):
         slots_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
 
         current_row = 0
-        for category in self._ordered_categories():
-            palette = self._category_palette(category)
-            category_section = QGroupBox(self.format_ui_rtl_text(category))
-            category_section.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            category_section.setStyleSheet(
+        for domain in self._ordered_categories():
+            palette = self._category_palette(domain)
+            in_development = bool(self.DOMAIN_DEFINITIONS.get(domain, {}).get("in_development", False))
+
+            domain_section = QGroupBox(self.format_ui_rtl_text(domain))
+            domain_section.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            domain_section.setStyleSheet(
                 f"""
                 QGroupBox {{
                     font-weight: bold;
@@ -525,136 +593,200 @@ class ValidationDesktopApp(QMainWindow):
                 }}
                 """
             )
-            self.category_sections[category] = category_section
+            self.category_sections[domain] = domain_section
+            domain_section.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            domain_layout = QVBoxLayout(domain_section)
+            domain_layout.setContentsMargins(12, 18, 12, 12)
+            domain_layout.setSpacing(10)
 
-            category_section.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-            category_layout = QGridLayout(category_section)
-            category_layout.setContentsMargins(12, 18, 12, 12)
-            category_layout.setHorizontalSpacing(12)
-            category_layout.setVerticalSpacing(10)
-            category_layout.setColumnStretch(0, 0)
-            category_layout.setColumnStretch(1, 1)
-            category_layout.setColumnStretch(2, 2)
-            category_layout.setColumnStretch(3, 0)
-            category_layout.setColumnMinimumWidth(0, 140)
-            category_layout.setColumnMinimumWidth(3, 120)
-            category_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
-
-            category_button = QPushButton("הרץ בדיקה")
-            category_button.setMinimumHeight(34)
-            category_button.setToolTip(self.format_rtl_text(f"הרצת בדיקה עבור קבוצת {category}"))
-            category_button.setStyleSheet(
+            domain_button = QPushButton("הרץ בדיקות תחום")
+            domain_button.setMinimumHeight(34)
+            domain_button.setToolTip(self.format_rtl_text(f"הרצת בדיקות עבור תחום {domain}"))
+            domain_button.setStyleSheet(
                 f"background-color: {palette['button']}; border: 2px solid {palette['border']}; color: white; font-weight: bold;"
             )
-            category_button.clicked.connect(
-                lambda _checked=False, cat=category: self.run_category_validation(cat)
+            domain_button.clicked.connect(
+                lambda _checked=False, d=domain: self.run_domain_validation(d)
             )
-            self.category_run_buttons[category] = category_button
+            self.category_run_buttons[domain] = domain_button
 
-            section_row = 1
-            for slot_key, metadata in self.SLOT_DEFINITIONS.items():
-                if metadata["category"] != category:
-                    continue
+            sub_cat_style = f"""
+                QGroupBox {{
+                    font-weight: bold;
+                    border: 1px solid {palette['border']};
+                    border-radius: 7px;
+                    margin-top: 10px;
+                    padding-top: 14px;
+                    background-color: #f9fafb;
+                }}
+                QGroupBox::title {{
+                    subcontrol-origin: margin;
+                    subcontrol-position: top left;
+                    padding: 2px 8px;
+                    background-color: {palette['header']};
+                    color: white;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 11px;
+                    opacity: 0.85;
+                }}
+            """
 
-                display_name = metadata.get("label", slot_key)
-                slot_title = QLabel(self.format_ui_rtl_text(f"{display_name}{' *' if metadata['required'] else ''}"))
-                slot_title.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-                slot_title.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
-                slot_title.setStyleSheet("font-weight: bold;")
-                slot_title.setMinimumWidth(110)
+            for sub_cat_info in self.DOMAIN_DEFINITIONS.get(domain, {}).get("sub_categories", []):
+                sub_cat_key = str(sub_cat_info["key"])
+                sub_cat_desc = str(sub_cat_info["description"])
 
-                description = QLabel(self.format_ui_rtl_text(metadata["description"]))
-                description.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-                description.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
-                description.setWordWrap(True)
-                description.setMinimumHeight(34)
-                description.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+                sub_group = QGroupBox(self.format_ui_rtl_text(sub_cat_key))
+                sub_group.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                sub_group.setStyleSheet(sub_cat_style)
+                sub_group.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                sub_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-                sample = QLabel(self.format_ui_rtl_text(f"קובץ צפוי: {metadata['expected_file']}"))
-                sample.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-                sample.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
-                sample.setWordWrap(True)
-                sample.setStyleSheet("color: #5b6573;")
-                sample.setMinimumWidth(120)
-                sample.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+                if in_development:
+                    sub_group_layout = QVBoxLayout(sub_group)
+                    sub_group_layout.setContentsMargins(10, 14, 10, 10)
+                    sub_group_layout.setSpacing(6)
 
-                status_label = QLabel(self.format_ui_rtl_text("טרם נבחר קובץ"))
-                status_label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-                status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                status_label.setWordWrap(True)
-                status_label.setMinimumHeight(32)
-                status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-                status_label.setStyleSheet("padding: 6px; background: #ffffff; border: 1px solid #cfd6e4;")
+                    desc_label = QLabel(self.format_ui_rtl_text(sub_cat_desc))
+                    desc_label.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+                    desc_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+                    desc_label.setWordWrap(True)
+                    desc_label.setStyleSheet("color: #4f5d73;")
 
-                extraction_date_label = QLabel(self.format_ui_rtl_text("תאריך הפקה:"))
-                extraction_date_label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-                extraction_date_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                extraction_date_label.setStyleSheet("color: #5b6573;")
-                extraction_date_edit = QLineEdit(self._default_extraction_date())
-                extraction_date_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-                extraction_date_edit.setPlaceholderText("YYYY-MM-DD")
-                extraction_date_edit.setMinimumHeight(32)
-                extraction_date_edit.setMaximumWidth(170)
+                    dev_label = QLabel(self.format_ui_rtl_text("⚙ בפיתוח — אין בדיקות אוטומטיות זמינות עדיין"))
+                    dev_label.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+                    dev_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    dev_label.setStyleSheet(
+                        "color: #6b7280; font-style: italic; background: #f3f4f6;"
+                        " border: 1px dashed #d1d5db; border-radius: 4px; padding: 4px 8px;"
+                    )
 
-                extraction_date_row = QWidget()
-                extraction_date_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-                extraction_date_layout = QHBoxLayout(extraction_date_row)
-                extraction_date_layout.setContentsMargins(0, 0, 0, 0)
-                extraction_date_layout.setSpacing(6)
-                extraction_date_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                extraction_date_layout.addWidget(extraction_date_label, 0, Qt.AlignmentFlag.AlignRight)
-                extraction_date_layout.addWidget(extraction_date_edit, 0, Qt.AlignmentFlag.AlignRight)
-                extraction_date_layout.addStretch(1)
+                    sub_group_layout.addWidget(desc_label)
+                    sub_group_layout.addWidget(dev_label)
+                else:
+                    category_layout = QGridLayout(sub_group)
+                    category_layout.setContentsMargins(12, 16, 12, 10)
+                    category_layout.setHorizontalSpacing(12)
+                    category_layout.setVerticalSpacing(10)
+                    category_layout.setColumnStretch(0, 0)
+                    category_layout.setColumnStretch(1, 1)
+                    category_layout.setColumnStretch(2, 2)
+                    category_layout.setColumnStretch(3, 0)
+                    category_layout.setColumnMinimumWidth(0, 140)
+                    category_layout.setColumnMinimumWidth(3, 120)
+                    category_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
 
-                select_button = QPushButton("בחירת קבצים" if slot_key in self.MULTI_FILE_SLOTS else "בחירת קובץ")
-                select_button.setMinimumHeight(34)
-                select_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-                select_button.clicked.connect(lambda _checked=False, sk=slot_key: self.choose_file(sk))
+                    # Sub-category description row
+                    sub_desc_label = QLabel(self.format_ui_rtl_text(sub_cat_desc))
+                    sub_desc_label.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+                    sub_desc_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    sub_desc_label.setWordWrap(True)
+                    sub_desc_label.setStyleSheet("color: #4f5d73; padding: 2px 0;")
+                    category_layout.addWidget(sub_desc_label, 0, 0, 1, 4)
 
-                clear_slot_button = QPushButton("נקה")
-                clear_slot_button.setMinimumHeight(34)
-                clear_slot_button.setMinimumWidth(74)
-                clear_slot_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-                clear_slot_button.clicked.connect(lambda _checked=False, sk=slot_key: self.clear_slot_selection(sk))
+                    section_row = 1
+                    for slot_key, metadata in self.SLOT_DEFINITIONS.items():
+                        if metadata.get("sub_category") != sub_cat_key:
+                            continue
 
-                slot_buttons = QWidget()
-                slot_buttons.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-                slot_buttons_layout = QHBoxLayout(slot_buttons)
-                slot_buttons_layout.setContentsMargins(0, 0, 0, 0)
-                slot_buttons_layout.setSpacing(6)
-                slot_buttons_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                slot_buttons_layout.addWidget(select_button)
-                slot_buttons_layout.addWidget(clear_slot_button)
+                        display_name = metadata.get("label", slot_key)
+                        slot_title = QLabel(self.format_ui_rtl_text(f"{display_name}{' *' if metadata['required'] else ''}"))
+                        slot_title.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+                        slot_title.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+                        slot_title.setStyleSheet("font-weight: bold;")
+                        slot_title.setMinimumWidth(110)
 
-                category_layout.setRowMinimumHeight(section_row, 42)
-                category_layout.addWidget(slot_title, section_row, 3)
-                category_layout.addWidget(description, section_row, 2)
-                category_layout.addWidget(sample, section_row, 1)
-                category_layout.addWidget(slot_buttons, section_row, 0)
-                section_row += 1
-                category_layout.setRowMinimumHeight(section_row, 36)
-                category_layout.addWidget(status_label, section_row, 0, 1, 4)
-                section_row += 1
-                category_layout.setRowMinimumHeight(section_row, 34)
-                category_layout.addWidget(extraction_date_row, section_row, 0, 1, 4)
-                section_row += 1
+                        description = QLabel(self.format_ui_rtl_text(metadata["description"]))
+                        description.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+                        description.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+                        description.setWordWrap(True)
+                        description.setMinimumHeight(34)
+                        description.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-                self.slot_widgets[slot_key] = {
-                    "path_label": status_label,
-                    "button": select_button,
-                    "clear_button": clear_slot_button,
-                    "metadata": metadata,
-                    "selected_paths": [],
-                    "extraction_date_edit": extraction_date_edit,
-                    "extraction_date_label": extraction_date_label,
-                }
+                        sample = QLabel(self.format_ui_rtl_text(f"קובץ צפוי: {metadata['expected_file']}"))
+                        sample.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+                        sample.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+                        sample.setWordWrap(True)
+                        sample.setStyleSheet("color: #5b6573;")
+                        sample.setMinimumWidth(120)
+                        sample.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-            # Add the 'הרץ בדיקה' button at the last row, spanning all columns
-            category_layout.setRowMinimumHeight(section_row, 40)
-            category_layout.addWidget(category_button, section_row, 0, 1, 4, alignment=Qt.AlignmentFlag.AlignRight)
-            section_row += 1
-            category_section.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            slots_layout.addWidget(category_section, current_row, 0, 1, 4)
+                        status_label = QLabel(self.format_ui_rtl_text("טרם נבחר קובץ"))
+                        status_label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                        status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                        status_label.setWordWrap(True)
+                        status_label.setMinimumHeight(32)
+                        status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+                        status_label.setStyleSheet("padding: 6px; background: #ffffff; border: 1px solid #cfd6e4;")
+
+                        extraction_date_label = QLabel(self.format_ui_rtl_text("תאריך הפקה:"))
+                        extraction_date_label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                        extraction_date_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                        extraction_date_label.setStyleSheet("color: #5b6573;")
+                        extraction_date_edit = QLineEdit(self._default_extraction_date())
+                        extraction_date_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+                        extraction_date_edit.setPlaceholderText("YYYY-MM-DD")
+                        extraction_date_edit.setMinimumHeight(32)
+                        extraction_date_edit.setMaximumWidth(170)
+
+                        extraction_date_row = QWidget()
+                        extraction_date_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                        extraction_date_layout = QHBoxLayout(extraction_date_row)
+                        extraction_date_layout.setContentsMargins(0, 0, 0, 0)
+                        extraction_date_layout.setSpacing(6)
+                        extraction_date_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                        extraction_date_layout.addWidget(extraction_date_label, 0, Qt.AlignmentFlag.AlignRight)
+                        extraction_date_layout.addWidget(extraction_date_edit, 0, Qt.AlignmentFlag.AlignRight)
+                        extraction_date_layout.addStretch(1)
+
+                        select_button = QPushButton("בחירת קבצים" if slot_key in self.MULTI_FILE_SLOTS else "בחירת קובץ")
+                        select_button.setMinimumHeight(34)
+                        select_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                        select_button.clicked.connect(lambda _checked=False, sk=slot_key: self.choose_file(sk))
+
+                        clear_slot_button = QPushButton("נקה")
+                        clear_slot_button.setMinimumHeight(34)
+                        clear_slot_button.setMinimumWidth(74)
+                        clear_slot_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                        clear_slot_button.clicked.connect(lambda _checked=False, sk=slot_key: self.clear_slot_selection(sk))
+
+                        slot_buttons = QWidget()
+                        slot_buttons.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                        slot_buttons_layout = QHBoxLayout(slot_buttons)
+                        slot_buttons_layout.setContentsMargins(0, 0, 0, 0)
+                        slot_buttons_layout.setSpacing(6)
+                        slot_buttons_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                        slot_buttons_layout.addWidget(select_button)
+                        slot_buttons_layout.addWidget(clear_slot_button)
+
+                        category_layout.setRowMinimumHeight(section_row, 42)
+                        category_layout.addWidget(slot_title, section_row, 3)
+                        category_layout.addWidget(description, section_row, 2)
+                        category_layout.addWidget(sample, section_row, 1)
+                        category_layout.addWidget(slot_buttons, section_row, 0)
+                        section_row += 1
+                        category_layout.setRowMinimumHeight(section_row, 36)
+                        category_layout.addWidget(status_label, section_row, 0, 1, 4)
+                        section_row += 1
+                        category_layout.setRowMinimumHeight(section_row, 34)
+                        category_layout.addWidget(extraction_date_row, section_row, 0, 1, 4)
+                        section_row += 1
+
+                        self.slot_widgets[slot_key] = {
+                            "path_label": status_label,
+                            "button": select_button,
+                            "clear_button": clear_slot_button,
+                            "metadata": metadata,
+                            "selected_paths": [],
+                            "extraction_date_edit": extraction_date_edit,
+                            "extraction_date_label": extraction_date_label,
+                        }
+
+                domain_layout.addWidget(sub_group)
+
+            domain_layout.addWidget(domain_button, 0, Qt.AlignmentFlag.AlignRight)
+            domain_section.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            slots_layout.addWidget(domain_section, current_row, 0, 1, 4)
             current_row += 1
 
         bottom_spacer = QLabel("")
@@ -806,59 +938,6 @@ class ValidationDesktopApp(QMainWindow):
         self.user_preview_hint.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.user_preview_hint.setMaximumHeight(44)
         user_preview_layout.addWidget(self.user_preview_hint, 0, Qt.AlignmentFlag.AlignTop)
-
-        self.user_review_progress_group = QGroupBox(self.format_ui_rtl_text("סיכום התקדמות סקירה"))
-        self.user_review_progress_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.user_review_progress_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        user_review_progress_layout = QVBoxLayout(self.user_review_progress_group)
-        user_review_progress_layout.setContentsMargins(8, 8, 8, 8)
-        user_review_progress_layout.setSpacing(6)
-
-        user_review_counts_row = QWidget()
-        user_review_counts_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        user_review_counts_layout = QHBoxLayout(user_review_counts_row)
-        user_review_counts_layout.setContentsMargins(0, 0, 0, 0)
-        user_review_counts_layout.setSpacing(14)
-        user_review_counts_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-
-        self.user_review_total_label = QLabel(self.format_ui_rtl_text("סה\"כ משתמשים בדוח: 0"))
-        self.user_review_total_label.setStyleSheet("font-weight: bold;")
-        self.user_review_reviewed_label = QLabel(self.format_ui_rtl_text("משתמשים שנבדקו: 0"))
-        self.user_review_reviewed_label.setStyleSheet("font-weight: bold; color: #2e7d32;")
-        self.user_review_unreviewed_label = QLabel(self.format_ui_rtl_text("משתמשים שטרם נבדקו: 0"))
-        self.user_review_unreviewed_label.setStyleSheet("font-weight: bold; color: #1565c0;")
-
-        user_review_counts_layout.addWidget(self.user_review_total_label, 0, Qt.AlignmentFlag.AlignRight)
-        user_review_counts_layout.addWidget(self.user_review_reviewed_label, 0, Qt.AlignmentFlag.AlignRight)
-        user_review_counts_layout.addWidget(self.user_review_unreviewed_label, 0, Qt.AlignmentFlag.AlignRight)
-        user_review_counts_layout.addStretch(1)
-        user_review_progress_layout.addWidget(user_review_counts_row)
-
-        self.user_review_progress_bar = QProgressBar()
-        self.user_review_progress_bar.setMinimum(0)
-        self.user_review_progress_bar.setMaximum(100)
-        self.user_review_progress_bar.setValue(0)
-        self.user_review_progress_bar.setTextVisible(True)
-        self.user_review_progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.user_review_progress_bar.setFormat("0%")
-        self.user_review_progress_bar.setStyleSheet(
-            "QProgressBar {"
-            "border: 1px solid #b0bec5; border-radius: 4px;"
-            "background-color: #f5f7fa; text-align: center;"
-            "font-weight: bold; color: #0d47a1;"
-            "}"
-            "QProgressBar::chunk {"
-            "background-color: #42a5f5; border-radius: 3px;"
-            "}"
-        )
-        user_review_progress_layout.addWidget(self.user_review_progress_bar)
-
-        self.user_review_progress_percent_label = QLabel(self.format_ui_rtl_text("התקדמות השלמת סקירה: 0%"))
-        self.user_review_progress_percent_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.user_review_progress_percent_label.setStyleSheet("font-weight: bold; color: #0d47a1;")
-        user_review_progress_layout.addWidget(self.user_review_progress_percent_label)
-
-        # (moved above the actions row)
 
         self.user_preview_table = QTableWidget(0, 0)
         self.user_preview_table.setEditTriggers(
@@ -1016,15 +1095,21 @@ class ValidationDesktopApp(QMainWindow):
         )
 
     def _ordered_categories(self) -> list[str]:
-        categories: list[str] = []
-        for metadata in self.SLOT_DEFINITIONS.values():
-            if metadata["category"] not in categories:
-                categories.append(metadata["category"])
-        return categories
+        return list(self.DOMAIN_DEFINITIONS.keys())
+
+    def _ordered_sub_categories(self, domain: str) -> list[str]:
+        return [
+            sub["key"]
+            for sub in self.DOMAIN_DEFINITIONS.get(domain, {}).get("sub_categories", [])
+        ]
 
     def _category_palette(self, category: str) -> dict[str, str]:
-        # Unified palette: active tab color (burgundy)
-        return {"header": "#6d002f", "button": "#6d002f", "border": "#6d002f"}
+        if category.startswith("MA"):
+            return {"header": "#16325c", "button": "#16325c", "border": "#16325c"}
+        if category.startswith("MC"):
+            return {"header": "#1b5e20", "button": "#1b5e20", "border": "#1b5e20"}
+        # MO — in development, shown in gray
+        return {"header": "#6b7280", "button": "#6b7280", "border": "#9ca3af"}
 
     @staticmethod
     def _default_extraction_date() -> str:
@@ -1502,8 +1587,32 @@ class ValidationDesktopApp(QMainWindow):
         preview = " | ".join(unique_messages)
         return preview if len(preview) <= 90 else f"{preview[:87]}..."
 
+    @staticmethod
+    def _is_intake_issue(issue: "ValidationIssue") -> bool:
+        """Returns True only for structural/technical intake issues.
+
+        Intake issues (shown in the intake log):
+          - Missing required column  (row_number==0, message contains "עמודת חובה חסרה")
+          - File structure mismatch  (row_number==0, message contains "אינו תואם למבנה")
+          - Missing required column group (row_number==0, message contains "נדרשת לפחות")
+          - Missing required value in a data row (row_number>0, message contains "ערך חובה חסר")
+
+        NOT intake issues (audit/analysis findings shown in the analysis tab):
+          - RSPARAM / TPFET policy violations
+          - "לא נמצא פרמטר נדרש"
+          - Any other business-logic row-level check
+        """
+        msg = issue.message
+        if issue.row_number == 0:
+            return (
+                "עמודת חובה חסרה" in msg
+                or "אינו תואם למבנה" in msg
+                or "נדרשת לפחות" in msg
+            )
+        return "ערך חובה חסר" in msg
+
     def _get_slot_category(self, slot_key: str) -> str:
-        return str(self.SLOT_DEFINITIONS.get(slot_key, {}).get("category", "לא סווג"))
+        return str(self.SLOT_DEFINITIONS.get(slot_key, {}).get("sub_category", "לא סווג"))
 
     def _get_slot_display_name(self, slot_key: str) -> str:
         metadata = self.SLOT_DEFINITIONS.get(slot_key, {})
@@ -1873,11 +1982,18 @@ class ValidationDesktopApp(QMainWindow):
             return self._parse_required_columns()
         return self._parse_required_columns(self._suggest_required_columns(slot_key))
 
-    def _get_category_slots(self, category: str) -> list[str]:
+    def _get_category_slots(self, sub_category: str) -> list[str]:
         return [
             slot_key
             for slot_key, metadata in self.SLOT_DEFINITIONS.items()
-            if metadata["category"] == category
+            if metadata.get("sub_category") == sub_category
+        ]
+
+    def _get_domain_slots(self, domain: str) -> list[str]:
+        return [
+            slot_key
+            for slot_key, metadata in self.SLOT_DEFINITIONS.items()
+            if metadata.get("domain") == domain
         ]
 
     def _current_file_paths(self) -> list[str]:
@@ -2460,6 +2576,9 @@ class ValidationDesktopApp(QMainWindow):
         return preview_rows
 
     def refresh_user_preview(self) -> None:
+        # Prevent nested refresh calls from transient Qt events while the table is rebuilding.
+        if self._refreshing_user_preview:
+            return
         self._configure_user_preview_table()
         self._refreshing_user_preview = True
         self.user_preview_table.blockSignals(True)
@@ -2550,8 +2669,6 @@ class ValidationDesktopApp(QMainWindow):
 
                 self._update_review_row_highlight(row_index)
 
-            self._refresh_user_review_progress_summary_from_table()
-
             self.user_preview_table.resizeColumnsToContents()
             for column_index, field_name in enumerate(self.user_preview_visible_columns):
                 default_width = int(self._get_user_preview_column_definition(field_name).get("width", 120))
@@ -2563,6 +2680,7 @@ class ValidationDesktopApp(QMainWindow):
             self.user_preview_table.blockSignals(False)
             self._refreshing_user_preview = False
             self.user_preview_table.setSortingEnabled(True)
+            self._refresh_user_review_progress_summary_from_table()
 
     def run_validation(self) -> None:
         file_paths = self._current_file_paths()
@@ -2573,6 +2691,79 @@ class ValidationDesktopApp(QMainWindow):
 
         self.tabs.setCurrentIndex(1)
         self._run_slot_validation(self.selected_slot_key, file_paths, show_feedback=True)
+
+    def run_domain_validation(self, domain: str) -> None:
+        if bool(self.DOMAIN_DEFINITIONS.get(domain, {}).get("in_development", False)):
+            QMessageBox.information(
+                self,
+                "תחום בפיתוח",
+                f"תחום '{domain}' נמצא בפיתוח ואינו כולל בדיקות אוטומטיות עדיין.\n\nבדיקות לתחום זה יתווספו בגרסאות הבאות.",
+            )
+            return
+
+        domain_slots = self._get_domain_slots(domain)
+        selected_slots: list[tuple[str, list[str]]] = []
+        missing_required: list[str] = []
+
+        for slot_key in domain_slots:
+            file_paths = list(self.slot_widgets[slot_key].get("selected_paths", []))
+            if file_paths:
+                selected_slots.append((slot_key, file_paths))
+            elif self.SLOT_DEFINITIONS[slot_key]["required"]:
+                missing_required.append(slot_key)
+
+        if not selected_slots:
+            QMessageBox.warning(
+                self,
+                "לא נבחרו קבצים",
+                f"לא נבחרו קבצים עבור תחום {domain}. יש לבחור לפחות קובץ אחד לפני הרצת הבדיקה.",
+            )
+            return
+
+        if missing_required:
+            QMessageBox.warning(
+                self,
+                "חסרים קבצי חובה",
+                f"בתחום {domain} חסרים קבצי חובה עבור המשבצות: {', '.join(missing_required)}.\n\nהבדיקה תמשיך עבור הקבצים שנבחרו.",
+            )
+
+        processed_slots = 0
+        processed_files = 0
+        total_rows = 0
+        invalid_slots = 0
+        failed_slots: list[str] = []
+
+        for slot_key, file_paths in selected_slots:
+            slot_summary = self._run_slot_validation(slot_key, file_paths, show_feedback=False)
+            processed_slots += 1
+            processed_files += int(slot_summary["file_count"])
+            total_rows += int(slot_summary["total_rows"])
+
+            if slot_summary["status"] == "error":
+                failed_slots.append(slot_key)
+            elif not bool(slot_summary["is_valid"]):
+                invalid_slots += 1
+
+        summary_lines = [
+            f"בדיקת תחום {domain} הושלמה.",
+            f"משבצות שנבדקו: {processed_slots}",
+            f"קבצים שנבדקו: {processed_files}",
+            f"שורות שנבדקו: {total_rows}",
+        ]
+
+        if invalid_slots:
+            summary_lines.append(f"משבצות עם ממצאים: {invalid_slots}")
+        if failed_slots:
+            summary_lines.append(f"משבצות שנכשלו בעיבוד: {', '.join(failed_slots)}")
+        summary_lines.append("ניתן לבצע לחיצה כפולה על הרשומה בלוג לצפייה בפירוט.")
+
+        self.summary_group.show()
+        self.results_group.show()
+
+        if invalid_slots or failed_slots:
+            QMessageBox.warning(self, "בדיקת תחום הושלמה עם ממצאים", "\n".join(summary_lines))
+        else:
+            QMessageBox.information(self, "בדיקת תחום הושלמה", "\n".join(summary_lines))
 
     def run_category_validation(self, category: str) -> None:
         selected_slots: list[tuple[str, list[str]]] = []
@@ -2676,12 +2867,16 @@ class ValidationDesktopApp(QMainWindow):
         self.summary_labels["total"].setText(str(result.summary.total_rows))
         self.summary_labels["valid"].setText(str(result.summary.valid_rows))
         self.summary_labels["invalid"].setText(str(result.summary.invalid_rows))
-        status_text = "תקין" if result.summary.is_valid else f"נמצאו שגיאות - {slot_key}"
+
+        # Only intake-level issues (structural / missing required) surface in this tab.
+        # Audit/analysis findings (e.g. RSPARAM policy) are deferred to the analysis tab.
+        intake_issues = [iss for iss in result.issues if self._is_intake_issue(iss)]
+        status_text = "תקין" if not intake_issues else f"שגיאות קליטה - {slot_key}"
         self.summary_labels["status"].setText(status_text)
 
         self.issues_table.setRowCount(0)
-        if result.issues:
-            for issue in result.issues:
+        if intake_issues:
+            for issue in intake_issues:
                 row_index = self.issues_table.rowCount()
                 self.issues_table.insertRow(row_index)
                 values = [
@@ -2695,7 +2890,7 @@ class ValidationDesktopApp(QMainWindow):
                     self.issues_table.setItem(row_index, column, item)
         else:
             self.issues_table.insertRow(0)
-            for column, value in enumerate(["-", "-", "לא נמצאו שגיאות"]):
+            for column, value in enumerate(["-", "-", "לא נמצאו שגיאות קליטה"]):
                 item = QTableWidgetItem(value)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.issues_table.setItem(0, column, item)
@@ -2707,16 +2902,16 @@ class ValidationDesktopApp(QMainWindow):
         file_count = len(result.source_files) if result.source_files else len(file_paths)
 
         if show_feedback:
-            if result.summary.is_valid:
+            if not intake_issues:
                 QMessageBox.information(
                     self,
                     "הבדיקה הושלמה",
-                    f"בדיקת המשבצת {slot_key} הסתיימה ללא שגיאות. נקלטו {file_count} קבצים.",
+                    f"בדיקת המשבצת {slot_key} הסתיימה ללא שגיאות קליטה. נקלטו {file_count} קבצים.",
                 )
             else:
-                ordered_messages = []
-                structure_messages = [issue.message for issue in result.issues if "אינו תואם למבנה" in issue.message]
-                other_messages = [issue.message for issue in result.issues if "אינו תואם למבנה" not in issue.message]
+                ordered_messages: list[str] = []
+                structure_messages = [iss.message for iss in intake_issues if "אינו תואם למבנה" in iss.message]
+                other_messages = [iss.message for iss in intake_issues if "אינו תואם למבנה" not in iss.message]
                 for message in structure_messages + other_messages:
                     if message not in ordered_messages:
                         ordered_messages.append(message)
@@ -2725,8 +2920,8 @@ class ValidationDesktopApp(QMainWindow):
                 summary_text = "\n".join(f"• {message}" for message in ordered_messages)
                 QMessageBox.warning(
                     self,
-                    "נמצאו שגיאות בבדיקה",
-                    f"בדיקת המשבצת {slot_key} הסתיימה עם שגיאות.\n\n{summary_text}\n\nניתן לבצע לחיצה כפולה על הרשומה בלוג לצפייה בפירוט.",
+                    "נמצאו שגיאות קליטה",
+                    f"בדיקת המשבצת {slot_key} הסתיימה עם שגיאות קליטה.\n\n{summary_text}\n\nממצאי ביקורת יוצגו בטאב 'ביצוע ניתוח לביקורת'.",
                 )
 
         return {
@@ -2735,7 +2930,7 @@ class ValidationDesktopApp(QMainWindow):
             "file_count": file_count,
             "total_rows": result.summary.total_rows,
             "invalid_rows": result.summary.invalid_rows,
-            "is_valid": result.summary.is_valid,
+            "is_valid": len(intake_issues) == 0,
         }
 
     def _append_run_log_entries(self, slot_key: str, file_paths: list[str], result) -> None:
@@ -2761,7 +2956,10 @@ class ValidationDesktopApp(QMainWindow):
         for path in file_paths:
             file_name = Path(path).name
             file_issues = issues_by_file.get(file_name, [])
-            status_text = "שגוי" if file_issues else "תקין"
+            # Status and preview in the intake log are based only on intake-level issues.
+            # All issues (including audit findings) are stored for drill-down details.
+            intake_file_issues = [iss for iss in file_issues if self._is_intake_issue(iss)]
+            status_text = "שגוי" if intake_file_issues else "תקין"
             checked_at = datetime.now()
             row_count = row_counts_by_file.get(file_name, 0)
             record = {
@@ -2771,8 +2969,8 @@ class ValidationDesktopApp(QMainWindow):
                 "extraction_date": extraction_date,
                 "row_count": row_count,
                 "status": status_text,
-                "error_count": len(file_issues),
-                "error_preview": self._build_issue_preview(file_issues),
+                "error_count": len(intake_file_issues),
+                "error_preview": self._build_issue_preview(intake_file_issues),
                 "date": checked_at.strftime("%Y-%m-%d"),
                 "time": checked_at.strftime("%H:%M:%S"),
                 "issues": list(file_issues),
@@ -2788,7 +2986,7 @@ class ValidationDesktopApp(QMainWindow):
                 extraction_date,
                 str(row_count),
                 status_text,
-                str(len(file_issues)),
+                str(len(intake_file_issues)),
                 str(record["error_preview"]),
                 str(record["date"]),
                 str(record["time"]),
@@ -2873,12 +3071,26 @@ class ValidationDesktopApp(QMainWindow):
         ]
 
         issues = record.get("issues", [])
+        intake = [iss for iss in issues if self._is_intake_issue(iss)]
+        audit = [iss for iss in issues if not self._is_intake_issue(iss)]
+
         if not issues:
-            lines.append("לא נמצאו שגיאות בקובץ זה.")
+            lines.append("לא נמצאו שגיאות קליטה וממצאי ביקורת.")
         else:
-            for issue in issues:
-                row_label = issue.row_number if issue.row_number > 0 else "מבנה"
-                lines.append(f"- שורה {row_label} / {issue.column_name}: {issue.message}")
+            if intake:
+                lines.append("--- שגיאות קליטה ---")
+                for issue in intake:
+                    row_label = issue.row_number if issue.row_number > 0 else "מבנה"
+                    lines.append(f"- שורה {row_label} / {issue.column_name}: {issue.message}")
+            else:
+                lines.append("--- שגיאות קליטה: אין ---")
+
+            if audit:
+                lines.append("")
+                lines.append("--- ממצאי ביקורת (לפירוט ראה טאב 'ביצוע ניתוח לביקורת') ---")
+                for issue in audit:
+                    row_label = issue.row_number if issue.row_number > 0 else "מבנה"
+                    lines.append(f"- שורה {row_label} / {issue.column_name}: {issue.message}")
 
         return self.format_rtl_text("\n".join(lines))
 
