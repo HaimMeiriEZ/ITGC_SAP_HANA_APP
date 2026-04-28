@@ -1,18 +1,22 @@
-import json
+﻿import json
 import os
 import re
 import subprocess
 import sys
 import copy
+from typing import Any
 from datetime import datetime, date
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
-from PySide6.QtCore import Qt, QDate
+from PySide6.QtCore import QCoreApplication, QDate, Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QSizePolicy,
+    QTabWidget,
     QApplication,
     QFileDialog,
     QComboBox,
@@ -29,11 +33,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QPlainTextEdit,
-    QTabWidget,
     QTextEdit,
     QProgressBar,
     QVBoxLayout,
@@ -52,15 +54,15 @@ def get_qt_app() -> QApplication:
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
     app = QApplication.instance()
-    if app is None:
+    if not isinstance(app, QApplication):
         app = QApplication(sys.argv)
-        app.setLayoutDirection(Qt.RightToLeft)
+        app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         app.setFont(QFont("Segoe UI", 10))
     return app
 
 
 class SortableTableWidgetItem(QTableWidgetItem):
-    SORT_ROLE = Qt.UserRole + 2
+    SORT_ROLE = Qt.ItemDataRole.UserRole + 2
 
     def __lt__(self, other: object) -> bool:
         if isinstance(other, QTableWidgetItem):
@@ -70,7 +72,8 @@ class SortableTableWidgetItem(QTableWidgetItem):
                 left = "" if self_sort_value is None else str(self_sort_value)
                 right = "" if other_sort_value is None else str(other_sort_value)
                 return left < right
-        return super().__lt__(other)
+            return super().__lt__(other)
+        return NotImplemented
 
 
 class ValidationDesktopApp(QMainWindow):
@@ -245,20 +248,20 @@ class ValidationDesktopApp(QMainWindow):
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         self.report_path: Path | None = None
         self.log_export_path: Path | None = None
-        self.slot_widgets: dict[str, dict[str, object]] = {}
+        self.slot_widgets: dict[str, dict[str, Any]] = {}
         self.category_run_buttons: dict[str, QPushButton] = {}
         self.category_sections: dict[str, QGroupBox] = {}
         self.selected_slot_key: str | None = None
         self.load_history: list[str] = []
         self.summary_labels: dict[str, QLabel] = {}
-        self.run_log_records: list[dict[str, object]] = []
+        self.run_log_records: list[dict[str, Any]] = []
         self._allow_user_preview_persistence = base_dir is not None or "unittest" not in sys.modules
         self.last_file_dialog_directory = self._load_last_file_dialog_directory()
         self._refreshing_user_preview = False
         self.user_preview_export_path: Path | None = None
         self.user_reviewer_state = self._load_user_reviewer_state()
         self.user_preview_visible_columns = self._load_user_preview_column_selection()
-        self.system_settings_widgets: dict[str, object] = {}
+        self.system_settings_widgets: dict[str, Any] = {}
         self.system_settings_sections: dict[str, QGroupBox] = {}
         self.system_settings_unavailable_labels: dict[str, QLabel] = {}
         self.system_settings_file_mapping_order: list[str] = []
@@ -287,11 +290,11 @@ class ValidationDesktopApp(QMainWindow):
         self.setWindowTitle(self.format_rtl_text("כלי להערכת בקרות ITGC בסביבת SAP HANA APP"))
         self.setMinimumSize(1180, 760)
         self.resize(1280, 860)
-        self.setLayoutDirection(Qt.RightToLeft)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
     def _build_ui(self) -> None:
         central_widget = QWidget()
-        central_widget.setLayoutDirection(Qt.RightToLeft)
+        central_widget.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.setCentralWidget(central_widget)
 
         main_layout = QVBoxLayout(central_widget)
@@ -299,7 +302,7 @@ class ValidationDesktopApp(QMainWindow):
         main_layout.setSpacing(12)
 
         _title_container = QWidget()
-        _title_container.setLayoutDirection(Qt.LeftToRight)
+        _title_container.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         _title_row = QHBoxLayout(_title_container)
         _title_row.setContentsMargins(0, 0, 0, 0)
         _title_row.setSpacing(0)
@@ -310,7 +313,7 @@ class ValidationDesktopApp(QMainWindow):
         main_layout.addWidget(_title_container)
 
         _header_container = QWidget()
-        _header_container.setLayoutDirection(Qt.LeftToRight)
+        _header_container.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         _header_row = QHBoxLayout(_header_container)
         _header_row.setContentsMargins(0, 0, 0, 0)
         _header_row.setSpacing(0)
@@ -327,14 +330,14 @@ class ValidationDesktopApp(QMainWindow):
             "</p>"
         )
         self.hint_label.setFixedHeight(46)
-        self.hint_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.hint_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.hint_label.setStyleSheet(
             "background: transparent; border: none; padding: 0;"
         )
 
         self.actions_row = QWidget()
-        self.actions_row.setLayoutDirection(Qt.LeftToRight)
-        self.actions_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.actions_row.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.actions_row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         buttons_layout = QHBoxLayout(self.actions_row)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(8)
@@ -342,6 +345,7 @@ class ValidationDesktopApp(QMainWindow):
 
         self.clear_last_load_button = QPushButton(self.format_ui_rtl_text("נקה טעינה אחרונה"))
         self.clear_last_load_button.clicked.connect(self.clear_last_loaded_slot)
+        # ...existing code for the rest of _build_ui...
         buttons_layout.addWidget(self.clear_last_load_button)
 
         self.clear_button = QPushButton(self.format_ui_rtl_text("נקה מסך"))
@@ -362,9 +366,9 @@ class ValidationDesktopApp(QMainWindow):
         buttons_layout.addWidget(self.report_button)
 
         self.tabs = QTabWidget()
-        self.tabs.setLayoutDirection(Qt.RightToLeft)
+        self.tabs.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.tabs.setDocumentMode(True)
-        self.tabs.setTabPosition(QTabWidget.North)
+        self.tabs.setTabPosition(QTabWidget.TabPosition.North)
         self.tabs.setMovable(False)
         self.tabs.setStyleSheet(
             """
@@ -391,7 +395,7 @@ class ValidationDesktopApp(QMainWindow):
         )
 
         self.intake_tab = QWidget()
-        self.intake_tab.setLayoutDirection(Qt.RightToLeft)
+        self.intake_tab.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.intake_layout = QVBoxLayout(self.intake_tab)
         self.intake_layout.setContentsMargins(8, 8, 8, 8)
         self.intake_layout.setSpacing(10)
@@ -400,7 +404,7 @@ class ValidationDesktopApp(QMainWindow):
         self.intake_layout.addWidget(self.actions_row)
 
         self.analysis_tab = QWidget()
-        self.analysis_tab.setLayoutDirection(Qt.RightToLeft)
+        self.analysis_tab.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.analysis_layout = QVBoxLayout(self.analysis_tab)
         self.analysis_layout.setContentsMargins(12, 12, 12, 12)
         self.analysis_layout.setSpacing(10)
@@ -408,48 +412,58 @@ class ValidationDesktopApp(QMainWindow):
             self.format_ui_rtl_text("לאחר טעינת הקבצים ניתן לבצע ניתוח לביקורת ולסקור כאן את הממצאים המרכזיים.")
         )
         self.analysis_hint_label.setWordWrap(True)
-        self.analysis_hint_label.setLayoutDirection(Qt.LeftToRight)
-        self.analysis_hint_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        self.analysis_hint_label.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.analysis_hint_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         self.analysis_layout.addWidget(self.analysis_hint_label)
         self.audit_run_button = QPushButton(self.format_ui_rtl_text("בצע ניתוח לביקורת עבור המשבצת שנבחרה"))
         self.audit_run_button.clicked.connect(self.run_validation)
-        self.analysis_layout.addWidget(self.audit_run_button, 0, Qt.AlignRight)
+        self.analysis_layout.addWidget(self.audit_run_button, 0, Qt.AlignmentFlag.AlignRight)
 
         self.review_tab = QWidget()
-        self.review_tab.setLayoutDirection(Qt.RightToLeft)
+        self.review_tab.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.review_layout = QVBoxLayout(self.review_tab)
         self.review_layout.setContentsMargins(6, 6, 6, 6)
         self.review_layout.setSpacing(6)
 
         self.settings_tab = QWidget()
-        self.settings_tab.setLayoutDirection(Qt.RightToLeft)
+        self.settings_tab.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.settings_tab_layout = QVBoxLayout(self.settings_tab)
         self.settings_tab_layout.setContentsMargins(12, 12, 12, 12)
         self.settings_tab_layout.setSpacing(0)
 
         self.settings_scroll = QScrollArea()
         self.settings_scroll.setWidgetResizable(True)
-        self.settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.settings_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.settings_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.settings_scroll.setMinimumHeight(520)
-        self.settings_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.settings_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self.settings_content = QWidget()
-        self.settings_content.setLayoutDirection(Qt.RightToLeft)
+        self.settings_content.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.settings_content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.settings_layout = QVBoxLayout(self.settings_content)
         self.settings_layout.setContentsMargins(0, 0, 0, 0)
         self.settings_layout.setSpacing(10)
+        self.settings_layout.setAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.settings_intro_label = QLabel(
             self.format_ui_rtl_text("בטאב זה ניתן לנהל את הגדרות הביקורת והעמודות הנדרשות לכל משבצת.")
         )
+        # השתמש ב-QLabel עם rich text HTML RTL ו-align right
+        self.settings_intro_label.setText(
+            '<div dir="rtl" align="right">בטאב זה ניתן לנהל את הגדרות הביקורת והעמודות הנדרשות לכל משבצת.</div>'
+        )
         self.settings_intro_label.setWordWrap(True)
-        self.settings_intro_label.setLayoutDirection(Qt.LeftToRight)
-        self.settings_intro_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        self.settings_intro_label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.settings_intro_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        self.settings_intro_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.settings_intro_label.setMinimumHeight(40)
+        self.settings_intro_label.setMaximumWidth(16777215)
         self.settings_layout.addWidget(self.settings_intro_label)
         self._build_system_settings_sections()
 
         self.settings_scroll.setWidget(self.settings_content)
+        self.settings_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.settings_tab_layout.addWidget(self.settings_scroll)
 
         self.tabs.addTab(self.intake_tab, self.format_rtl_text("קליטת קבצים"))
@@ -459,20 +473,20 @@ class ValidationDesktopApp(QMainWindow):
         main_layout.addWidget(self.tabs)
 
         self.slots_group = QGroupBox(self.format_ui_rtl_text("מקורות קלט לבדיקת SAP HANA APP"))
-        self.slots_group.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.slots_group.setLayoutDirection(Qt.RightToLeft)
+        self.slots_group.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.slots_group.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         slots_group_layout = QVBoxLayout(self.slots_group)
         slots_group_layout.setContentsMargins(8, 18, 8, 8)
 
         self.slots_scroll = QScrollArea()
         self.slots_scroll.setWidgetResizable(True)
-        self.slots_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.slots_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.slots_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.slots_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.slots_scroll.setMinimumHeight(280)
-        self.slots_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.slots_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         slots_container = QWidget()
-        slots_container.setLayoutDirection(Qt.RightToLeft)
+        slots_container.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         slots_layout = QGridLayout(slots_container)
         slots_layout.setContentsMargins(12, 12, 12, 12)
         slots_layout.setHorizontalSpacing(12)
@@ -483,13 +497,13 @@ class ValidationDesktopApp(QMainWindow):
         slots_layout.setColumnStretch(3, 0)
         slots_layout.setColumnMinimumWidth(0, 140)
         slots_layout.setColumnMinimumWidth(3, 120)
-        slots_layout.setAlignment(Qt.AlignTop | Qt.AlignRight)
+        slots_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
 
         current_row = 0
         for category in self._ordered_categories():
             palette = self._category_palette(category)
             category_section = QGroupBox(self.format_ui_rtl_text(category))
-            category_section.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            category_section.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             category_section.setStyleSheet(
                 f"""
                 QGroupBox {{
@@ -513,7 +527,7 @@ class ValidationDesktopApp(QMainWindow):
             )
             self.category_sections[category] = category_section
 
-            category_section.setLayoutDirection(Qt.RightToLeft)
+            category_section.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
             category_layout = QGridLayout(category_section)
             category_layout.setContentsMargins(12, 18, 12, 12)
             category_layout.setHorizontalSpacing(12)
@@ -524,7 +538,7 @@ class ValidationDesktopApp(QMainWindow):
             category_layout.setColumnStretch(3, 0)
             category_layout.setColumnMinimumWidth(0, 140)
             category_layout.setColumnMinimumWidth(3, 120)
-            category_layout.setAlignment(Qt.AlignTop | Qt.AlignRight)
+            category_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
 
             category_button = QPushButton("הרץ בדיקה")
             category_button.setMinimumHeight(34)
@@ -544,71 +558,71 @@ class ValidationDesktopApp(QMainWindow):
 
                 display_name = metadata.get("label", slot_key)
                 slot_title = QLabel(self.format_ui_rtl_text(f"{display_name}{' *' if metadata['required'] else ''}"))
-                slot_title.setLayoutDirection(Qt.LeftToRight)
-                slot_title.setAlignment(Qt.AlignRight | Qt.AlignTop)
+                slot_title.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+                slot_title.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
                 slot_title.setStyleSheet("font-weight: bold;")
                 slot_title.setMinimumWidth(110)
 
                 description = QLabel(self.format_ui_rtl_text(metadata["description"]))
-                description.setLayoutDirection(Qt.LeftToRight)
-                description.setAlignment(Qt.AlignRight | Qt.AlignTop)
+                description.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+                description.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
                 description.setWordWrap(True)
                 description.setMinimumHeight(34)
-                description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+                description.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
                 sample = QLabel(self.format_ui_rtl_text(f"קובץ צפוי: {metadata['expected_file']}"))
-                sample.setLayoutDirection(Qt.LeftToRight)
-                sample.setAlignment(Qt.AlignRight | Qt.AlignTop)
+                sample.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+                sample.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
                 sample.setWordWrap(True)
                 sample.setStyleSheet("color: #5b6573;")
                 sample.setMinimumWidth(120)
-                sample.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+                sample.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
                 status_label = QLabel(self.format_ui_rtl_text("טרם נבחר קובץ"))
-                status_label.setLayoutDirection(Qt.RightToLeft)
-                status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                status_label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 status_label.setWordWrap(True)
                 status_label.setMinimumHeight(32)
-                status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
                 status_label.setStyleSheet("padding: 6px; background: #ffffff; border: 1px solid #cfd6e4;")
 
                 extraction_date_label = QLabel(self.format_ui_rtl_text("תאריך הפקה:"))
-                extraction_date_label.setLayoutDirection(Qt.RightToLeft)
-                extraction_date_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                extraction_date_label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                extraction_date_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 extraction_date_label.setStyleSheet("color: #5b6573;")
                 extraction_date_edit = QLineEdit(self._default_extraction_date())
-                extraction_date_edit.setAlignment(Qt.AlignRight)
+                extraction_date_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
                 extraction_date_edit.setPlaceholderText("YYYY-MM-DD")
                 extraction_date_edit.setMinimumHeight(32)
                 extraction_date_edit.setMaximumWidth(170)
 
                 extraction_date_row = QWidget()
-                extraction_date_row.setLayoutDirection(Qt.RightToLeft)
+                extraction_date_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
                 extraction_date_layout = QHBoxLayout(extraction_date_row)
                 extraction_date_layout.setContentsMargins(0, 0, 0, 0)
                 extraction_date_layout.setSpacing(6)
-                extraction_date_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                extraction_date_layout.addWidget(extraction_date_label, 0, Qt.AlignRight)
-                extraction_date_layout.addWidget(extraction_date_edit, 0, Qt.AlignRight)
+                extraction_date_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                extraction_date_layout.addWidget(extraction_date_label, 0, Qt.AlignmentFlag.AlignRight)
+                extraction_date_layout.addWidget(extraction_date_edit, 0, Qt.AlignmentFlag.AlignRight)
                 extraction_date_layout.addStretch(1)
 
                 select_button = QPushButton("בחירת קבצים" if slot_key in self.MULTI_FILE_SLOTS else "בחירת קובץ")
                 select_button.setMinimumHeight(34)
-                select_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+                select_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
                 select_button.clicked.connect(lambda _checked=False, sk=slot_key: self.choose_file(sk))
 
                 clear_slot_button = QPushButton("נקה")
                 clear_slot_button.setMinimumHeight(34)
                 clear_slot_button.setMinimumWidth(74)
-                clear_slot_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+                clear_slot_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
                 clear_slot_button.clicked.connect(lambda _checked=False, sk=slot_key: self.clear_slot_selection(sk))
 
                 slot_buttons = QWidget()
-                slot_buttons.setLayoutDirection(Qt.RightToLeft)
+                slot_buttons.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
                 slot_buttons_layout = QHBoxLayout(slot_buttons)
                 slot_buttons_layout.setContentsMargins(0, 0, 0, 0)
                 slot_buttons_layout.setSpacing(6)
-                slot_buttons_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                slot_buttons_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 slot_buttons_layout.addWidget(select_button)
                 slot_buttons_layout.addWidget(clear_slot_button)
 
@@ -637,9 +651,9 @@ class ValidationDesktopApp(QMainWindow):
 
             # Add the 'הרץ בדיקה' button at the last row, spanning all columns
             category_layout.setRowMinimumHeight(section_row, 40)
-            category_layout.addWidget(category_button, section_row, 0, 1, 4, alignment=Qt.AlignRight)
+            category_layout.addWidget(category_button, section_row, 0, 1, 4, alignment=Qt.AlignmentFlag.AlignRight)
             section_row += 1
-            category_section.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            category_section.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             slots_layout.addWidget(category_section, current_row, 0, 1, 4)
             current_row += 1
 
@@ -652,104 +666,33 @@ class ValidationDesktopApp(QMainWindow):
         self.slots_scroll.setWidget(slots_container)
         slots_group_layout.addWidget(self.slots_scroll)
 
-        self.slots_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.slots_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.intake_layout.addWidget(self.slots_group, 1)
 
+
         self.user_preview_group = QGroupBox(self.format_ui_rtl_text("רשימת משתמשים שנטענו"))
-        self.user_preview_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.user_preview_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.user_preview_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.user_preview_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.user_preview_group.setMinimumHeight(460)
         user_preview_layout = QVBoxLayout(self.user_preview_group)
         user_preview_layout.setContentsMargins(8, 12, 8, 8)
         user_preview_layout.setSpacing(4)
-        user_preview_layout.setAlignment(Qt.AlignTop)
+        user_preview_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        self.user_preview_actions_row = QWidget()
-        self.user_preview_actions_row.setLayoutDirection(Qt.RightToLeft)
-        self.user_preview_actions_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.user_preview_actions_row.setMaximumHeight(40)
-        user_preview_actions_layout = QHBoxLayout(self.user_preview_actions_row)
-        user_preview_actions_layout.setContentsMargins(0, 0, 0, 0)
-        user_preview_actions_layout.setSpacing(8)
-        user_preview_actions_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-
-        self.user_preview_export_button = QPushButton("ייצוא סקירה לאקסל")
-        self.user_preview_export_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.user_preview_export_button.clicked.connect(lambda: self.export_user_preview_to_excel(open_after_export=True))
-        user_preview_actions_layout.addWidget(self.user_preview_export_button, 0, Qt.AlignRight)
-
-        self.user_preview_import_button = QPushButton("ייבוא סקירה מאקסל")
-        self.user_preview_import_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.user_preview_import_button.clicked.connect(self.import_user_review_from_excel)
-        user_preview_actions_layout.addWidget(self.user_preview_import_button, 0, Qt.AlignRight)
-
-        self.user_preview_columns_button = QPushButton("הוסף / מחק עמודות")
-        self.user_preview_columns_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.user_preview_columns_button.clicked.connect(self.show_user_preview_column_dialog)
-        user_preview_actions_layout.addWidget(self.user_preview_columns_button, 0, Qt.AlignRight)
-        user_preview_actions_layout.addStretch(1)
-        user_preview_layout.addWidget(self.user_preview_actions_row, 0, Qt.AlignTop)
-
-        self.user_preview_filter_row = QWidget()
-        self.user_preview_filter_row.setLayoutDirection(Qt.RightToLeft)
-        self.user_preview_filter_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        user_preview_filter_layout = QHBoxLayout(self.user_preview_filter_row)
-        user_preview_filter_layout.setContentsMargins(0, 0, 0, 0)
-        user_preview_filter_layout.setSpacing(8)
-        user_preview_filter_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-
-        self.user_preview_filter_label = QLabel(self.format_ui_rtl_text("סינון משתמשים:"))
-        self.user_preview_status_filter = QComboBox()
-        self.user_preview_status_filter.setMinimumWidth(220)
-        self.user_preview_status_filter.setLayoutDirection(Qt.RightToLeft)
-        for filter_value, filter_label in self.USER_PREVIEW_FILTER_OPTIONS:
-            self.user_preview_status_filter.addItem(self.format_rtl_text(filter_label), filter_value)
-
-        self.audit_period_from_label = QLabel(self.format_ui_rtl_text("מתאריך:"))
-        self.audit_period_from_edit = QLineEdit("")
-        self.audit_period_from_edit.setAlignment(Qt.AlignRight)
-        self.audit_period_from_edit.setPlaceholderText("YYYY-MM-DD")
-        self.audit_period_from_edit.setMaximumWidth(130)
-
-        self.audit_period_to_label = QLabel(self.format_ui_rtl_text("עד תאריך:"))
-        self.audit_period_to_edit = QLineEdit("")
-        self.audit_period_to_edit.setAlignment(Qt.AlignRight)
-        self.audit_period_to_edit.setPlaceholderText("YYYY-MM-DD")
-        self.audit_period_to_edit.setMaximumWidth(130)
-
-        user_preview_filter_layout.addWidget(self.user_preview_filter_label, 0, Qt.AlignRight)
-        user_preview_filter_layout.addWidget(self.user_preview_status_filter, 0, Qt.AlignRight)
-        user_preview_filter_layout.addWidget(self.audit_period_from_label, 0, Qt.AlignRight)
-        user_preview_filter_layout.addWidget(self.audit_period_from_edit, 0, Qt.AlignRight)
-        user_preview_filter_layout.addWidget(self.audit_period_to_label, 0, Qt.AlignRight)
-        user_preview_filter_layout.addWidget(self.audit_period_to_edit, 0, Qt.AlignRight)
-        user_preview_filter_layout.addStretch(1)
-        user_preview_layout.addWidget(self.user_preview_filter_row, 0, Qt.AlignTop)
-
-        self.user_preview_hint = QLabel(
-            self.format_ui_rtl_text(
-                "הטבלה מציגה את משתמשי USR02 עם העשרת נתונים מקובצי USER_ADDR ו-ADR6 בלבד."
-            )
-        )
-        self.user_preview_hint.setWordWrap(True)
-        self.user_preview_hint.setAlignment(Qt.AlignRight | Qt.AlignTop)
-        self.user_preview_hint.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.user_preview_hint.setMaximumHeight(44)
-        user_preview_layout.addWidget(self.user_preview_hint, 0, Qt.AlignTop)
-
+        # --- Create progress group first ---
         self.user_review_progress_group = QGroupBox(self.format_ui_rtl_text("סיכום התקדמות סקירה"))
-        self.user_review_progress_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.user_review_progress_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.user_review_progress_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.user_review_progress_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         user_review_progress_layout = QVBoxLayout(self.user_review_progress_group)
         user_review_progress_layout.setContentsMargins(8, 8, 8, 8)
         user_review_progress_layout.setSpacing(6)
 
         user_review_counts_row = QWidget()
-        user_review_counts_row.setLayoutDirection(Qt.RightToLeft)
+        user_review_counts_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         user_review_counts_layout = QHBoxLayout(user_review_counts_row)
         user_review_counts_layout.setContentsMargins(0, 0, 0, 0)
         user_review_counts_layout.setSpacing(14)
-        user_review_counts_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        user_review_counts_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         self.user_review_total_label = QLabel(self.format_ui_rtl_text("סה\"כ משתמשים בדוח: 0"))
         self.user_review_total_label.setStyleSheet("font-weight: bold;")
@@ -758,9 +701,9 @@ class ValidationDesktopApp(QMainWindow):
         self.user_review_unreviewed_label = QLabel(self.format_ui_rtl_text("משתמשים שטרם נבדקו: 0"))
         self.user_review_unreviewed_label.setStyleSheet("font-weight: bold; color: #1565c0;")
 
-        user_review_counts_layout.addWidget(self.user_review_total_label, 0, Qt.AlignRight)
-        user_review_counts_layout.addWidget(self.user_review_reviewed_label, 0, Qt.AlignRight)
-        user_review_counts_layout.addWidget(self.user_review_unreviewed_label, 0, Qt.AlignRight)
+        user_review_counts_layout.addWidget(self.user_review_total_label, 0, Qt.AlignmentFlag.AlignRight)
+        user_review_counts_layout.addWidget(self.user_review_reviewed_label, 0, Qt.AlignmentFlag.AlignRight)
+        user_review_counts_layout.addWidget(self.user_review_unreviewed_label, 0, Qt.AlignmentFlag.AlignRight)
         user_review_counts_layout.addStretch(1)
         user_review_progress_layout.addWidget(user_review_counts_row)
 
@@ -769,7 +712,7 @@ class ValidationDesktopApp(QMainWindow):
         self.user_review_progress_bar.setMaximum(100)
         self.user_review_progress_bar.setValue(0)
         self.user_review_progress_bar.setTextVisible(True)
-        self.user_review_progress_bar.setAlignment(Qt.AlignCenter)
+        self.user_review_progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.user_review_progress_bar.setFormat("0%")
         self.user_review_progress_bar.setStyleSheet(
             "QProgressBar {"
@@ -784,22 +727,149 @@ class ValidationDesktopApp(QMainWindow):
         user_review_progress_layout.addWidget(self.user_review_progress_bar)
 
         self.user_review_progress_percent_label = QLabel(self.format_ui_rtl_text("התקדמות השלמת סקירה: 0%"))
-        self.user_review_progress_percent_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.user_review_progress_percent_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.user_review_progress_percent_label.setStyleSheet("font-weight: bold; color: #0d47a1;")
         user_review_progress_layout.addWidget(self.user_review_progress_percent_label)
 
-        user_preview_layout.addWidget(self.user_review_progress_group, 0, Qt.AlignTop)
+        # --- Now create actions row ---
+        self.user_preview_actions_row = QWidget()
+        self.user_preview_actions_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.user_preview_actions_row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.user_preview_actions_row.setMaximumHeight(40)
+        user_preview_actions_layout = QHBoxLayout(self.user_preview_actions_row)
+        user_preview_actions_layout.setContentsMargins(0, 0, 0, 0)
+        user_preview_actions_layout.setSpacing(8)
+        user_preview_actions_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self.user_preview_export_button = QPushButton("ייצוא סקירה לאקסל")
+        self.user_preview_export_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.user_preview_export_button.clicked.connect(lambda: self.export_user_preview_to_excel(open_after_export=True))
+        user_preview_actions_layout.addWidget(self.user_preview_export_button, 0, Qt.AlignmentFlag.AlignRight)
+
+        self.user_preview_import_button = QPushButton("ייבוא סקירה מאקסל")
+        self.user_preview_import_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.user_preview_import_button.clicked.connect(self.import_user_review_from_excel)
+        user_preview_actions_layout.addWidget(self.user_preview_import_button, 0, Qt.AlignmentFlag.AlignRight)
+
+        self.user_preview_columns_button = QPushButton("הוסף / מחק עמודות")
+        self.user_preview_columns_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.user_preview_columns_button.clicked.connect(self.show_user_preview_column_dialog)
+        user_preview_actions_layout.addWidget(self.user_preview_columns_button, 0, Qt.AlignmentFlag.AlignRight)
+        user_preview_actions_layout.addStretch(1)
+
+        # Add the progress group first, then the actions row
+        user_preview_layout.addWidget(self.user_review_progress_group, 0, Qt.AlignmentFlag.AlignTop)
+        user_preview_layout.addWidget(self.user_preview_actions_row, 0, Qt.AlignmentFlag.AlignTop)
+
+        self.user_preview_filter_row = QWidget()
+        self.user_preview_filter_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.user_preview_filter_row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        user_preview_filter_layout = QHBoxLayout(self.user_preview_filter_row)
+        user_preview_filter_layout.setContentsMargins(0, 0, 0, 0)
+        user_preview_filter_layout.setSpacing(8)
+        user_preview_filter_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self.user_preview_filter_label = QLabel(self.format_ui_rtl_text("סינון משתמשים:"))
+        self.user_preview_status_filter = QComboBox()
+        self.user_preview_status_filter.setMinimumWidth(220)
+        self.user_preview_status_filter.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        for filter_value, filter_label in self.USER_PREVIEW_FILTER_OPTIONS:
+            self.user_preview_status_filter.addItem(self.format_rtl_text(filter_label), filter_value)
+
+        self.audit_period_from_label = QLabel(self.format_ui_rtl_text("מתאריך:"))
+        self.audit_period_from_edit = QLineEdit("")
+        self.audit_period_from_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.audit_period_from_edit.setPlaceholderText("YYYY-MM-DD")
+        self.audit_period_from_edit.setMaximumWidth(130)
+
+        self.audit_period_to_label = QLabel(self.format_ui_rtl_text("עד תאריך:"))
+        self.audit_period_to_edit = QLineEdit("")
+        self.audit_period_to_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.audit_period_to_edit.setPlaceholderText("YYYY-MM-DD")
+        self.audit_period_to_edit.setMaximumWidth(130)
+
+        user_preview_filter_layout.addWidget(self.user_preview_filter_label, 0, Qt.AlignmentFlag.AlignRight)
+        user_preview_filter_layout.addWidget(self.user_preview_status_filter, 0, Qt.AlignmentFlag.AlignRight)
+        user_preview_filter_layout.addWidget(self.audit_period_from_label, 0, Qt.AlignmentFlag.AlignRight)
+        user_preview_filter_layout.addWidget(self.audit_period_from_edit, 0, Qt.AlignmentFlag.AlignRight)
+        user_preview_filter_layout.addWidget(self.audit_period_to_label, 0, Qt.AlignmentFlag.AlignRight)
+        user_preview_filter_layout.addWidget(self.audit_period_to_edit, 0, Qt.AlignmentFlag.AlignRight)
+        user_preview_filter_layout.addStretch(1)
+        user_preview_layout.addWidget(self.user_preview_filter_row, 0, Qt.AlignmentFlag.AlignTop)
+
+        self.user_preview_hint = QLabel(
+            '<p align="right" style="margin:0">הטבלה מציגה את משתמשי USR02 עם העשרת נתונים מקובצי USER_ADDR ו-ADR6 בלבד.</p>'
+        )
+        self.user_preview_hint.setWordWrap(True)
+        self.user_preview_hint.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.user_preview_hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        self.user_preview_hint.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.user_preview_hint.setMaximumHeight(44)
+        user_preview_layout.addWidget(self.user_preview_hint, 0, Qt.AlignmentFlag.AlignTop)
+
+        self.user_review_progress_group = QGroupBox(self.format_ui_rtl_text("סיכום התקדמות סקירה"))
+        self.user_review_progress_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.user_review_progress_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        user_review_progress_layout = QVBoxLayout(self.user_review_progress_group)
+        user_review_progress_layout.setContentsMargins(8, 8, 8, 8)
+        user_review_progress_layout.setSpacing(6)
+
+        user_review_counts_row = QWidget()
+        user_review_counts_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        user_review_counts_layout = QHBoxLayout(user_review_counts_row)
+        user_review_counts_layout.setContentsMargins(0, 0, 0, 0)
+        user_review_counts_layout.setSpacing(14)
+        user_review_counts_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self.user_review_total_label = QLabel(self.format_ui_rtl_text("סה\"כ משתמשים בדוח: 0"))
+        self.user_review_total_label.setStyleSheet("font-weight: bold;")
+        self.user_review_reviewed_label = QLabel(self.format_ui_rtl_text("משתמשים שנבדקו: 0"))
+        self.user_review_reviewed_label.setStyleSheet("font-weight: bold; color: #2e7d32;")
+        self.user_review_unreviewed_label = QLabel(self.format_ui_rtl_text("משתמשים שטרם נבדקו: 0"))
+        self.user_review_unreviewed_label.setStyleSheet("font-weight: bold; color: #1565c0;")
+
+        user_review_counts_layout.addWidget(self.user_review_total_label, 0, Qt.AlignmentFlag.AlignRight)
+        user_review_counts_layout.addWidget(self.user_review_reviewed_label, 0, Qt.AlignmentFlag.AlignRight)
+        user_review_counts_layout.addWidget(self.user_review_unreviewed_label, 0, Qt.AlignmentFlag.AlignRight)
+        user_review_counts_layout.addStretch(1)
+        user_review_progress_layout.addWidget(user_review_counts_row)
+
+        self.user_review_progress_bar = QProgressBar()
+        self.user_review_progress_bar.setMinimum(0)
+        self.user_review_progress_bar.setMaximum(100)
+        self.user_review_progress_bar.setValue(0)
+        self.user_review_progress_bar.setTextVisible(True)
+        self.user_review_progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.user_review_progress_bar.setFormat("0%")
+        self.user_review_progress_bar.setStyleSheet(
+            "QProgressBar {"
+            "border: 1px solid #b0bec5; border-radius: 4px;"
+            "background-color: #f5f7fa; text-align: center;"
+            "font-weight: bold; color: #0d47a1;"
+            "}"
+            "QProgressBar::chunk {"
+            "background-color: #42a5f5; border-radius: 3px;"
+            "}"
+        )
+        user_review_progress_layout.addWidget(self.user_review_progress_bar)
+
+        self.user_review_progress_percent_label = QLabel(self.format_ui_rtl_text("התקדמות השלמת סקירה: 0%"))
+        self.user_review_progress_percent_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.user_review_progress_percent_label.setStyleSheet("font-weight: bold; color: #0d47a1;")
+        user_review_progress_layout.addWidget(self.user_review_progress_percent_label)
+
+        # (moved above the actions row)
 
         self.user_preview_table = QTableWidget(0, 0)
         self.user_preview_table.setEditTriggers(
-            QTableWidget.DoubleClicked | QTableWidget.EditKeyPressed | QTableWidget.SelectedClicked
+            QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed | QAbstractItemView.EditTrigger.SelectedClicked
         )
-        self.user_preview_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.user_preview_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.user_preview_table.setAlternatingRowColors(True)
-        self.user_preview_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-        self.user_preview_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.user_preview_table.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
-        self.user_preview_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.user_preview_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.user_preview_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.user_preview_table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.user_preview_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.user_preview_table.setMinimumHeight(420)
         self.user_preview_table.setMaximumHeight(16777215)
         self._configure_user_preview_table()
@@ -811,50 +881,50 @@ class ValidationDesktopApp(QMainWindow):
         self.review_layout.addWidget(self.user_preview_group, 1)
 
         self.run_log_group = QGroupBox(self.format_ui_rtl_text("לוג קבצים שנבדקו"))
-        self.run_log_group.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.run_log_group.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         run_log_layout = QVBoxLayout(self.run_log_group)
         run_log_layout.setContentsMargins(12, 18, 12, 12)
         self.run_log_table = QTableWidget(0, 10)
         self.run_log_table.setHorizontalHeaderLabels(["משבצת", "קבוצת דוחות", "קובץ", "תאריך הפקה", "רשומות שנקלטו", "סטטוס", "מספר שגיאות", "תיאור שגיאה", "תאריך בדיקה", "שעת בדיקה"])
-        self.run_log_table.horizontalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.run_log_table.verticalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeToContents)
+        self.run_log_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.run_log_table.verticalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
+        self.run_log_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)
         self.run_log_table.setColumnWidth(1, 150)
         self.run_log_table.setColumnWidth(2, 180)
-        self.run_log_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.run_log_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.run_log_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.run_log_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.run_log_table.setAlternatingRowColors(True)
         self.run_log_table.setWordWrap(True)
-        self.run_log_table.setTextElideMode(Qt.ElideMiddle)
+        self.run_log_table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.run_log_table.setMinimumHeight(160)
         self.run_log_table.setToolTip("לחיצה כפולה על שורה תפתח פירוט מלא עבור הקובץ")
         self.run_log_table.cellDoubleClicked.connect(self.show_log_details)
         run_log_layout.addWidget(self.run_log_table)
-        self.run_log_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.run_log_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.run_log_group.setMaximumHeight(320)
         self.intake_layout.addWidget(self.run_log_group, 0)
 
         self.required_columns_group = QGroupBox(self.format_ui_rtl_text("עמודות חובה לבדיקה"))
-        self.required_columns_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.required_columns_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         required_layout = QHBoxLayout(self.required_columns_group)
         self.required_columns_edit = QLineEdit("")
-        self.required_columns_edit.setAlignment(Qt.AlignRight)
+        self.required_columns_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.required_columns_edit.setPlaceholderText("יוזן אוטומטית לפי המשבצת שנבחרה")
         required_layout.addWidget(self.required_columns_edit)
         self.required_columns_group.show()
         self.settings_layout.addWidget(self.required_columns_group)
 
         self.summary_group = QGroupBox(self.format_ui_rtl_text("סיכום בדיקה"))
-        self.summary_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.summary_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         summary_layout = QGridLayout(self.summary_group)
         summary_layout.setContentsMargins(12, 18, 12, 12)
         summary_layout.setHorizontalSpacing(10)
@@ -867,10 +937,10 @@ class ValidationDesktopApp(QMainWindow):
         ]
         for column, (title, key, default_value) in enumerate(summary_items):
             title_label = QLabel(title)
-            title_label.setAlignment(Qt.AlignCenter)
+            title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             title_label.setStyleSheet("font-weight: bold;")
             value_label = QLabel(default_value)
-            value_label.setAlignment(Qt.AlignCenter)
+            value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             value_label.setStyleSheet("font-size: 18px; padding: 6px;")
             summary_layout.addWidget(title_label, 0, column)
             summary_layout.addWidget(value_label, 1, column)
@@ -879,18 +949,18 @@ class ValidationDesktopApp(QMainWindow):
         self.analysis_layout.addWidget(self.summary_group)
 
         self.results_group = QGroupBox(self.format_ui_rtl_text("רשימת שגיאות"))
-        self.results_group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.results_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         results_layout = QVBoxLayout(self.results_group)
         results_layout.setContentsMargins(12, 18, 12, 12)
         self.issues_table = QTableWidget(0, 3)
         self.issues_table.setHorizontalHeaderLabels(["מספר שורה", "שם עמודה", "הודעת שגיאה"])
-        self.issues_table.horizontalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.issues_table.verticalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.issues_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.issues_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.issues_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.issues_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.issues_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.issues_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.issues_table.verticalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.issues_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.issues_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.issues_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.issues_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.issues_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.issues_table.setAlternatingRowColors(True)
         results_layout.addWidget(self.issues_table)
         self.issues_table.setMinimumHeight(180)
@@ -960,35 +1030,44 @@ class ValidationDesktopApp(QMainWindow):
     def _default_extraction_date() -> str:
         return datetime.now().strftime("%Y-%m-%d")
 
+
     def _build_system_settings_sections(self) -> None:
+        # --- Outer wrapper for flush right alignment ---
         buttons_row = QWidget()
+        buttons_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        buttons_row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         buttons_layout = QHBoxLayout(buttons_row)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(8)
-        buttons_layout.addStretch(1)
+        buttons_layout.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self.settings_save_btn = QPushButton(self.format_ui_rtl_text("שמור הגדרות"))
+        self.settings_save_btn.clicked.connect(self._save_system_settings)
+        self.settings_save_btn.setStyleSheet("text-align: left; padding-right: 18px;")
 
         self.settings_reset_btn = QPushButton(self.format_ui_rtl_text("טען ברירות מחדל"))
         self.settings_reset_btn.clicked.connect(self._reset_system_settings_form)
-        self.settings_save_btn = QPushButton(self.format_ui_rtl_text("שמור הגדרות"))
-        self.settings_save_btn.clicked.connect(self._save_system_settings)
+        self.settings_reset_btn.setStyleSheet("text-align: left; padding-right: 18px;")
+
         buttons_layout.addWidget(self.settings_save_btn)
         buttons_layout.addWidget(self.settings_reset_btn)
-        self.settings_layout.addWidget(buttons_row)
+        # Ensure the row itself is aligned right in the parent layout
+        self.settings_layout.addWidget(buttons_row, alignment=Qt.AlignmentFlag.AlignRight)
 
         review_group, review_layout, review_unavailable_label = self._build_settings_group(
             "טווח בחינה לסקירת משתמשים",
             "הגדרה מרכזית של טווח תקופת הבחינה, מסונכרנת עם מסך סקירת המשתמשים.",
         )
         review_form = QFormLayout()
-        review_form.setLabelAlignment(Qt.AlignRight)
-        review_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        review_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        review_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
         start_widget = QDateEdit()
-        start_widget.setLayoutDirection(Qt.LeftToRight)
+        start_widget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         start_widget.setDisplayFormat("yyyy-MM-dd")
         start_widget.setCalendarPopup(True)
         end_widget = QDateEdit()
-        end_widget.setLayoutDirection(Qt.LeftToRight)
+        end_widget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         end_widget.setDisplayFormat("yyyy-MM-dd")
         end_widget.setCalendarPopup(True)
 
@@ -1046,7 +1125,7 @@ class ValidationDesktopApp(QMainWindow):
             else:
                 widget = QLineEdit()
                 if isinstance(widget, QLineEdit):
-                    widget.setLayoutDirection(Qt.LeftToRight)
+                    widget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
                     widget.setMaxLength(6)
             if hasattr(widget, "setMaximumWidth"):
                 widget.setMaximumWidth(120)
@@ -1063,14 +1142,14 @@ class ValidationDesktopApp(QMainWindow):
             "התאמת שמות קבצים צפויים לכל משבצת, עבור וריאציות ייצוא בין כלים.",
         )
         mapping_form = QFormLayout()
-        mapping_form.setLabelAlignment(Qt.AlignRight)
-        mapping_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        mapping_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        mapping_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self.system_settings_file_mapping_order = list(self.SLOT_DEFINITIONS.keys())
         for slot_key in self.system_settings_file_mapping_order:
             metadata = self.SLOT_DEFINITIONS[slot_key]
             display_name = str(metadata.get("label", slot_key))
             field_widget = QLineEdit()
-            field_widget.setLayoutDirection(Qt.LeftToRight)
+            field_widget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
             self.system_settings_widgets[f"file_mappings.{slot_key}"] = field_widget
             mapping_form.addRow(self.format_ui_rtl_text(display_name), field_widget)
         mapping_layout.addLayout(mapping_form)
@@ -1083,8 +1162,8 @@ class ValidationDesktopApp(QMainWindow):
             "סף חוסר פעילות משמש לבניית ממצאים אוטומטיים בסקירת משתמשים.",
         )
         threshold_form = QFormLayout()
-        threshold_form.setLabelAlignment(Qt.AlignRight)
-        threshold_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        threshold_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        threshold_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         threshold_widget = QLineEdit()
         self.system_settings_widgets["inactive_days_threshold"] = threshold_widget
         threshold_form.addRow("סף חוסר פעילות (ימים)", threshold_widget)
@@ -1095,19 +1174,21 @@ class ValidationDesktopApp(QMainWindow):
 
     def _build_settings_group(self, title: str, description: str | None = None) -> tuple[QGroupBox, QVBoxLayout, QLabel]:
         group = QGroupBox(self.format_ui_rtl_text(title))
-        group.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         layout = QVBoxLayout(group)
         layout.setContentsMargins(10, 14, 10, 10)
         layout.setSpacing(8)
         if description:
-            description_label = QLabel(self.format_ui_rtl_text(description))
+            # Use HTML for robust RTL right alignment
+            html = f'<div dir="rtl" align="right">{self.format_ui_rtl_text(description)}</div>'
+            description_label = QLabel(html)
             description_label.setWordWrap(True)
-            description_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+            description_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
             layout.addWidget(description_label)
 
         unavailable_label = QLabel(self.format_ui_rtl_text("הגדרה זו לא זמינה ללא קובץ מקור רלוונטי"))
         unavailable_label.setWordWrap(True)
-        unavailable_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        unavailable_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         unavailable_label.setStyleSheet("color: gray; font-style: italic;")
         unavailable_label.setVisible(False)
         layout.addWidget(unavailable_label)
@@ -1121,8 +1202,8 @@ class ValidationDesktopApp(QMainWindow):
         table = QTableWidget(0, 2)
         table.setHorizontalHeaderLabels(["CLIENT", "משתמש"])
         table.horizontalHeader().setStretchLastSection(True)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
-        table.setSelectionMode(QTableWidget.SingleSelection)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.setMinimumHeight(140)
         layout.addWidget(table)
 
@@ -1174,7 +1255,7 @@ class ValidationDesktopApp(QMainWindow):
     def _system_settings_path(self) -> Path:
         return self.config.output_dir / "system_settings.json"
 
-    def _default_system_settings(self) -> dict[str, object]:
+    def _default_system_settings(self) -> dict[str, Any]:
         return {
             "generic_users": ["SAP", "DDIC", "TMSADM", "SAPCPIC"],
             "super_users": [],
@@ -1210,7 +1291,7 @@ class ValidationDesktopApp(QMainWindow):
             },
         }
 
-    def _current_system_settings(self) -> dict[str, object]:
+    def _current_system_settings(self) -> dict[str, Any]:
         defaults = self._default_system_settings()
         settings_path = self._system_settings_path()
         if not settings_path.exists():
@@ -1231,7 +1312,7 @@ class ValidationDesktopApp(QMainWindow):
                 merged[key] = value
         return merged
 
-    def _sync_review_filters_from_settings(self, settings: dict[str, object]) -> None:
+    def _sync_review_filters_from_settings(self, settings: dict[str, Any]) -> None:
         period_cfg = settings.get("user_review_period", {}) if isinstance(settings, dict) else {}
         start_text = str(period_cfg.get("start_date", "")).strip()
         end_text = str(period_cfg.get("end_date", "")).strip()
@@ -1240,7 +1321,7 @@ class ValidationDesktopApp(QMainWindow):
         if hasattr(self, "audit_period_to_edit") and end_text:
             self.audit_period_to_edit.setText(end_text)
 
-    def _load_system_settings_into_form(self, settings: dict[str, object], load_review_period: bool = True) -> None:
+    def _load_system_settings_into_form(self, settings: dict[str, Any], load_review_period: bool = True) -> None:
         settings = settings or self._default_system_settings()
 
         def _fill_lines(key: str) -> None:
@@ -1301,7 +1382,7 @@ class ValidationDesktopApp(QMainWindow):
                 elif isinstance(widget, QLineEdit):
                     widget.setText(str(value))
 
-    def _collect_system_settings_from_form(self) -> dict[str, object]:
+    def _collect_system_settings_from_form(self) -> dict[str, Any]:
         def _lines_from_editor(editor: object) -> list[str]:
             if not isinstance(editor, QPlainTextEdit):
                 return []
@@ -1328,8 +1409,8 @@ class ValidationDesktopApp(QMainWindow):
         period_end_widget = self.system_settings_widgets.get("user_review_period.end_date")
         if isinstance(period_start_widget, QDateEdit) and isinstance(period_end_widget, QDateEdit):
             settings["user_review_period"] = {
-                "start_date": period_start_widget.date().toPython().isoformat(),
-                "end_date": period_end_widget.date().toPython().isoformat(),
+                "start_date": period_start_widget.date().toString("yyyy-MM-dd"),
+                "end_date": period_end_widget.date().toString("yyyy-MM-dd"),
             }
 
         file_mappings = {}
@@ -1494,7 +1575,7 @@ class ValidationDesktopApp(QMainWindow):
             period_end,
         )
 
-    def _is_generic_user(self, bname: object, settings: dict[str, object]) -> bool:
+    def _is_generic_user(self, bname: object, settings: dict[str, Any]) -> bool:
         if not bname or not isinstance(settings, dict):
             return False
         normalized_name = str(bname).strip().casefold()
@@ -1503,7 +1584,7 @@ class ValidationDesktopApp(QMainWindow):
             return False
         return any(str(item).strip().casefold() == normalized_name for item in generic_users)
 
-    def _is_super_user(self, mandt: object, bname: object, settings: dict[str, object]) -> bool:
+    def _is_super_user(self, mandt: object, bname: object, settings: dict[str, Any]) -> bool:
         if not bname or not isinstance(settings, dict):
             return False
         normalized_mandt = str(mandt).strip()
@@ -1708,19 +1789,19 @@ class ValidationDesktopApp(QMainWindow):
 
         paths = file_paths if file_paths is not None else list(widget_data.get("selected_paths", []))
         if not paths:
-            label.setLayoutDirection(Qt.RightToLeft)
-            label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             label.setText(self.format_ui_rtl_text("טרם נבחר קובץ"))
             return
 
         if len(paths) == 1:
-            label.setLayoutDirection(Qt.LeftToRight)
-            label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            label.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             label.setText(self.format_rtl_text(paths[0]))
             return
 
-        label.setLayoutDirection(Qt.RightToLeft)
-        label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         label.setText(self.format_ui_rtl_text(self._format_selected_files(paths)))
 
     def _remember_slot_load(self, slot_key: str) -> None:
@@ -2006,7 +2087,7 @@ class ValidationDesktopApp(QMainWindow):
         }
         settings_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _get_user_preview_column_definition(self, field_name: str) -> dict[str, object]:
+    def _get_user_preview_column_definition(self, field_name: str) -> dict[str, Any]:
         for column in self.USER_PREVIEW_COLUMN_DEFINITIONS:
             if column["field"] == field_name:
                 return column
@@ -2016,8 +2097,8 @@ class ValidationDesktopApp(QMainWindow):
         if self._refreshing_user_preview or item is None:
             return
 
-        field_name = item.data(Qt.UserRole + 1)
-        review_key = item.data(Qt.UserRole)
+        field_name = item.data(Qt.ItemDataRole.UserRole + 1)
+        review_key = item.data(Qt.ItemDataRole.UserRole)
         if field_name != "REVIEW_NOTES" or not review_key:
             return
 
@@ -2044,13 +2125,13 @@ class ValidationDesktopApp(QMainWindow):
             for field_name in self.user_preview_visible_columns
         ])
         header = self.user_preview_table.horizontalHeader()
-        header.setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         header.setSectionsMovable(False)
         header.setSectionsClickable(True)
         header.setMinimumSectionSize(70)
-        self.user_preview_table.verticalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.user_preview_table.verticalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         for column_index, field_name in enumerate(self.user_preview_visible_columns):
-            header.setSectionResizeMode(column_index, QHeaderView.Interactive)
+            header.setSectionResizeMode(column_index, QHeaderView.ResizeMode.Interactive)
             default_width = int(self._get_user_preview_column_definition(field_name).get("width", 120))
             self.user_preview_table.setColumnWidth(column_index, default_width)
         self.user_preview_table.setSortingEnabled(True)
@@ -2058,7 +2139,7 @@ class ValidationDesktopApp(QMainWindow):
     def _create_user_preview_columns_dialog(self) -> tuple[QDialog, QTableWidget]:
         dialog = QDialog(self)
         dialog.setWindowTitle(self.format_rtl_text("בחירת עמודות לסקירת משתמשים"))
-        dialog.setLayoutDirection(Qt.RightToLeft)
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         dialog.resize(720, 460)
 
         layout = QVBoxLayout(dialog)
@@ -2066,30 +2147,30 @@ class ValidationDesktopApp(QMainWindow):
             self.format_ui_rtl_text("סמן את העמודות שברצונך להציג. לחיצה על OK תרענן את הטבלה, ו-Cancel תשאיר את המצב הקיים.")
         )
         hint_label.setWordWrap(True)
-        hint_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        hint_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         layout.addWidget(hint_label)
 
         selection_table = QTableWidget(len(self.USER_PREVIEW_COLUMN_DEFINITIONS), 3)
         selection_table.setHorizontalHeaderLabels(["שם פורמלי", "שם טכני", "הצג"])
-        selection_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        selection_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        selection_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        selection_table.horizontalHeader().setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        selection_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        selection_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        selection_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        selection_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         selection_table.verticalHeader().setVisible(False)
         selection_table.setAlternatingRowColors(True)
-        selection_table.setSelectionBehavior(QTableWidget.SelectRows)
+        selection_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
 
         for row_index, column in enumerate(self.USER_PREVIEW_COLUMN_DEFINITIONS):
             formal_item = QTableWidgetItem(self.format_rtl_text(str(column["formal"])))
-            formal_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            formal_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             formal_item.setToolTip(self.format_ui_rtl_text(f"מקור נתון: {column['source']}"))
             technical_item = QTableWidgetItem(str(column["technical"]))
-            technical_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            technical_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             technical_item.setToolTip(self.format_ui_rtl_text(f"מקור נתון: {column['source']}"))
             checkbox_item = QTableWidgetItem("")
-            checkbox_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
-            checkbox_item.setCheckState(Qt.Checked if column["field"] in self.user_preview_visible_columns else Qt.Unchecked)
-            checkbox_item.setTextAlignment(Qt.AlignCenter)
+            checkbox_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable)
+            checkbox_item.setCheckState(Qt.CheckState.Checked if column["field"] in self.user_preview_visible_columns else Qt.CheckState.Unchecked)
+            checkbox_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             checkbox_item.setToolTip(self.format_ui_rtl_text(f"מקור נתון: {column['source']}"))
             selection_table.setItem(row_index, 0, formal_item)
             selection_table.setItem(row_index, 1, technical_item)
@@ -2097,7 +2178,7 @@ class ValidationDesktopApp(QMainWindow):
 
         layout.addWidget(selection_table)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
@@ -2107,7 +2188,7 @@ class ValidationDesktopApp(QMainWindow):
         selected_columns: list[str] = []
         for row_index, column in enumerate(self.USER_PREVIEW_COLUMN_DEFINITIONS):
             checkbox_item = selection_table.item(row_index, 2)
-            if checkbox_item is not None and checkbox_item.checkState() == Qt.Checked:
+            if checkbox_item is not None and checkbox_item.checkState() == Qt.CheckState.Checked:
                 selected_columns.append(str(column["field"]))
         return selected_columns
 
@@ -2124,7 +2205,7 @@ class ValidationDesktopApp(QMainWindow):
 
     def show_user_preview_column_dialog(self) -> None:
         dialog, selection_table = self._create_user_preview_columns_dialog()
-        if dialog.exec() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         selected_columns = self._get_selected_user_preview_columns(selection_table)
@@ -2135,7 +2216,7 @@ class ValidationDesktopApp(QMainWindow):
         self._apply_user_preview_columns(selected_columns)
 
     @staticmethod
-    def _get_row_value(row: dict[str, object], *candidates: str) -> str:
+    def _get_row_value(row: dict[str, Any], *candidates: str) -> str:
         normalized_row = {
             str(key).strip().upper(): value
             for key, value in row.items()
@@ -2150,7 +2231,7 @@ class ValidationDesktopApp(QMainWindow):
                     return str(value).strip()
         return ""
 
-    def _load_preview_rows(self, slot_key: str) -> list[dict[str, object]]:
+    def _load_preview_rows(self, slot_key: str) -> list[dict[str, Any]]:
         file_paths = list(self.slot_widgets.get(slot_key, {}).get("selected_paths", []))
         if not file_paths:
             return []
@@ -2251,8 +2332,8 @@ class ValidationDesktopApp(QMainWindow):
 
     def _build_user_preview_rows(
         self,
-        usr02_rows: list[dict[str, object]],
-        combined_rows: list[dict[str, object]],
+        usr02_rows: list[dict[str, Any]],
+        combined_rows: list[dict[str, Any]],
     ) -> list[dict[str, str]]:
         usr02_map: dict[tuple[str, str], dict[str, str]] = {}
         addr_users_map: dict[tuple[str, str], dict[str, str]] = {}
@@ -2438,7 +2519,7 @@ class ValidationDesktopApp(QMainWindow):
 
                     if field_name == "REVIEW_STATUS":
                         combo_box = QComboBox()
-                        combo_box.setLayoutDirection(Qt.RightToLeft)
+                        combo_box.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
                         combo_box.setMinimumWidth(150)
                         for status_value in self.REVIEW_STATUS_OPTIONS:
                             combo_box.addItem(self.format_rtl_text(status_value))
@@ -2456,14 +2537,14 @@ class ValidationDesktopApp(QMainWindow):
                     display_value = self._format_user_preview_value_for_display(field_name, value)
                     item = SortableTableWidgetItem(self.format_rtl_text(display_value))
                     item.setData(SortableTableWidgetItem.SORT_ROLE, self._get_user_preview_sort_value(field_name, value))
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                     item.setToolTip(self.format_rtl_text(display_value))
-                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
                     if field_name == "REVIEW_NOTES":
-                        item.setFlags(item.flags() | Qt.ItemIsEditable)
-                        item.setData(Qt.UserRole, review_key)
-                        item.setData(Qt.UserRole + 1, field_name)
+                        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                        item.setData(Qt.ItemDataRole.UserRole, review_key)
+                        item.setData(Qt.ItemDataRole.UserRole + 1, field_name)
 
                     self.user_preview_table.setItem(row_index, column, item)
 
@@ -2557,7 +2638,7 @@ class ValidationDesktopApp(QMainWindow):
         else:
             QMessageBox.information(self, "בדיקת קבוצה הושלמה", "\n".join(summary_lines))
 
-    def _run_slot_validation(self, slot_key: str, file_paths: list[str], show_feedback: bool = True) -> dict[str, object]:
+    def _run_slot_validation(self, slot_key: str, file_paths: list[str], show_feedback: bool = True) -> dict[str, Any]:
         if slot_key == "AGR_1251":
             self.summary_labels["status"].setText("מעבד קובצי הרשאות גדולים במנות...")
             QApplication.processEvents()
@@ -2576,7 +2657,7 @@ class ValidationDesktopApp(QMainWindow):
             self.issues_table.insertRow(0)
             for column, value in enumerate(["מבנה", "SYSTEM", error_message]):
                 item = QTableWidgetItem(self.format_rtl_text(value))
-                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.issues_table.setItem(0, column, item)
             self._append_error_log_entries(slot_key, file_paths, str(error))
             if show_feedback:
@@ -2610,13 +2691,13 @@ class ValidationDesktopApp(QMainWindow):
                 ]
                 for column, value in enumerate(values):
                     item = QTableWidgetItem(value)
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                     self.issues_table.setItem(row_index, column, item)
         else:
             self.issues_table.insertRow(0)
             for column, value in enumerate(["-", "-", "לא נמצאו שגיאות"]):
                 item = QTableWidgetItem(value)
-                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.issues_table.setItem(0, column, item)
 
         self._append_run_log_entries(slot_key, file_paths, result)
@@ -2714,7 +2795,7 @@ class ValidationDesktopApp(QMainWindow):
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(self.format_rtl_text(value))
-                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 item.setToolTip(self.format_rtl_text(value))
                 if column == 5:
                     item.setBackground(QColor("#fdecec") if status_text in {"שגוי", "שגיאה"} else QColor("#eaf7ea"))
@@ -2765,7 +2846,7 @@ class ValidationDesktopApp(QMainWindow):
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(self.format_rtl_text(value))
-                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 item.setToolTip(self.format_rtl_text(value))
                 if column == 5:
                     item.setBackground(QColor("#fdecec"))
@@ -2807,7 +2888,7 @@ class ValidationDesktopApp(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle("פירוט קובץ שנבדק")
-        dialog.setLayoutDirection(Qt.RightToLeft)
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         dialog.resize(760, 420)
 
         layout = QVBoxLayout(dialog)
@@ -2816,7 +2897,7 @@ class ValidationDesktopApp(QMainWindow):
         details_box.setPlainText(self._build_log_details(row_index))
         layout.addWidget(details_box)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         buttons.accepted.connect(dialog.accept)
         layout.addWidget(buttons)
         dialog.exec()
@@ -2853,6 +2934,7 @@ class ValidationDesktopApp(QMainWindow):
 
         workbook = Workbook()
         sheet = workbook.active
+        assert sheet is not None
         sheet.title = self.format_rtl_text("קבצים שנבדקו")
         headers = [
             "משבצת",
@@ -2911,6 +2993,7 @@ class ValidationDesktopApp(QMainWindow):
 
         workbook = Workbook()
         sheet = workbook.active
+        assert sheet is not None
         sheet.title = self.format_rtl_text("סקירת משתמשים")
         sheet.append(export_formal_names)
 
