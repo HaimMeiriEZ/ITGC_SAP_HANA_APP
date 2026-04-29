@@ -15,6 +15,14 @@ from src.validators.spec_rules import (
 class ValidationEngine:
     def __init__(self, required_columns: list[str] | None = None) -> None:
         self.required_columns = required_columns or []
+        self.authorized_users: set[str] = set()
+
+    def set_authorized_users(self, authorized_users: list[str]) -> None:
+        self.authorized_users = {
+            str(user).strip().upper()
+            for user in authorized_users
+            if str(user).strip()
+        }
 
     def run_all(
         self,

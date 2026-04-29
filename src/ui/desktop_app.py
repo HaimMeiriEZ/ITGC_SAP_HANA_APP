@@ -298,6 +298,7 @@ class ValidationDesktopApp(QMainWindow):
 
     SETTINGS_SECTION_DEPENDENCIES = {
         "user_review_period": set(),
+        "authorized_stms_users": set(),
         "super_users": set(),
         "generic_users": set(),
         "critical_roles": set(),
@@ -1166,11 +1167,14 @@ class ValidationDesktopApp(QMainWindow):
         self.system_settings_sections["user_review_period"] = review_group
         self.system_settings_unavailable_labels["user_review_period"] = review_unavailable_label
 
-        super_users_group, super_users_table, super_users_unavailable_label = self._build_super_users_section()
-        self.settings_layout.addWidget(super_users_group)
-        self.system_settings_widgets["super_users"] = super_users_table
-        self.system_settings_sections["super_users"] = super_users_group
-        self.system_settings_unavailable_labels["super_users"] = super_users_unavailable_label
+        authorized_stms_group, authorized_stms_table, authorized_stms_unavailable_label = self._build_super_users_section()
+        self.settings_layout.addWidget(authorized_stms_group)
+        self.system_settings_widgets["authorized_stms_users"] = authorized_stms_table
+        self.system_settings_widgets["super_users"] = authorized_stms_table
+        self.system_settings_sections["authorized_stms_users"] = authorized_stms_group
+        self.system_settings_sections["super_users"] = authorized_stms_group
+        self.system_settings_unavailable_labels["authorized_stms_users"] = authorized_stms_unavailable_label
+        self.system_settings_unavailable_labels["super_users"] = authorized_stms_unavailable_label
 
         generic_users_group = self._add_settings_text_list_section("generic_users", "משתמשים גנריים", "רשימה מופרדת שורות")
         self.system_settings_sections["generic_users"] = generic_users_group
@@ -1281,11 +1285,11 @@ class ValidationDesktopApp(QMainWindow):
 
     def _build_super_users_section(self) -> tuple[QGroupBox, QTableWidget, QLabel]:
         group, layout, unavailable_label = self._build_settings_group(
-            "משתמשיי על",
-            "רשימה של משתמשים בעלי גישה גבוהה. יש להזין CLIENT ו-BNAME.",
+            "מורשי STMS / ניהול שינויים",
+            "רשימה לבנה של משתמשים מורשים להעברת טרנספורטים לייצור. יש להזין CLIENT ו-BNAME.",
         )
         table = QTableWidget(0, 2)
-        table.setHorizontalHeaderLabels(["CLIENT", "משתמש"])
+        table.setHorizontalHeaderLabels(["CLIENT", "BNAME מורשה STMS"])
         table.horizontalHeader().setStretchLastSection(True)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -1343,6 +1347,7 @@ class ValidationDesktopApp(QMainWindow):
     def _default_system_settings(self) -> dict[str, Any]:
         return {
             "generic_users": ["SAP", "DDIC", "TMSADM", "SAPCPIC"],
+            "authorized_stms_users": [],
             "super_users": [],
             "critical_roles": ["SAP_ALL", "SAP_NEW"],
             "critical_privileges": ["S_TABU_DIS", "S_USER_GRP", "S_USER_AGR"],
@@ -1389,6 +1394,10 @@ class ValidationDesktopApp(QMainWindow):
             return defaults
         if "generic_users" not in loaded and "critical_users" in loaded:
             loaded["generic_users"] = loaded.get("critical_users", [])
+        if "authorized_stms_users" not in loaded and "super_users" in loaded:
+            loaded["authorized_stms_users"] = loaded.get("super_users", [])
+        if "super_users" not in loaded and "authorized_stms_users" in loaded:
+            loaded["super_users"] = loaded.get("authorized_stms_users", [])
         merged = copy.deepcopy(defaults)
         for key, value in loaded.items():
             if isinstance(value, dict) and isinstance(merged.get(key), dict):
@@ -1419,20 +1428,22 @@ class ValidationDesktopApp(QMainWindow):
         _fill_lines("critical_roles")
         _fill_lines("critical_privileges")
 
-        super_users_table = self.system_settings_widgets.get("super_users")
-        super_users = settings.get("super_users", []) if isinstance(settings, dict) else []
-        if isinstance(super_users_table, QTableWidget):
-            super_users_table.setRowCount(0)
-            if isinstance(super_users, list):
-                for super_user in super_users:
-                    if isinstance(super_user, dict):
-                        mandt = str(super_user.get("MANDT", "")).strip()
-                        bname = str(super_user.get("BNAME", "")).strip()
+        authorized_table = self.system_settings_widgets.get("authorized_stms_users")
+        authorized_users = settings.get("authorized_stms_users", []) if isinstance(settings, dict) else []
+        if not authorized_users and isinstance(settings, dict):
+            authorized_users = settings.get("super_users", [])
+        if isinstance(authorized_table, QTableWidget):
+            authorized_table.setRowCount(0)
+            if isinstance(authorized_users, list):
+                for authorized_user in authorized_users:
+                    if isinstance(authorized_user, dict):
+                        mandt = str(authorized_user.get("MANDT", "")).strip()
+                        bname = str(authorized_user.get("BNAME", "")).strip()
                         if mandt or bname:
-                            row = super_users_table.rowCount()
-                            super_users_table.insertRow(row)
-                            super_users_table.setItem(row, 0, QTableWidgetItem(mandt))
-                            super_users_table.setItem(row, 1, QTableWidgetItem(bname))
+                            row = authorized_table.rowCount()
+                            authorized_table.insertRow(row)
+                            authorized_table.setItem(row, 0, QTableWidgetItem(mandt))
+                            authorized_table.setItem(row, 1, QTableWidgetItem(bname))
 
         if load_review_period:
             period_cfg = settings.get("user_review_period", {}) if isinstance(settings, dict) else {}
@@ -1478,17 +1489,18 @@ class ValidationDesktopApp(QMainWindow):
         settings["critical_roles"] = _lines_from_editor(self.system_settings_widgets.get("critical_roles"))
         settings["critical_privileges"] = _lines_from_editor(self.system_settings_widgets.get("critical_privileges"))
 
-        super_users_table = self.system_settings_widgets.get("super_users")
-        super_users: list[dict[str, str]] = []
-        if isinstance(super_users_table, QTableWidget):
-            for row_index in range(super_users_table.rowCount()):
-                mandt_item = super_users_table.item(row_index, 0)
-                bname_item = super_users_table.item(row_index, 1)
+        authorized_table = self.system_settings_widgets.get("authorized_stms_users")
+        authorized_users: list[dict[str, str]] = []
+        if isinstance(authorized_table, QTableWidget):
+            for row_index in range(authorized_table.rowCount()):
+                mandt_item = authorized_table.item(row_index, 0)
+                bname_item = authorized_table.item(row_index, 1)
                 mandt_text = str(mandt_item.text()).strip() if isinstance(mandt_item, QTableWidgetItem) else ""
                 bname_text = str(bname_item.text()).strip() if isinstance(bname_item, QTableWidgetItem) else ""
                 if mandt_text or bname_text:
-                    super_users.append({"MANDT": mandt_text, "BNAME": bname_text})
-        settings["super_users"] = super_users
+                    authorized_users.append({"MANDT": mandt_text, "BNAME": bname_text})
+        settings["authorized_stms_users"] = authorized_users
+        settings["super_users"] = authorized_users
 
         period_start_widget = self.system_settings_widgets.get("user_review_period.start_date")
         period_end_widget = self.system_settings_widgets.get("user_review_period.end_date")
@@ -1693,7 +1705,9 @@ class ValidationDesktopApp(QMainWindow):
             return False
         normalized_mandt = str(mandt).strip()
         normalized_bname = str(bname).strip().casefold()
-        super_users = settings.get("super_users", [])
+        super_users = settings.get("authorized_stms_users", [])
+        if not super_users:
+            super_users = settings.get("super_users", [])
         if not isinstance(super_users, list):
             return False
         for row in super_users:
@@ -2373,6 +2387,22 @@ class ValidationDesktopApp(QMainWindow):
                     return str(value).strip()
         return ""
 
+    def _get_authorized_stms_users(self) -> list[str]:
+        table = self.system_settings_widgets.get("authorized_stms_users")
+        if not isinstance(table, QTableWidget):
+            table = self.system_settings_widgets.get("super_users")
+        if not isinstance(table, QTableWidget):
+            return []
+
+        users: list[str] = []
+        for row_index in range(table.rowCount()):
+            bname_item = table.item(row_index, 1)
+            if isinstance(bname_item, QTableWidgetItem):
+                bname = bname_item.text().strip().upper()
+                if bname and bname not in users:
+                    users.append(bname)
+        return users
+
     def _load_preview_rows(self, slot_key: str) -> list[dict[str, Any]]:
         file_paths = list(self.slot_widgets.get(slot_key, {}).get("selected_paths", []))
         if not file_paths:
@@ -2386,6 +2416,7 @@ class ValidationDesktopApp(QMainWindow):
                 ),
                 required_columns=[],
                 source_name_override=slot_key,
+                authorized_users=self._get_authorized_stms_users(),
             )
         except Exception:
             return []
@@ -2865,6 +2896,7 @@ class ValidationDesktopApp(QMainWindow):
                 required_columns=self._required_columns_for_slot(slot_key),
                 output_dir=self.config.output_dir,
                 source_name_override=slot_key,
+                authorized_users=self._get_authorized_stms_users(),
             )
         except Exception as error:
             self.summary_labels["status"].setText(f"שגיאה בעיבוד {slot_key}")

@@ -19,6 +19,7 @@ def process_file(
     output_dir: str | Path | None = None,
     source_name_override: str | None = None,
     input_files: dict[str, list[str | Path]] | None = None,
+    authorized_users: list[str] | None = None,
 ) -> ValidationResult:
     # Prefer input_files when provided and non-empty
     if input_files:
@@ -29,12 +30,18 @@ def process_file(
         }
         if resolved_source_map:
             return _process_source_map(
-                resolved_source_map, required_columns, output_dir, source_name_override
+                resolved_source_map,
+                required_columns,
+                output_dir,
+                source_name_override,
+                authorized_users,
             )
 
     # Legacy path: file_path
     paths = _normalize_paths(file_path)  # type: ignore[arg-type]
     engine = ValidationEngine(required_columns=required_columns or [])
+    if authorized_users:
+        engine.set_authorized_users(authorized_users)
     source_name = source_name_override or paths[0].name
 
     if source_name_override == "AGR_1251":
@@ -65,12 +72,15 @@ def _process_source_map(
     required_columns: list[str] | None,
     output_dir: str | Path | None,
     source_name_override: str | None,
+    authorized_users: list[str] | None = None,
 ) -> ValidationResult:
     """Process a source_key → paths mapping, populating data_map per key."""
     first_key = next(iter(source_map))
     source_name = source_name_override or first_key
     all_paths = [p for paths in source_map.values() for p in paths]
     engine = ValidationEngine(required_columns=required_columns or [])
+    if authorized_users:
+        engine.set_authorized_users(authorized_users)
 
     if source_name == "AGR_1251":
         result = _process_agr1251_in_batches(all_paths, engine, source_name)
