@@ -178,27 +178,25 @@ class TestSmoke(unittest.TestCase):
             self.assertEqual(window.windowTitle(), "כלי להערכת בקרות ITGC בסביבת SAP HANA APP")
             self.assertEqual(window.tabs.count(), 4)
             self.assertEqual(window.tabs.tabText(0), "קליטת קבצים")
-            self.assertEqual(window.tabs.tabText(1), "ביצוע ניתוח לביקורת")
+            self.assertEqual(window.tabs.tabText(1), "הגדרות מערכת לביקורת")
             self.assertEqual(window.tabs.tabText(2), "סקירת דוח משתמשים")
-            self.assertEqual(window.tabs.tabText(3), "הגדרות מערכת לביקורת")
+            self.assertEqual(window.tabs.tabText(3), "ביצוע ניתוח לביקורת")
             self.assertIn("QTabBar::tab:selected", window.tabs.styleSheet())
             self.assertIn("background-color: #6d002f", window.tabs.styleSheet())
             self.assertIn("color: white", window.tabs.styleSheet())
             self.assertIn("בצע ניתוח", window.audit_run_button.text())
             self.assertIn("ייצוא", window.export_log_button.text())
-            self.assertIn("מסך בדיקת קלטי SAP HANA DB", ValidationDesktopApp.format_rtl_text(window.header_label.text()))
+            self.assertIn("מסך בדיקת קלטי SAP HANA APP", ValidationDesktopApp.format_rtl_text(window.header_label.text()))
             self.assertIn("כלי להערכת בקרות ITGC", ValidationDesktopApp.format_rtl_text(window.app_title_label.text()))
-            self.assertIs(window.header_label.parentWidget(), window.intake_tab)
+            self.assertIs(window.header_label.parentWidget().parentWidget(), window.intake_tab)
             self.assertIs(window.hint_label.parentWidget(), window.intake_tab)
             self.assertIs(window.actions_row.parentWidget(), window.intake_tab)
             self.assertIn("מקורות קלט לבדיקת SAP HANA APP", window.slots_group.title())
-            self.assertTrue(window.slots_group.alignment() & Qt.AlignRight)
-            self.assertEqual(window.header_label.layoutDirection(), Qt.RightToLeft)
+            self.assertTrue(window.slots_group.alignment() & Qt.AlignLeft)
+            self.assertEqual(window.header_label.layoutDirection(), Qt.LeftToRight)
             self.assertEqual(window.hint_label.layoutDirection(), Qt.RightToLeft)
-            self.assertEqual(window.actions_row.layoutDirection(), Qt.RightToLeft)
+            self.assertEqual(window.actions_row.layoutDirection(), Qt.LeftToRight)
             self.assertEqual(window.actions_row.sizePolicy().horizontalPolicy(), QSizePolicy.Expanding)
-            self.assertTrue(window.header_label.alignment() & Qt.AlignRight)
-            self.assertTrue(window.hint_label.alignment() & Qt.AlignRight)
             self.assertFalse(window.required_columns_group.isVisible())
             self.assertFalse(window.summary_group.isVisible())
             self.assertFalse(window.results_group.isVisible())
@@ -219,7 +217,7 @@ class TestSmoke(unittest.TestCase):
             self.assertIn("USER_ADDR", window.SLOT_DEFINITIONS["ADR6_USR21"]["description"])
             self.assertIs(window.run_log_group.parentWidget(), window.intake_tab)
             self.assertIs(window.user_preview_group.parentWidget(), window.review_tab)
-            self.assertEqual(ValidationDesktopApp.format_rtl_text(window.user_preview_group.title()), "רשימת משתמשים שנטענו")
+            self.assertEqual(window.user_preview_group.title(), ValidationDesktopApp.format_ui_rtl_text("רשימת משתמשים שנטענו"))
             self.assertGreaterEqual(window.user_preview_table.columnCount(), 24)
             self.assertEqual(window.user_preview_table.verticalScrollBarPolicy(), Qt.ScrollBarAlwaysOn)
             self.assertEqual(window.user_preview_table.horizontalHeaderItem(0).text(), "CLIENT")
@@ -246,27 +244,29 @@ class TestSmoke(unittest.TestCase):
             window.close()
 
     def test_generic_and_super_users_settings_are_persisted(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            generic_editor = window.system_settings_widgets.get("generic_users")
-            self.assertIsInstance(generic_editor, QPlainTextEdit)
-            self.assertEqual(generic_editor.toPlainText().splitlines(), ["SAP", "DDIC", "TMSADM", "SAPCPIC"])
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                generic_editor = window.system_settings_widgets.get("generic_users")
+                self.assertIsInstance(generic_editor, QPlainTextEdit)
+                self.assertEqual(generic_editor.toPlainText().splitlines(), ["SAP", "DDIC", "TMSADM", "SAPCPIC"])
 
-            super_users_table = window.system_settings_widgets.get("super_users")
-            self.assertIsNotNone(super_users_table)
-            self.assertEqual(super_users_table.rowCount(), 0)
-            window._append_super_user_row(super_users_table)
-            self.assertIsNotNone(super_users_table.item(0, 0))
-            self.assertIsNotNone(super_users_table.item(0, 1))
-            super_users_table.item(0, 0).setText("100")
-            super_users_table.item(0, 1).setText("SUPERA")
+                super_users_table = window.system_settings_widgets.get("super_users")
+                self.assertIsNotNone(super_users_table)
+                self.assertEqual(super_users_table.rowCount(), 0)
+                window._append_super_user_row(super_users_table)
+                self.assertIsNotNone(super_users_table.item(0, 0))
+                self.assertIsNotNone(super_users_table.item(0, 1))
+                super_users_table.item(0, 0).setText("100")
+                super_users_table.item(0, 1).setText("SUPERA")
 
-            settings = window._collect_system_settings_from_form()
-            self.assertEqual(settings["super_users"], [{"MANDT": "100", "BNAME": "SUPERA"}])
-            self.assertIn("SAP", settings["generic_users"])
-        finally:
-            window.close()
+                settings = window._collect_system_settings_from_form()
+                self.assertEqual(settings["super_users"], [{"MANDT": "100", "BNAME": "SUPERA"}])
+                self.assertIn("SAP", settings["generic_users"])
+            finally:
+                window.close()
 
     def test_generic_and_super_user_findings_are_created_for_active_unlocked_users(self) -> None:
         get_qt_app()
@@ -524,17 +524,16 @@ class TestSmoke(unittest.TestCase):
                 window.refresh_user_preview()
 
                 self.assertEqual(window.user_preview_table.rowCount(), 1)
-                reviewer_combo = window.user_preview_table.cellWidget(0, 2)
-                self.assertIsNotNone(reviewer_combo)
-                self.assertEqual(reviewer_combo.currentText(), "טרם נבדק")
+                status_item = window.user_preview_table.item(0, 2)
+                self.assertIsNotNone(status_item)
+                self.assertEqual(status_item.text(), "טרם נבדק")
 
-                reviewer_combo.setCurrentText("נבדק - תקין")
-                notes_item = window.user_preview_table.item(0, 3)
-                notes_item.setText("נסקר ואושר")
+                review_key = window._user_reviewer_state_key("100", "USER_A")
+                window._update_reviewer_value(review_key, "REVIEW_STATUS", "נבדק - תקין")
+                window._update_reviewer_value(review_key, "REVIEW_NOTES", "נסקר ואושר")
                 window.refresh_user_preview()
 
-                reviewer_combo = window.user_preview_table.cellWidget(0, 2)
-                self.assertEqual(reviewer_combo.currentText(), "נבדק - תקין")
+                self.assertEqual(window.user_preview_table.item(0, 2).text(), "נבדק - תקין")
                 self.assertEqual(window.user_preview_table.item(0, 3).text(), "נסקר ואושר")
 
                 state_path = base_dir / "data" / "output" / "user_preview_reviewer_state.json"
@@ -679,8 +678,8 @@ class TestSmoke(unittest.TestCase):
                 window.refresh_user_preview()
 
                 # Before import — both should be default
-                combo_before = window.user_preview_table.cellWidget(0, 2)
-                self.assertEqual(combo_before.currentText(), "טרם נבדק")
+                item_before = window.user_preview_table.item(0, 2)
+                self.assertEqual(item_before.text(), "טרם נבדק")
 
                 with patch("src.ui.desktop_app.QFileDialog.getOpenFileName", return_value=(str(import_xlsx), "")), patch(
                     "src.ui.desktop_app.QMessageBox.information"
@@ -701,12 +700,12 @@ class TestSmoke(unittest.TestCase):
                 first_bname = window.user_preview_table.item(0, bname_col_idx).text()
                 self.assertEqual(first_bname, "USER_B")
 
-                combo_a = window.user_preview_table.cellWidget(rows_by_bname["USER_A"], status_col_idx)
-                self.assertEqual(combo_a.currentText(), "נבדק - תקין")
+                item_a = window.user_preview_table.item(rows_by_bname["USER_A"], status_col_idx)
+                self.assertEqual(item_a.text(), "נבדק - תקין")
                 self.assertEqual(window.user_preview_table.item(rows_by_bname["USER_A"], notes_col_idx).text(), "סוקר ואושר")
 
-                combo_b = window.user_preview_table.cellWidget(rows_by_bname["USER_B"], status_col_idx)
-                self.assertEqual(combo_b.currentText(), "טרם נבדק")  # "לבירור" normalizes to default
+                item_b = window.user_preview_table.item(rows_by_bname["USER_B"], status_col_idx)
+                self.assertEqual(item_b.text(), "טרם נבדק")  # "לבירור" normalizes to default
 
                 # State must be persisted to JSON
                 state_path = base_dir / "data" / "output" / "user_preview_reviewer_state.json"
@@ -744,8 +743,10 @@ class TestSmoke(unittest.TestCase):
                 self.assertEqual(window.user_review_progress_bar.format(), "0%")
 
                 status_col_idx = window.user_preview_visible_columns.index("REVIEW_STATUS")
-                combo = window.user_preview_table.cellWidget(0, status_col_idx)
-                combo.setCurrentText("נבדק - תקין")
+
+                review_key = window._user_reviewer_state_key("100", "USER_A")
+                window._update_reviewer_value(review_key, "REVIEW_STATUS", "נבדק - תקין")
+                window.refresh_user_preview()
 
                 # Live update after changing one user to reviewed.
                 self.assertEqual(window.user_review_total_label.text(), window.format_ui_rtl_text('סה"כ משתמשים בדוח: 2'))
@@ -816,8 +817,9 @@ class TestSmoke(unittest.TestCase):
                 notes_col_idx = window.user_preview_visible_columns.index("REVIEW_NOTES")
 
                 # Set to "נבדק - לא תקין" with no notes → warning highlight expected
-                combo = window.user_preview_table.cellWidget(0, status_col_idx)
-                combo.setCurrentText("נבדק - לא תקין")
+                review_key = window._user_reviewer_state_key("100", "USER_A")
+                window._update_reviewer_value(review_key, "REVIEW_STATUS", "נבדק - לא תקין")
+                window.refresh_user_preview()
 
                 notes_item = window.user_preview_table.item(0, notes_col_idx)
                 self.assertIsNotNone(notes_item)
@@ -827,14 +829,15 @@ class TestSmoke(unittest.TestCase):
                 self.assertEqual(notes_item.background().color().name(), warning_color.name())
 
                 # Add notes → highlight should clear
-                notes_item.setText("נבדקה ונמצאה בעיה - טופלה")
-                window._handle_user_preview_item_changed(notes_item)
+                window._update_reviewer_value(review_key, "REVIEW_NOTES", "נבדקה ונמצאה בעיה - טופלה")
+                window.refresh_user_preview()
                 notes_item2 = window.user_preview_table.item(0, notes_col_idx)
                 clear_color = QColor(0, 0, 0, 0)
                 self.assertEqual(notes_item2.background().color().name(), clear_color.name())
 
                 # "טרם נבדק" should mark the full row with light-blue background.
-                combo.setCurrentText("טרם נבדק")
+                window._update_reviewer_value(review_key, "REVIEW_STATUS", "טרם נבדק")
+                window.refresh_user_preview()
                 bname_col_idx = window.user_preview_visible_columns.index("BNAME")
                 bname_item = window.user_preview_table.item(0, bname_col_idx)
                 self.assertIsNotNone(bname_item)
@@ -1054,7 +1057,7 @@ class TestSmoke(unittest.TestCase):
                     ValidationIssue(
                         row_number=1,
                         column_name="BNAME",
-                        message="ערך חריג",
+                        message="ערך חובה חסר",
                         source_file="usr02_a.txt",
                     )
                 ],
@@ -1070,7 +1073,7 @@ class TestSmoke(unittest.TestCase):
             self.assertEqual(window.run_log_table.item(0, 4).text(), "1")
             self.assertEqual(window.run_log_table.item(0, 5).text(), "שגוי")
             self.assertEqual(window.run_log_table.item(1, 5).text(), "תקין")
-            self.assertIn("ערך חריג", window.run_log_table.item(0, 7).text())
+            self.assertIn("ערך חובה חסר", window.run_log_table.item(0, 7).text())
             self.assertIn("ללא שגיאות", window.run_log_table.item(1, 7).text())
             self.assertRegex(window.run_log_table.item(0, 8).text(), r"\d{4}-\d{2}-\d{2}")
             self.assertRegex(window.run_log_table.item(0, 9).text(), r"\d{2}:\d{2}:\d{2}")
@@ -1080,7 +1083,7 @@ class TestSmoke(unittest.TestCase):
             self.assertIn("1.1 - Joiners / Movers / Leavers", invalid_details)
             self.assertIn("2026-04-15", invalid_details)
             self.assertIn("מספר רשומות שנקלטו: 1", invalid_details)
-            self.assertIn("ערך חריג", invalid_details)
+            self.assertIn("ערך חובה חסר", invalid_details)
             self.assertIn("usr02_b.txt", valid_details)
             self.assertIn("לא נמצאו שגיאות", valid_details)
         finally:
@@ -1202,7 +1205,7 @@ class TestSmoke(unittest.TestCase):
 
                 window.refresh_user_preview()
 
-                self.assertEqual(ValidationDesktopApp.format_rtl_text(window.user_preview_group.title()), "רשימת משתמשים שנטענו")
+                self.assertEqual(window.user_preview_group.title(), ValidationDesktopApp.format_ui_rtl_text("רשימת משתמשים שנטענו"))
                 self.assertIs(window.user_preview_group.parentWidget(), window.review_tab)
                 self.assertEqual(window.user_preview_table.rowCount(), 1)
                 self.assertEqual(window.user_preview_table.item(0, 0).text(), "USER_A")

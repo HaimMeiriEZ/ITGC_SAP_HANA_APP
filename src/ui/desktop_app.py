@@ -297,10 +297,10 @@ class ValidationDesktopApp(QMainWindow):
     }
 
     SETTINGS_SECTION_DEPENDENCIES = {
-        "user_review_period": set(),
+        "user_review_period": {"USR02"},
         "super_users": set(),
         "generic_users": set(),
-        "critical_roles": set(),
+        "critical_roles": {"AGR_USERS", "AGR_1251"},
         "critical_privileges": set(),
         "password_policy_defaults": set(),
         "file_mappings": set(),
@@ -383,7 +383,7 @@ class ValidationDesktopApp(QMainWindow):
         _header_row = QHBoxLayout(_header_container)
         _header_row.setContentsMargins(0, 0, 0, 0)
         _header_row.setSpacing(0)
-        self.header_label = QLabel("מסך בדיקת קלטי SAP HANA DB")
+        self.header_label = QLabel("מסך בדיקת קלטי SAP HANA APP")
         self.header_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #16325c;")
         _header_row.addStretch(1)
         _header_row.addWidget(self.header_label)
@@ -1769,20 +1769,15 @@ class ValidationDesktopApp(QMainWindow):
 
     @staticmethod
     def _export_sort_key(preview_row: dict[str, str]) -> int:
-        is_locked = preview_row.get("STATUS", "") == "נעול"
+        review_status = preview_row.get("REVIEW_STATUS", "").strip()
         has_findings = bool(preview_row.get("FINDINGS_DESCRIPTION", "").strip())
-        is_reviewed = preview_row.get("REVIEW_STATUS", "") in ValidationDesktopApp.REVIEWED_STATUSES
-        is_not_ok = preview_row.get("REVIEW_STATUS", "") == "נבדק - לא תקין"
-        has_notes = bool(preview_row.get("REVIEW_NOTES", "").strip())
-        if not is_locked and has_findings and (not is_reviewed or (is_not_ok and not has_notes)):
+        if review_status == "טרם נבדק":
             return 1
-        if not is_locked and not is_reviewed:
+        if review_status == "נבדק - לא תקין":
             return 2
-        if not is_locked and is_reviewed and has_notes:
+        if review_status == "נבדק - תקין" and has_findings:
             return 3
-        if not is_locked and is_reviewed and not has_findings and not has_notes:
-            return 4
-        return 5
+        return 4
 
     def _update_review_row_highlight(self, row_index: int) -> None:
         review_status_col: int | None = None
@@ -1798,6 +1793,10 @@ class ValidationDesktopApp(QMainWindow):
             combo = self.user_preview_table.cellWidget(row_index, review_status_col)
             if isinstance(combo, QComboBox):
                 review_status_text = self.format_rtl_text(combo.currentText())
+            else:
+                status_item = self.user_preview_table.item(row_index, review_status_col)
+                if status_item is not None:
+                    review_status_text = status_item.text().strip()
 
         notes_text = ""
         if notes_col is not None:
@@ -2637,20 +2636,13 @@ class ValidationDesktopApp(QMainWindow):
                     value = preview_row.get(field_name, "") or ""
 
                     if field_name == "REVIEW_STATUS":
-                        combo_box = QComboBox()
-                        combo_box.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-                        combo_box.setMinimumWidth(150)
-                        for status_value in self.REVIEW_STATUS_OPTIONS:
-                            combo_box.addItem(self.format_rtl_text(status_value))
-                        combo_box.setCurrentText(self._normalize_reviewer_status(value))
-                        combo_box.currentTextChanged.connect(
-                            lambda selected_text, current_key=review_key, r_idx=row_index: (
-                                self._update_reviewer_value(current_key, "REVIEW_STATUS", selected_text),
-                                self._update_review_row_highlight(r_idx) if not self._refreshing_user_preview else None,
-                                self._refresh_user_review_progress_summary_from_table() if not self._refreshing_user_preview else None,
-                            )
-                        )
-                        self.user_preview_table.setCellWidget(row_index, column, combo_box)
+                        display_status = self._normalize_reviewer_status(value)
+                        status_item = SortableTableWidgetItem(self.format_rtl_text(display_status))
+                        status_item.setData(SortableTableWidgetItem.SORT_ROLE, display_status)
+                        status_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                        status_item.setToolTip(self.format_rtl_text(display_status))
+                        status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                        self.user_preview_table.setItem(row_index, column, status_item)
                         continue
 
                     display_value = self._format_user_preview_value_for_display(field_name, value)
@@ -2661,9 +2653,7 @@ class ValidationDesktopApp(QMainWindow):
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
                     if field_name == "REVIEW_NOTES":
-                        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-                        item.setData(Qt.ItemDataRole.UserRole, review_key)
-                        item.setData(Qt.ItemDataRole.UserRole + 1, field_name)
+                        pass  # read-only for audit tool users
 
                     self.user_preview_table.setItem(row_index, column, item)
 
