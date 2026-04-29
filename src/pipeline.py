@@ -46,7 +46,7 @@ def process_file(
             file_rows = _read_rows(path)
             file_row_counts[path.name] = len(file_rows)
             rows.extend(_attach_source(file_rows, path))
-        result = engine.validate(rows, source_name=source_name)
+        result = engine.run_all({source_name: rows}, source_name=source_name)
         result.source_files = [path.name for path in paths]
         result.file_row_counts = file_row_counts
         result.total_rows_override = len(rows)
@@ -92,7 +92,7 @@ def _process_source_map(
                 rows.extend(annotated)
                 key_rows.extend(annotated)
             data_map[key] = key_rows
-        result = engine.validate(rows, source_name=source_name)
+        result = engine.run_all(data_map, source_name=source_name)
         result.source_files = [p.name for p in all_paths]
         result.file_row_counts = file_row_counts
         result.total_rows_override = len(rows)

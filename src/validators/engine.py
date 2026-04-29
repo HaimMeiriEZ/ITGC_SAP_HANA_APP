@@ -16,6 +16,19 @@ class ValidationEngine:
     def __init__(self, required_columns: list[str] | None = None) -> None:
         self.required_columns = required_columns or []
 
+    def run_all(
+        self,
+        data_map: dict[str, list[dict[str, Any]]],
+        source_name: str | None = None,
+    ) -> ValidationResult:
+        """Run validation with full source mapping, prepared for cross-source controls."""
+        all_rows: list[dict[str, Any]] = [
+            row
+            for rows in data_map.values()
+            for row in rows
+        ]
+        return self.validate(all_rows, source_name=source_name)
+
     def validate(self, rows: list[dict[str, Any]], source_name: str | None = None) -> ValidationResult:
         issues: list[ValidationIssue] = []
         available_columns = {

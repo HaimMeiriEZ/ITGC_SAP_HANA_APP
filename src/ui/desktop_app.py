@@ -1995,6 +1995,45 @@ class ValidationDesktopApp(QMainWindow):
             return []
         return list(self.slot_widgets[self.selected_slot_key].get("selected_paths", []))
 
+    def _build_input_files_dict(
+        self,
+        preferred_slot_key: str | None = None,
+        fallback_file_paths: list[str] | None = None,
+    ) -> dict[str, list[str]]:
+        """Collect selected input files from all slot widgets for pipeline execution."""
+        input_files: dict[str, list[str]] = {}
+
+        if preferred_slot_key and fallback_file_paths:
+            normalized_fallback = [str(path).strip() for path in fallback_file_paths if str(path).strip()]
+            if normalized_fallback:
+                input_files[preferred_slot_key] = normalized_fallback
+
+        for slot_key, widget_data in self.slot_widgets.items():
+            selected_paths: list[str] = []
+
+            if hasattr(widget_data, "get_selected_paths"):
+                try:
+                    raw_paths = widget_data.get_selected_paths()
+                except Exception:
+                    raw_paths = []
+            elif hasattr(widget_data, "selected_paths"):
+                raw_paths = widget_data.selected_paths
+            elif isinstance(widget_data, dict):
+                raw_paths = widget_data.get("selected_paths", [])
+            else:
+                raw_paths = []
+
+            if isinstance(raw_paths, str):
+                if raw_paths.strip():
+                    selected_paths = [raw_paths.strip()]
+            elif isinstance(raw_paths, (list, tuple, set)):
+                selected_paths = [str(path).strip() for path in raw_paths if str(path).strip()]
+
+            if selected_paths:
+                input_files[slot_key] = selected_paths
+
+        return input_files
+
     @staticmethod
     def _build_input_files(slot_key: str, file_paths: list[str]) -> dict[str, list[str]]:
         """Build an input_files dict for process_file from a slot's selected paths."""
@@ -2826,9 +2865,14 @@ class ValidationDesktopApp(QMainWindow):
             self.summary_labels["status"].setText("מעבד קובצי הרשאות גדולים במנות...")
             QApplication.processEvents()
 
+        input_files_dict = self._build_input_files_dict(
+            preferred_slot_key=slot_key,
+            fallback_file_paths=file_paths,
+        )
+
         try:
             result = process_file(
-                input_files=self._build_input_files(slot_key, file_paths),
+                input_files=input_files_dict,
                 required_columns=self._required_columns_for_slot(slot_key),
                 output_dir=self.config.output_dir,
                 source_name_override=slot_key,
