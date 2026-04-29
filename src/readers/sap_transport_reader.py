@@ -27,6 +27,7 @@ class SapTransportReader:
     | AS4USER         | Transport owner / original developer         |
     | IMPORT_USER     | User who performed the import to production  |
     | AS4TEXT         | Transport description                        |
+    | RC              | STMS return code (import result)             |
     +-----------------+----------------------------------------------+
     """
 
@@ -121,12 +122,24 @@ class SapTransportReader:
         client_index = trkorr_index + 1 if trkorr_index + 1 < len(parts) else None
         owner_index = trkorr_index + 2 if trkorr_index + 2 < len(parts) else None
         import_user_index = trkorr_index + 3 if trkorr_index + 3 < len(parts) else None
-        desc_index = trkorr_index + 4 if trkorr_index + 4 < len(parts) else None
+        desc_start_index = trkorr_index + 4 if trkorr_index + 4 < len(parts) else None
 
         def _get(index: int | None) -> str:
             if index is None or index >= len(parts):
                 return ""
             return parts[index]
+
+        tail_parts: list[str] = []
+        if desc_start_index is not None:
+            tail_parts = parts[desc_start_index:]
+
+        rc = ""
+        description_parts = tail_parts
+        if tail_parts:
+            last_token = tail_parts[-1]
+            if re.fullmatch(r"\d+", last_token):
+                rc = last_token
+                description_parts = tail_parts[:-1]
 
         return {
             "TRKORR": parts[trkorr_index],
@@ -135,5 +148,6 @@ class SapTransportReader:
             "MANDT": _get(client_index),
             "AS4USER": _get(owner_index),
             "IMPORT_USER": _get(import_user_index),
-            "AS4TEXT": _get(desc_index),
+            "AS4TEXT": " ".join(description_parts).strip(),
+            "RC": rc,
         }
