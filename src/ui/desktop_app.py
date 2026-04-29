@@ -297,10 +297,10 @@ class ValidationDesktopApp(QMainWindow):
     }
 
     SETTINGS_SECTION_DEPENDENCIES = {
-        "user_review_period": {"USR02"},
+        "user_review_period": set(),
         "super_users": set(),
         "generic_users": set(),
-        "critical_roles": {"AGR_USERS", "AGR_1251"},
+        "critical_roles": set(),
         "critical_privileges": set(),
         "password_policy_defaults": set(),
         "file_mappings": set(),
@@ -959,7 +959,7 @@ class ValidationDesktopApp(QMainWindow):
         user_preview_layout.addWidget(self.user_preview_table, 1)
         self.review_layout.addWidget(self.user_preview_group, 1)
 
-        self.run_log_group = QGroupBox(self.format_ui_rtl_text("לוג קבצים שנבדקו"))
+        self.run_log_group = QGroupBox(self.format_ui_rtl_text("לוג קבצים שנקלטו"))
         self.run_log_group.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         run_log_layout = QVBoxLayout(self.run_log_group)
         run_log_layout.setContentsMargins(12, 18, 12, 12)
@@ -1561,17 +1561,12 @@ class ValidationDesktopApp(QMainWindow):
         }
 
     def _apply_system_settings_availability(self) -> None:
-        available_slots = self._available_selected_slots()
         for section_key, section_widget in self.system_settings_sections.items():
-            required_slots = self.SETTINGS_SECTION_DEPENDENCIES.get(section_key, set())
-            is_available = not required_slots or bool(available_slots.intersection(required_slots))
             section_widget.setVisible(True)
-            section_widget.setEnabled(is_available)
+            section_widget.setEnabled(True)
             if section_key in self.system_settings_unavailable_labels:
-                self.system_settings_unavailable_labels[section_key].setVisible(not is_available)
-            section_widget.setToolTip(
-                "" if is_available else "לא זמין ללא קובץ מקור רלוונטי עבור התיבה הזו"
-            )
+                self.system_settings_unavailable_labels[section_key].setVisible(False)
+            section_widget.setToolTip("")
 
     def _build_issue_preview(self, issues: list) -> str:
         if not issues:
@@ -2000,6 +1995,13 @@ class ValidationDesktopApp(QMainWindow):
             return []
         return list(self.slot_widgets[self.selected_slot_key].get("selected_paths", []))
 
+    @staticmethod
+    def _build_input_files(slot_key: str, file_paths: list[str]) -> dict[str, list[str]]:
+        """Build an input_files dict for process_file from a slot's selected paths."""
+        if not file_paths:
+            return {}
+        return {slot_key: file_paths}
+
     def _format_selected_files(self, file_paths: list[str]) -> str:
         if len(file_paths) == 1:
             return self.format_rtl_text(file_paths[0])
@@ -2353,7 +2355,7 @@ class ValidationDesktopApp(QMainWindow):
 
         try:
             result = process_file(
-                file_paths,
+                input_files=self._build_input_files(slot_key, file_paths),
                 required_columns=[],
                 source_name_override=slot_key,
             )
@@ -2826,7 +2828,7 @@ class ValidationDesktopApp(QMainWindow):
 
         try:
             result = process_file(
-                file_paths,
+                input_files=self._build_input_files(slot_key, file_paths),
                 required_columns=self._required_columns_for_slot(slot_key),
                 output_dir=self.config.output_dir,
                 source_name_override=slot_key,

@@ -13,17 +13,32 @@ AGR_1251_BATCH_SIZE = 20000
 
 
 def process_file(
-    file_path: str | Path | Iterable[str | Path],
+    file_path: str | Path | Iterable[str | Path] | None = None,
     required_columns: list[str] | None = None,
     output_dir: str | Path | None = None,
     source_name_override: str | None = None,
+    input_files: dict[str, list[str | Path]] | None = None,
 ) -> ValidationResult:
-    paths = _normalize_paths(file_path)
+    # Prefer input_files when provided and non-empty
+    if input_files:
+        resolved_source_map: dict[str, list[Path]] = {
+            key: _normalize_paths(paths)
+            for key, paths in input_files.items()
+            if paths
+        }
+        if resolved_source_map:
+            return _process_source_map(
+                resolved_source_map, required_columns, output_dir, source_name_override
+            )
+
+    # Legacy path: file_path
+    paths = _normalize_paths(file_path)  # type: ignore[arg-type]
     engine = ValidationEngine(required_columns=required_columns or [])
     source_name = source_name_override or paths[0].name
 
     if source_name_override == "AGR_1251":
         result = _process_agr1251_in_batches(paths, engine, source_name)
+        result.data_map = {source_name: result.rows}
     else:
         rows: list[dict] = []
         file_row_counts: dict[str, int] = {}
@@ -35,10 +50,57 @@ def process_file(
         result.source_files = [path.name for path in paths]
         result.file_row_counts = file_row_counts
         result.total_rows_override = len(rows)
+        result.data_map = {source_name: rows}
 
     if output_dir is not None:
         report_writer = ExcelReportWriter()
         result.report_path = report_writer.write(result, paths[0], Path(output_dir))
+
+    return result
+
+
+def _process_source_map(
+    source_map: dict[str, list[Path]],
+    required_columns: list[str] | None,
+    output_dir: str | Path | None,
+    source_name_override: str | None,
+) -> ValidationResult:
+    """Process a source_key → paths mapping, populating data_map per key."""
+    first_key = next(iter(source_map))
+    source_name = source_name_override or first_key
+    all_paths = [p for paths in source_map.values() for p in paths]
+    engine = ValidationEngine(required_columns=required_columns or [])
+
+    if source_name == "AGR_1251":
+        result = _process_agr1251_in_batches(all_paths, engine, source_name)
+        # Populate data_map with sample rows grouped by source_key
+        data_map: dict[str, list[dict]] = {}
+        for key, paths in source_map.items():
+            names = {p.name for p in paths}
+            data_map[key] = [r for r in result.rows if r.get("__source_file") in names]
+        result.data_map = data_map
+    else:
+        rows: list[dict] = []
+        file_row_counts: dict[str, int] = {}
+        data_map = {}
+        for key, paths in source_map.items():
+            key_rows: list[dict] = []
+            for path in paths:
+                file_rows = _read_rows(path)
+                file_row_counts[path.name] = len(file_rows)
+                annotated = _attach_source(file_rows, path)
+                rows.extend(annotated)
+                key_rows.extend(annotated)
+            data_map[key] = key_rows
+        result = engine.validate(rows, source_name=source_name)
+        result.source_files = [p.name for p in all_paths]
+        result.file_row_counts = file_row_counts
+        result.total_rows_override = len(rows)
+        result.data_map = data_map
+
+    if output_dir is not None:
+        report_writer = ExcelReportWriter()
+        result.report_path = report_writer.write(result, all_paths[0], Path(output_dir))
 
     return result
 

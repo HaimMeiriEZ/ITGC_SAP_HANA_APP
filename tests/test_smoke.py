@@ -306,10 +306,10 @@ class TestSmoke(unittest.TestCase):
         get_qt_app()
         window = ValidationDesktopApp()
         try:
-            self.assertFalse(window.system_settings_sections["user_review_period"].isEnabled())
-            self.assertFalse(window.system_settings_unavailable_labels["user_review_period"].isHidden())
-            self.assertFalse(window.system_settings_sections["critical_roles"].isEnabled())
-            self.assertFalse(window.system_settings_unavailable_labels["critical_roles"].isHidden())
+            self.assertTrue(window.system_settings_sections["user_review_period"].isEnabled())
+            self.assertTrue(window.system_settings_unavailable_labels["user_review_period"].isHidden())
+            self.assertTrue(window.system_settings_sections["critical_roles"].isEnabled())
+            self.assertTrue(window.system_settings_unavailable_labels["critical_roles"].isHidden())
         finally:
             window.close()
 
@@ -317,15 +317,15 @@ class TestSmoke(unittest.TestCase):
         get_qt_app()
         window = ValidationDesktopApp()
         try:
-            self.assertFalse(window.system_settings_sections["user_review_period"].isEnabled())
+            self.assertTrue(window.system_settings_sections["user_review_period"].isEnabled())
             window.slot_widgets["USR02"]["selected_paths"] = ["C:/temp/usr02_100.txt"]
             window._apply_system_settings_availability()
             self.assertTrue(window.system_settings_sections["user_review_period"].isEnabled())
             self.assertTrue(window.system_settings_unavailable_labels["user_review_period"].isHidden())
 
             window.clear_slot_selection("USR02")
-            self.assertFalse(window.system_settings_sections["user_review_period"].isEnabled())
-            self.assertFalse(window.system_settings_unavailable_labels["user_review_period"].isHidden())
+            self.assertTrue(window.system_settings_sections["user_review_period"].isEnabled())
+            self.assertTrue(window.system_settings_unavailable_labels["user_review_period"].isHidden())
         finally:
             window.close()
 
@@ -1449,6 +1449,66 @@ class TestSmoke(unittest.TestCase):
         result = ValidationEngine(required_columns=["PARAMETER", "VALUE"]).validate(rows, source_name="RSPARAM")
 
         self.assertTrue(any(issue.column_name == "VALUE" and issue.message == "ערך חובה חסר" for issue in result.issues))
+
+    # --- input_files / data_map tests (Commit 5) ---
+
+    def test_process_file_with_input_files_only(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "accounts.txt"
+            path.write_text("user_id;name\n1;Dana\n2;Noam\n", encoding="utf-8")
+
+            result = process_file(
+                input_files={"MY_SLOT": [path]},
+                required_columns=["user_id", "name"],
+            )
+
+            self.assertEqual(result.summary.total_rows, 2)
+            self.assertTrue(result.summary.is_valid)
+            self.assertIn("MY_SLOT", result.data_map)
+            self.assertEqual(len(result.data_map["MY_SLOT"]), 2)
+
+    def test_process_file_with_input_files_multi_file(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path1 = Path(temp_dir) / "accounts_part1.txt"
+            path2 = Path(temp_dir) / "accounts_part2.txt"
+            path1.write_text("user_id;name\n1;Dana\n", encoding="utf-8")
+            path2.write_text("user_id;name\n2;Noam\n", encoding="utf-8")
+
+            result = process_file(
+                input_files={"MY_SLOT": [path1, path2]},
+                required_columns=["user_id", "name"],
+            )
+
+            self.assertEqual(result.summary.total_rows, 2)
+            self.assertTrue(result.summary.is_valid)
+            self.assertIn("MY_SLOT", result.data_map)
+            self.assertEqual(len(result.data_map["MY_SLOT"]), 2)
+            self.assertEqual(sorted(result.source_files), sorted([path1.name, path2.name]))
+
+    def test_process_file_backward_compat_file_path_still_works(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "users.txt"
+            path.write_text("user_id;name\n1;Dana\n2;Noam\n", encoding="utf-8")
+
+            result = process_file(path, required_columns=["user_id", "name"])
+
+            self.assertEqual(result.summary.total_rows, 2)
+            self.assertTrue(result.summary.is_valid)
+            self.assertIn(path.name, result.data_map)
+
+    def test_process_file_input_files_empty_falls_back_to_file_path(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "users.txt"
+            path.write_text("user_id;name\n1;Dana\n", encoding="utf-8")
+
+            result = process_file(
+                file_path=path,
+                required_columns=["user_id", "name"],
+                input_files={},
+            )
+
+            self.assertEqual(result.summary.total_rows, 1)
+            self.assertTrue(result.summary.is_valid)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ class ValidationResult:
     source_files: list[str] = field(default_factory=list)
     file_row_counts: dict[str, int] = field(default_factory=dict)
     total_rows_override: int | None = None
+    data_map: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     @property
     def summary(self) -> ValidationSummary:
