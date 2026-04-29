@@ -4,7 +4,7 @@ import re
 import subprocess
 import sys
 import copy
-from typing import Any
+from typing import Any, Sequence
 from datetime import datetime, date
 from pathlib import Path
 
@@ -1998,30 +1998,23 @@ class ValidationDesktopApp(QMainWindow):
     def _build_input_files_dict(
         self,
         preferred_slot_key: str | None = None,
-        fallback_file_paths: list[str] | None = None,
-    ) -> dict[str, list[str]]:
+        fallback_file_paths: Sequence[str | Path] | None = None,
+    ) -> dict[str, list[str | Path]]:
         """Collect selected input files from all slot widgets for pipeline execution."""
-        input_files: dict[str, list[str]] = {}
+        input_files: dict[str, list[str | Path]] = {}
 
         if preferred_slot_key and fallback_file_paths:
-            normalized_fallback = [str(path).strip() for path in fallback_file_paths if str(path).strip()]
+            normalized_fallback: list[str | Path] = [
+                str(path).strip()
+                for path in fallback_file_paths
+                if str(path).strip()
+            ]
             if normalized_fallback:
                 input_files[preferred_slot_key] = normalized_fallback
 
         for slot_key, widget_data in self.slot_widgets.items():
-            selected_paths: list[str] = []
-
-            if hasattr(widget_data, "get_selected_paths"):
-                try:
-                    raw_paths = widget_data.get_selected_paths()
-                except Exception:
-                    raw_paths = []
-            elif hasattr(widget_data, "selected_paths"):
-                raw_paths = widget_data.selected_paths
-            elif isinstance(widget_data, dict):
-                raw_paths = widget_data.get("selected_paths", [])
-            else:
-                raw_paths = []
+            selected_paths: list[str | Path] = []
+            raw_paths = widget_data.get("selected_paths", [])
 
             if isinstance(raw_paths, str):
                 if raw_paths.strip():
@@ -2033,13 +2026,6 @@ class ValidationDesktopApp(QMainWindow):
                 input_files[slot_key] = selected_paths
 
         return input_files
-
-    @staticmethod
-    def _build_input_files(slot_key: str, file_paths: list[str]) -> dict[str, list[str]]:
-        """Build an input_files dict for process_file from a slot's selected paths."""
-        if not file_paths:
-            return {}
-        return {slot_key: file_paths}
 
     def _format_selected_files(self, file_paths: list[str]) -> str:
         if len(file_paths) == 1:
@@ -2394,7 +2380,10 @@ class ValidationDesktopApp(QMainWindow):
 
         try:
             result = process_file(
-                input_files=self._build_input_files(slot_key, file_paths),
+                input_files=self._build_input_files_dict(
+                    preferred_slot_key=slot_key,
+                    fallback_file_paths=file_paths,
+                ),
                 required_columns=[],
                 source_name_override=slot_key,
             )
