@@ -38,6 +38,7 @@ PROFILE_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "TRKORR": ("REQUEST", "REQUEST NUMBER", "TRANSPORT REQUEST"),
     "STATUS": ("RC", "RETURN CODE", "FUNCTION", "TRFUNCTION"),
     "AS4USER": ("OWNER", "USER", "CREATED BY", "USER NAME"),
+    "IMPORT_USER": ("IMPORT USER", "IMPORTED BY", "IMPORTED USER"),
     "AS4DATE": ("DATE", "CHANGE DATE"),
     "TRFUNCTION": ("RC", "RETURN CODE", "FUNCTION", "STATUS"),
     "MANDT": ("CLT", "CLIENT"),
@@ -245,6 +246,8 @@ def detect_validation_profile(source_name: str | None, rows: list[dict[str, Any]
         or matches_column_alias(columns, "COMPANY")
     ):
         return "ADR6_USR21"
+    if matches_column_alias(columns, "TRKORR") and matches_column_alias(columns, "IMPORT_USER"):
+        return "STMS"
     if matches_column_alias(columns, "TRKORR") and (
         "SHORT TEXT" in columns or matches_column_alias(columns, "STATUS") or matches_column_alias(columns, "AS4USER")
     ):
@@ -293,6 +296,60 @@ def build_profile_issues(profile: str | None, rows: list[dict[str, Any]]) -> lis
 
     if profile in ("RSPARAM", "TPFET"):
         issues.extend(_evaluate_rsparam_policy(rows))
+
+    return issues
+
+
+def build_control_44_issues(
+    profile: str | None,
+    rows: list[dict[str, Any]],
+    authorized_users: set[str],
+) -> list[ValidationIssue]:
+    """Control 44: only authorized users may import transports to production."""
+    if profile != "STMS" or not rows:
+        return []
+
+    issues: list[ValidationIssue] = []
+    for row_index, row in enumerate(rows, start=1):
+        normalized_row = {
+            normalize_name(key): value
+            for key, value in row.items()
+            if not str(key).startswith("__")
+        }
+
+        trkorr = ""
+        for candidate in get_column_aliases("TRKORR"):
+            if candidate in normalized_row:
+                trkorr = str(normalized_row.get(candidate, "")).strip()
+                if trkorr:
+                    break
+
+        import_user = ""
+        for candidate in get_column_aliases("IMPORT_USER"):
+            if candidate in normalized_row:
+                import_user = str(normalized_row.get(candidate, "")).strip().upper()
+                if import_user:
+                    break
+
+        if not trkorr or not import_user:
+            continue
+
+        if import_user not in authorized_users:
+            as4date = ""
+            for candidate in get_column_aliases("AS4DATE"):
+                if candidate in normalized_row:
+                    as4date = str(normalized_row.get(candidate, "")).strip()
+                    if as4date:
+                        break
+
+            issues.append(
+                ValidationIssue(
+                    row_number=row_index,
+                    column_name="IMPORT_USER",
+                    message=f"בקרה 44: המשתמש {import_user} העביר את טרנספורט {trkorr} ב-{as4date} אך אינו ברשימת המורשים",
+                    source_file=str(row.get("__source_file", "")),
+                )
+            )
 
     return issues
 

@@ -2,6 +2,7 @@ from typing import Any
 
 from src.models.validation_result import ValidationIssue, ValidationResult
 from src.validators.spec_rules import (
+    build_control_44_issues,
     build_profile_issues,
     detect_validation_profile,
     filter_required_value_columns,
@@ -106,5 +107,13 @@ class ValidationEngine:
             if issue.row_number > 0 and issue.row_number <= len(rows):
                 issue.source_file = str(rows[issue.row_number - 1].get("__source_file", ""))
             issues.append(issue)
+
+        issues.extend(
+            build_control_44_issues(
+                detected_profile,
+                rows,
+                self.authorized_users,
+            )
+        )
 
         return ValidationResult(rows=rows, issues=issues, detected_profile=detected_profile)
