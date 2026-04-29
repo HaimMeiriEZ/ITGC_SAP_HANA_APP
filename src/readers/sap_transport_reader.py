@@ -33,7 +33,7 @@ class SapTransportReader:
 
     TRANSPORT_RE = re.compile(r"[A-Z0-9]{3}K\d{6}")
     # Column names that signal a standard SAP table export (not a log)
-    STANDARD_HEADER_HINTS = {"TRKORR", "AS4USER", "TRSTATUS", "AS4DATE", "REQUEST"}
+    STANDARD_HEADER_HINTS = {"TRKORR", "AS4USER", "TRSTATUS", "AS4DATE"}
 
     # --- Public interface (matches TextFileReader / ExcelFileReader) ----------
 
