@@ -6,7 +6,7 @@ import unittest
 
 from openpyxl import Workbook, load_workbook
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QDialog, QHeaderView, QPlainTextEdit, QScrollArea, QSizePolicy
+from PySide6.QtWidgets import QApplication, QDialog, QHeaderView, QPlainTextEdit, QScrollArea, QSizePolicy, QTableWidgetItem
 
 from src.models.validation_result import ValidationIssue, ValidationResult
 from src.pipeline import process_file
@@ -1073,6 +1073,35 @@ class TestSmoke(unittest.TestCase):
                 self.assertEqual(workbook["פירוט ממצאים"]["A2"].value, "44")
             finally:
                 window.close()
+
+    def test_audit_detail_dialog_text_includes_all_fields(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            window.audit_detail_table.setRowCount(1)
+            values = [
+                "rz10.txt",
+                "2026-04-29",
+                "MA - ניהול גישה",
+                "גבוה",
+                "תיאור בדיקה",
+                "מדיניות סיסמאות",
+                "6",
+                "-",
+                "עם ממצא",
+                "תיאור מלא לדוגמה",
+            ]
+            for column, value in enumerate(values):
+                window.audit_detail_table.setItem(0, column, QTableWidgetItem(value))
+
+            detail_text = window._build_audit_detail_dialog_text(0)
+
+            self.assertIn("פירוט ממצא ביקורת", detail_text)
+            self.assertIn("קובץ מקור: rz10.txt", detail_text)
+            self.assertIn("סטטוס: עם ממצא", detail_text)
+            self.assertIn("תיאור מלא: תיאור מלא לדוגמה", detail_text)
+        finally:
+            window.close()
 
     def test_category_run_button_validates_selected_group(self) -> None:
         with TemporaryDirectory() as temp_dir:

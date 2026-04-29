@@ -11,7 +11,7 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
-from PySide6.QtCore import QCoreApplication, QDate, Qt
+from PySide6.QtCore import QCoreApplication, QDate, QObject, QThread, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -46,6 +46,8 @@ from PySide6.QtWidgets import (
 from src.config import AppConfig
 from src.models.validation_result import ValidationIssue
 from src.pipeline import process_file
+from src.readers.excel_reader import ExcelFileReader
+from src.readers.text_reader import TextFileReader
 from src.reporting.excel_report import ExcelReportWriter
 from src.validators.spec_rules import (
     get_audit_control_definition,
@@ -81,7 +83,48 @@ class SortableTableWidgetItem(QTableWidgetItem):
         return NotImplemented
 
 
+class SlotValidationWorker(QObject):
+    succeeded = Signal(str, list, object)
+    failed = Signal(str, list, str)
+    finished = Signal()
+
+    def __init__(
+        self,
+        slot_key: str,
+        file_paths: list[str],
+        input_files_dict: dict[str, list[str | Path]],
+        required_columns: list[str],
+        output_dir: Path,
+        authorized_users: list[str],
+    ) -> None:
+        super().__init__()
+        self.slot_key = slot_key
+        self.file_paths = file_paths
+        self.input_files_dict = input_files_dict
+        self.required_columns = required_columns
+        self.output_dir = output_dir
+        self.authorized_users = authorized_users
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = process_file(
+                input_files=self.input_files_dict,
+                required_columns=self.required_columns,
+                output_dir=self.output_dir,
+                source_name_override=self.slot_key,
+                authorized_users=self.authorized_users,
+            )
+            self.succeeded.emit(self.slot_key, list(self.file_paths), result)
+        except Exception as error:
+            self.failed.emit(self.slot_key, list(self.file_paths), str(error))
+        finally:
+            self.finished.emit()
+
+
 class ValidationDesktopApp(QMainWindow):
+    USER_PREVIEW_SLOTS = {"USR02", "ADR6_USR21"}
+
     MULTI_FILE_SLOTS = {
         "USR02",
         "ADR6_USR21",
@@ -330,6 +373,8 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_summary_records: dict[str, dict[str, Any]] = {}
         self.audit_details_by_control: dict[str, list[dict[str, Any]]] = {}
         self.audit_findings_export_path: Path | None = None
+        self.validation_thread: QThread | None = None
+        self.validation_worker: SlotValidationWorker | None = None
         self._allow_user_preview_persistence = base_dir is not None or "unittest" not in sys.modules
         self.last_file_dialog_directory = self._load_last_file_dialog_directory()
         self._refreshing_user_preview = False
@@ -494,6 +539,29 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_run_button.clicked.connect(self.run_validation)
         self.analysis_layout.addWidget(self.audit_run_button, 0, Qt.AlignmentFlag.AlignRight)
 
+        self.analysis_progress_container = QWidget()
+        self.analysis_progress_container.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        analysis_progress_layout = QHBoxLayout(self.analysis_progress_container)
+        analysis_progress_layout.setContentsMargins(0, 0, 0, 0)
+        analysis_progress_layout.setSpacing(8)
+        analysis_progress_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self.analysis_progress_label = QLabel(self.format_ui_rtl_text("מעבד קובץ..."))
+        self.analysis_progress_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.analysis_progress_label.setStyleSheet("color: #16325c; font-weight: bold;")
+
+        self.analysis_progress_bar = QProgressBar()
+        self.analysis_progress_bar.setMinimumWidth(220)
+        self.analysis_progress_bar.setMaximumWidth(320)
+        self.analysis_progress_bar.setTextVisible(False)
+        self.analysis_progress_bar.setRange(0, 0)
+
+        analysis_progress_layout.addWidget(self.analysis_progress_label)
+        analysis_progress_layout.addWidget(self.analysis_progress_bar)
+        analysis_progress_layout.addStretch(1)
+        self.analysis_progress_container.hide()
+        self.analysis_layout.addWidget(self.analysis_progress_container, 0, Qt.AlignmentFlag.AlignRight)
+
         self.audit_export_button = QPushButton(self.format_ui_rtl_text("ייצוא ממצאים לאקסל"))
         self.audit_export_button.clicked.connect(lambda: self.export_audit_findings_to_excel(open_after_export=True))
         self.analysis_layout.addWidget(self.audit_export_button, 0, Qt.AlignmentFlag.AlignRight)
@@ -563,6 +631,8 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_detail_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.audit_detail_table.setAlternatingRowColors(True)
         self.audit_detail_table.setMinimumHeight(220)
+        self.audit_detail_table.setToolTip(self.format_ui_rtl_text("לחיצה כפולה על שורה תציג פירוט מלא של הממצא"))
+        self.audit_detail_table.cellDoubleClicked.connect(self.show_audit_detail_dialog)
         audit_detail_layout.addWidget(self.audit_detail_table)
         self.analysis_layout.addWidget(self.audit_detail_group)
 
@@ -2021,7 +2091,8 @@ class ValidationDesktopApp(QMainWindow):
             else:
                 self.required_columns_edit.setText("")
 
-        self.refresh_user_preview()
+        if slot_key in self.USER_PREVIEW_SLOTS:
+            self.refresh_user_preview()
         self._apply_system_settings_availability()
 
     def clear_last_loaded_slot(self) -> None:
@@ -2057,7 +2128,8 @@ class ValidationDesktopApp(QMainWindow):
             self._remember_slot_load(slot_key)
             self._update_slot_path_label(slot_key, file_paths)
             self.required_columns_edit.setText(self._suggest_required_columns(slot_key))
-            self.refresh_user_preview()
+            if slot_key in self.USER_PREVIEW_SLOTS:
+                self.refresh_user_preview()
             self._apply_system_settings_availability()
 
     def _parse_required_columns(self, raw_value: str | None = None) -> list[str]:
@@ -2488,26 +2560,32 @@ class ValidationDesktopApp(QMainWindow):
         if not file_paths:
             return []
 
-        try:
-            result = process_file(
-                input_files=self._build_input_files_dict(
-                    preferred_slot_key=slot_key,
-                    fallback_file_paths=file_paths,
-                ),
-                required_columns=[],
-                source_name_override=slot_key,
-                authorized_users=self._get_authorized_stms_users(),
-            )
-        except Exception:
-            return []
+        preview_rows: list[dict[str, Any]] = []
+        text_reader = TextFileReader()
+        excel_reader = ExcelFileReader()
 
-        data_map = getattr(result, "data_map", {})
-        if isinstance(data_map, dict) and slot_key in data_map:
-            slot_rows = data_map.get(slot_key, [])
-            if isinstance(slot_rows, list):
-                return list(slot_rows)
+        for raw_path in file_paths:
+            try:
+                path = Path(raw_path)
+                suffix = path.suffix.lower()
+                if suffix in {".txt", ".csv"}:
+                    rows = text_reader.read(path)
+                elif suffix in {".xlsx", ".xlsm"}:
+                    rows = excel_reader.read(path)
+                else:
+                    continue
 
-        return list(result.rows)
+                preview_rows.extend(
+                    {
+                        **row,
+                        "__source_file": path.name,
+                    }
+                    for row in rows
+                )
+            except Exception:
+                continue
+
+        return preview_rows
 
     @staticmethod
     def _format_user_status(flag_value: object) -> str:
@@ -2826,8 +2904,66 @@ class ValidationDesktopApp(QMainWindow):
             self.tabs.setCurrentIndex(0)
             return
 
+        if self.validation_thread is not None:
+            QMessageBox.information(self, "בדיקה פעילה", "בדיקה כבר רצה ברקע. יש להמתין לסיום.")
+            return
+
         self.tabs.setCurrentIndex(3)
-        self._run_slot_validation(self.selected_slot_key, file_paths, show_feedback=True)
+        self._start_slot_validation_async(self.selected_slot_key, file_paths)
+
+    def _set_validation_running_state(self, is_running: bool, slot_key: str | None = None) -> None:
+        self.audit_run_button.setEnabled(not is_running)
+        self.audit_export_button.setEnabled(not is_running)
+        if is_running:
+            slot_text = slot_key or ""
+            self.analysis_progress_label.setText(self.format_ui_rtl_text(f"מעבד כעת את המשבצת {slot_text}..."))
+            self.analysis_progress_bar.setRange(0, 0)
+            self.analysis_progress_container.show()
+        else:
+            self.analysis_progress_container.hide()
+
+    def _start_slot_validation_async(self, slot_key: str, file_paths: list[str]) -> None:
+        input_files_dict: dict[str, list[str | Path]] = {
+            slot_key: [str(path) for path in file_paths]
+        }
+        required_columns = self._required_columns_for_slot(slot_key)
+        authorized_users = self._get_authorized_stms_users()
+
+        self.validation_thread = QThread(self)
+        self.validation_worker = SlotValidationWorker(
+            slot_key=slot_key,
+            file_paths=list(file_paths),
+            input_files_dict=input_files_dict,
+            required_columns=required_columns,
+            output_dir=self.config.output_dir,
+            authorized_users=authorized_users,
+        )
+        self.validation_worker.moveToThread(self.validation_thread)
+
+        self.validation_thread.started.connect(self.validation_worker.run)
+        self.validation_worker.succeeded.connect(self._on_slot_validation_worker_succeeded)
+        self.validation_worker.failed.connect(self._on_slot_validation_worker_failed)
+        self.validation_worker.finished.connect(self.validation_thread.quit)
+        self.validation_worker.finished.connect(self.validation_worker.deleteLater)
+        self.validation_thread.finished.connect(self.validation_thread.deleteLater)
+        self.validation_thread.finished.connect(self._on_slot_validation_worker_finished)
+
+        self._set_validation_running_state(True, slot_key)
+        self.validation_thread.start()
+
+    @Slot(str, list, object)
+    def _on_slot_validation_worker_succeeded(self, slot_key: str, file_paths: list[str], result: object) -> None:
+        self._handle_slot_validation_success(slot_key, file_paths, result, show_feedback=True)
+
+    @Slot(str, list, str)
+    def _on_slot_validation_worker_failed(self, slot_key: str, file_paths: list[str], error_text: str) -> None:
+        self._handle_slot_validation_error(slot_key, file_paths, error_text, show_feedback=True)
+
+    @Slot()
+    def _on_slot_validation_worker_finished(self) -> None:
+        self.validation_worker = None
+        self.validation_thread = None
+        self._set_validation_running_state(False)
 
     def run_domain_validation(self, domain: str) -> None:
         if bool(self.DOMAIN_DEFINITIONS.get(domain, {}).get("in_development", False)):
@@ -2967,43 +3103,64 @@ class ValidationDesktopApp(QMainWindow):
             QMessageBox.information(self, "בדיקת קבוצה הושלמה", "\n".join(summary_lines))
 
     def _run_slot_validation(self, slot_key: str, file_paths: list[str], show_feedback: bool = True) -> dict[str, Any]:
+        try:
+            result = self._process_slot_validation(slot_key, file_paths)
+        except Exception as error:
+            return self._handle_slot_validation_error(slot_key, file_paths, str(error), show_feedback)
+
+        return self._handle_slot_validation_success(slot_key, file_paths, result, show_feedback)
+
+    def _process_slot_validation(self, slot_key: str, file_paths: list[str]) -> Any:
         if slot_key == "AGR_1251":
             self.summary_labels["status"].setText("מעבד קובצי הרשאות גדולים במנות...")
             QApplication.processEvents()
 
-        input_files_dict = self._build_input_files_dict(
-            preferred_slot_key=slot_key,
-            fallback_file_paths=file_paths,
+        input_files_dict: dict[str, list[str | Path]] = {
+            slot_key: [str(path) for path in file_paths]
+        }
+
+        return process_file(
+            input_files=input_files_dict,
+            required_columns=self._required_columns_for_slot(slot_key),
+            output_dir=self.config.output_dir,
+            source_name_override=slot_key,
+            authorized_users=self._get_authorized_stms_users(),
         )
 
-        try:
-            result = process_file(
-                input_files=input_files_dict,
-                required_columns=self._required_columns_for_slot(slot_key),
-                output_dir=self.config.output_dir,
-                source_name_override=slot_key,
-                authorized_users=self._get_authorized_stms_users(),
-            )
-        except Exception as error:
-            self.summary_labels["status"].setText(f"שגיאה בעיבוד {slot_key}")
-            self.issues_table.setRowCount(0)
-            error_message = f"אירעה שגיאה במהלך העיבוד של המשבצת {slot_key}: {error}"
-            self.issues_table.insertRow(0)
-            for column, value in enumerate(["מבנה", "SYSTEM", error_message]):
-                item = QTableWidgetItem(self.format_rtl_text(value))
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self.issues_table.setItem(0, column, item)
-            self._append_error_log_entries(slot_key, file_paths, str(error))
-            if show_feedback:
-                QMessageBox.critical(self, "שגיאה", f"אירעה שגיאה במהלך העיבוד של המשבצת {slot_key}:\n{error}")
-            return {
-                "slot_key": slot_key,
-                "status": "error",
-                "file_count": len(file_paths),
-                "total_rows": 0,
-                "invalid_rows": 0,
-                "is_valid": False,
-            }
+    def _handle_slot_validation_error(
+        self,
+        slot_key: str,
+        file_paths: list[str],
+        error_text: str,
+        show_feedback: bool,
+    ) -> dict[str, Any]:
+        self.summary_labels["status"].setText(f"שגיאה בעיבוד {slot_key}")
+        self.issues_table.setRowCount(0)
+        error_message = f"אירעה שגיאה במהלך העיבוד של המשבצת {slot_key}: {error_text}"
+        self.issues_table.insertRow(0)
+        for column, value in enumerate(["מבנה", "SYSTEM", error_message]):
+            item = QTableWidgetItem(self.format_rtl_text(value))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.issues_table.setItem(0, column, item)
+        self._append_error_log_entries(slot_key, file_paths, str(error_text))
+        if show_feedback:
+            QMessageBox.critical(self, "שגיאה", f"אירעה שגיאה במהלך העיבוד של המשבצת {slot_key}:\n{error_text}")
+        return {
+            "slot_key": slot_key,
+            "status": "error",
+            "file_count": len(file_paths),
+            "total_rows": 0,
+            "invalid_rows": 0,
+            "is_valid": False,
+        }
+
+    def _handle_slot_validation_success(
+        self,
+        slot_key: str,
+        file_paths: list[str],
+        result: Any,
+        show_feedback: bool,
+    ) -> dict[str, Any]:
 
         self.summary_group.show()
         self.results_group.show()
@@ -3398,6 +3555,49 @@ class ValidationDesktopApp(QMainWindow):
             QMessageBox.information(self, "הייצוא הושלם", f"קובץ הממצאים נשמר בהצלחה:\n{export_path}")
 
         return export_path
+
+    def _build_audit_detail_dialog_text(self, row_index: int) -> str:
+        if row_index < 0 or row_index >= self.audit_detail_table.rowCount():
+            return self.format_rtl_text("לא נמצא פירוט עבור הרשומה שנבחרה.")
+
+        field_labels = [
+            "קובץ מקור",
+            "תאריך הפקה",
+            "קטגוריה",
+            "רמת סיכון",
+            "תיאור",
+            "סוג בדיקה",
+            "ערך בפועל",
+            "ערך מצופה",
+            "סטטוס",
+            "תיאור מלא",
+        ]
+        lines = ["פירוט ממצא ביקורת:", ""]
+        for column, field_label in enumerate(field_labels):
+            item = self.audit_detail_table.item(row_index, column)
+            field_value = item.text() if item is not None else "-"
+            lines.append(f"{field_label}: {field_value}")
+        return self.format_rtl_text("\n".join(lines))
+
+    def show_audit_detail_dialog(self, row_index: int, _column: int) -> None:
+        if row_index < 0 or row_index >= self.audit_detail_table.rowCount():
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("פירוט ממצא ביקורת")
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dialog.resize(760, 420)
+
+        layout = QVBoxLayout(dialog)
+        details_box = QTextEdit()
+        details_box.setReadOnly(True)
+        details_box.setPlainText(self._build_audit_detail_dialog_text(row_index))
+        layout.addWidget(details_box)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def _build_log_details(self, row_index: int) -> str:
         if row_index < 0 or row_index >= len(self.run_log_records):
