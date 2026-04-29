@@ -67,3 +67,70 @@ class ExcelReportWriter:
         if isinstance(value, dict):
             return " | ".join(f"{key}={item}" for key, item in value.items())
         return value
+
+    @staticmethod
+    def write_audit_findings_report(
+        summary_rows: list[dict[str, Any]],
+        detail_rows: list[dict[str, Any]],
+        output_path: Path,
+    ) -> Path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        workbook = Workbook()
+
+        summary_sheet = workbook.active
+        summary_sheet.title = "ריכוז ממצאים"
+        summary_sheet.append([
+            "מזהה בקרה",
+            "סוג בדיקה",
+            "קובץ מקור",
+            "תאריך הפקה",
+            "רמת סיכון",
+            "תיאור הבדיקה",
+            "רשומות תקינות",
+            "רשומות עם ממצא",
+            "סהכ רשומות",
+        ])
+        for row in summary_rows:
+            summary_sheet.append([
+                ExcelReportWriter._safe_excel_value(row.get("control_id", "")),
+                ExcelReportWriter._safe_excel_value(row.get("check_type", "")),
+                ExcelReportWriter._safe_excel_value(row.get("source_file", "")),
+                ExcelReportWriter._safe_excel_value(row.get("extraction_date", "")),
+                ExcelReportWriter._safe_excel_value(row.get("risk_level", "")),
+                ExcelReportWriter._safe_excel_value(row.get("description", "")),
+                ExcelReportWriter._safe_excel_value(row.get("valid_records", 0)),
+                ExcelReportWriter._safe_excel_value(row.get("finding_records", 0)),
+                ExcelReportWriter._safe_excel_value(row.get("total_records", 0)),
+            ])
+
+        details_sheet = workbook.create_sheet("פירוט ממצאים")
+        details_sheet.append([
+            "מזהה בקרה",
+            "קובץ מקור",
+            "תאריך הפקה",
+            "קטגוריה",
+            "רמת סיכון",
+            "תיאור",
+            "סוג בדיקה",
+            "ערך בפועל",
+            "ערך מצופה",
+            "סטטוס",
+            "תיאור מלא",
+        ])
+        for row in detail_rows:
+            details_sheet.append([
+                ExcelReportWriter._safe_excel_value(row.get("control_id", "")),
+                ExcelReportWriter._safe_excel_value(row.get("source_file", "")),
+                ExcelReportWriter._safe_excel_value(row.get("extraction_date", "")),
+                ExcelReportWriter._safe_excel_value(row.get("category", "")),
+                ExcelReportWriter._safe_excel_value(row.get("risk_level", "")),
+                ExcelReportWriter._safe_excel_value(row.get("description", "")),
+                ExcelReportWriter._safe_excel_value(row.get("check_type", "")),
+                ExcelReportWriter._safe_excel_value(row.get("actual_value", "-")),
+                ExcelReportWriter._safe_excel_value(row.get("expected_value", "-")),
+                ExcelReportWriter._safe_excel_value(row.get("status", "")),
+                ExcelReportWriter._safe_excel_value(row.get("full_description", "")),
+            ])
+
+        workbook.save(output_path)
+        return output_path

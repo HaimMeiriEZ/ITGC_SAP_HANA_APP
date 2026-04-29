@@ -46,7 +46,12 @@ from PySide6.QtWidgets import (
 from src.config import AppConfig
 from src.models.validation_result import ValidationIssue
 from src.pipeline import process_file
-from src.validators.spec_rules import get_column_aliases
+from src.reporting.excel_report import ExcelReportWriter
+from src.validators.spec_rules import (
+    get_audit_control_definition,
+    get_column_aliases,
+    get_profile_audit_controls,
+)
 
 
 def get_qt_app() -> QApplication:
@@ -322,6 +327,9 @@ class ValidationDesktopApp(QMainWindow):
         self.load_history: list[str] = []
         self.summary_labels: dict[str, QLabel] = {}
         self.run_log_records: list[dict[str, Any]] = []
+        self.audit_summary_records: dict[str, dict[str, Any]] = {}
+        self.audit_details_by_control: dict[str, list[dict[str, Any]]] = {}
+        self.audit_findings_export_path: Path | None = None
         self._allow_user_preview_persistence = base_dir is not None or "unittest" not in sys.modules
         self.last_file_dialog_directory = self._load_last_file_dialog_directory()
         self._refreshing_user_preview = False
@@ -486,23 +494,77 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_run_button.clicked.connect(self.run_validation)
         self.analysis_layout.addWidget(self.audit_run_button, 0, Qt.AlignmentFlag.AlignRight)
 
-        # --- Audit findings group ---
-        self.audit_findings_group = QGroupBox(self.format_ui_rtl_text("ממצאי ביקורת"))
-        self.audit_findings_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        audit_findings_layout = QVBoxLayout(self.audit_findings_group)
-        audit_findings_layout.setContentsMargins(8, 14, 8, 8)
-        self.audit_findings_table = QTableWidget(0, 3)
-        self.audit_findings_table.setHorizontalHeaderLabels(
-            [self.format_rtl_text("שורה"), self.format_rtl_text("עמודה"), self.format_rtl_text("ממצא")]
-        )
-        self.audit_findings_table.horizontalHeader().setStretchLastSection(True)
-        self.audit_findings_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.audit_findings_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.audit_findings_table.setAlternatingRowColors(True)
-        self.audit_findings_table.setMinimumHeight(200)
-        audit_findings_layout.addWidget(self.audit_findings_table)
-        self.analysis_layout.addWidget(self.audit_findings_group)
-        self.audit_findings_group.hide()
+        self.audit_export_button = QPushButton(self.format_ui_rtl_text("ייצוא ממצאים לאקסל"))
+        self.audit_export_button.clicked.connect(lambda: self.export_audit_findings_to_excel(open_after_export=True))
+        self.analysis_layout.addWidget(self.audit_export_button, 0, Qt.AlignmentFlag.AlignRight)
+
+        self.audit_summary_group = QGroupBox(self.format_ui_rtl_text("ממצאי ביקורת כללי - ריכוז"))
+        self.audit_summary_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        audit_summary_layout = QVBoxLayout(self.audit_summary_group)
+        audit_summary_layout.setContentsMargins(8, 14, 8, 8)
+        self.audit_summary_table = QTableWidget(0, 9)
+        self.audit_summary_table.setHorizontalHeaderLabels([
+            self.format_rtl_text("מזהה בקרה"),
+            self.format_rtl_text("סוג בדיקה"),
+            self.format_rtl_text("קובץ מקור"),
+            self.format_rtl_text("תאריך הפקה"),
+            self.format_rtl_text("רמת סיכון"),
+            self.format_rtl_text("תיאור הבדיקה"),
+            self.format_rtl_text("רשומות תקינות"),
+            self.format_rtl_text("רשומות עם ממצא"),
+            self.format_rtl_text("סהכ רשומות"),
+        ])
+        self.audit_summary_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_summary_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_summary_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_summary_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_summary_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_summary_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.audit_summary_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_summary_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_summary_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_summary_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.audit_summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.audit_summary_table.setAlternatingRowColors(True)
+        self.audit_summary_table.setMinimumHeight(220)
+        self.audit_summary_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.audit_summary_table.itemSelectionChanged.connect(self._refresh_selected_audit_detail)
+        audit_summary_layout.addWidget(self.audit_summary_table)
+        self.analysis_layout.addWidget(self.audit_summary_group)
+
+        self.audit_detail_group = QGroupBox(self.format_ui_rtl_text("פירוט ממצאי ביקורת"))
+        self.audit_detail_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        audit_detail_layout = QVBoxLayout(self.audit_detail_group)
+        audit_detail_layout.setContentsMargins(8, 14, 8, 8)
+        self.audit_detail_table = QTableWidget(0, 10)
+        self.audit_detail_table.setHorizontalHeaderLabels([
+            self.format_rtl_text("קובץ מקור"),
+            self.format_rtl_text("תאריך הפקה"),
+            self.format_rtl_text("קטגוריה"),
+            self.format_rtl_text("רמת סיכון"),
+            self.format_rtl_text("תיאור"),
+            self.format_rtl_text("סוג בדיקה"),
+            self.format_rtl_text("ערך בפועל"),
+            self.format_rtl_text("ערך מצופה"),
+            self.format_rtl_text("סטטוס"),
+            self.format_rtl_text("תיאור מלא"),
+        ])
+        self.audit_detail_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_detail_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_detail_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_detail_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_detail_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_detail_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_detail_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_detail_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_detail_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
+        self.audit_detail_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeMode.Stretch)
+        self.audit_detail_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.audit_detail_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.audit_detail_table.setAlternatingRowColors(True)
+        self.audit_detail_table.setMinimumHeight(220)
+        audit_detail_layout.addWidget(self.audit_detail_table)
+        self.analysis_layout.addWidget(self.audit_detail_group)
 
         self.review_tab = QWidget()
         self.review_tab.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -1044,7 +1106,7 @@ class ValidationDesktopApp(QMainWindow):
             summary_layout.addWidget(value_label, 1, column)
             self.summary_labels[key] = value_label
         self.summary_group.hide()
-        self.analysis_layout.addWidget(self.summary_group)
+        self.intake_layout.addWidget(self.summary_group)
 
         self.results_group = QGroupBox(self.format_ui_rtl_text("שגיאות קליטה"))
         self.results_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -1063,7 +1125,7 @@ class ValidationDesktopApp(QMainWindow):
         results_layout.addWidget(self.issues_table)
         self.issues_table.setMinimumHeight(180)
         self.results_group.hide()
-        self.analysis_layout.addWidget(self.results_group)
+        self.intake_layout.addWidget(self.results_group)
 
         central_widget.setStyleSheet(
             """
@@ -2439,6 +2501,12 @@ class ValidationDesktopApp(QMainWindow):
         except Exception:
             return []
 
+        data_map = getattr(result, "data_map", {})
+        if isinstance(data_map, dict) and slot_key in data_map:
+            slot_rows = data_map.get(slot_key, [])
+            if isinstance(slot_rows, list):
+                return list(slot_rows)
+
         return list(result.rows)
 
     @staticmethod
@@ -2970,35 +3038,14 @@ class ValidationDesktopApp(QMainWindow):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.issues_table.setItem(0, column, item)
 
-        # Populate audit findings table in the analysis tab
         audit_issues = [iss for iss in result.issues if not self._is_intake_issue(iss)]
-        self.audit_findings_table.setRowCount(0)
-        if audit_issues:
-            self.audit_findings_group.setTitle(
-                self.format_ui_rtl_text(f"ממצאי ביקורת — {slot_key} ({len(audit_issues)} ממצאים)")
-            )
-            self.audit_findings_group.show()
-            for issue in audit_issues:
-                row_index = self.audit_findings_table.rowCount()
-                self.audit_findings_table.insertRow(row_index)
-                values = [
-                    str(issue.row_number if issue.row_number > 0 else "מבנה"),
-                    self.format_rtl_text(issue.column_name),
-                    self.format_rtl_text(issue.message),
-                ]
-                for column, value in enumerate(values):
-                    item = QTableWidgetItem(value)
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                    self.audit_findings_table.setItem(row_index, column, item)
-        else:
-            self.audit_findings_group.setTitle(self.format_ui_rtl_text("ממצאי ביקורת"))
-            self.audit_findings_table.setRowCount(1)
-            no_findings_item = QTableWidgetItem(self.format_rtl_text("לא נמצאו ממצאי ביקורת עבור המשבצת שנבחרה"))
-            no_findings_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.audit_findings_table.setItem(0, 2, no_findings_item)
-            self.audit_findings_table.setItem(0, 0, QTableWidgetItem("-"))
-            self.audit_findings_table.setItem(0, 1, QTableWidgetItem("-"))
-            self.audit_findings_group.show()
+        self._upsert_audit_control_data(
+            slot_key=slot_key,
+            result=result,
+            audit_issues=audit_issues,
+            extraction_date=self._get_slot_extraction_date(slot_key),
+        )
+        self._refresh_audit_summary_table()
 
         self._append_run_log_entries(slot_key, file_paths, result)
         if result.report_path is not None:
@@ -3155,6 +3202,203 @@ class ValidationDesktopApp(QMainWindow):
                     item.setBackground(QColor("#fdecec"))
                 self.run_log_table.setItem(row_index, column, item)
 
+    @staticmethod
+    def _count_stms_control_records(rows: list[dict[str, Any]]) -> int:
+        count = 0
+        for row in rows:
+            normalized_row = {
+                str(key).strip().upper(): value
+                for key, value in row.items()
+                if not str(key).startswith("__")
+            }
+            trkorr = ""
+            for candidate in get_column_aliases("TRKORR"):
+                if candidate in normalized_row and str(normalized_row.get(candidate, "")).strip():
+                    trkorr = str(normalized_row.get(candidate, "")).strip()
+                    break
+            import_user = ""
+            for candidate in get_column_aliases("IMPORT_USER"):
+                if candidate in normalized_row and str(normalized_row.get(candidate, "")).strip():
+                    import_user = str(normalized_row.get(candidate, "")).strip()
+                    break
+            if trkorr and import_user:
+                count += 1
+        return count
+
+    def _build_audit_detail_row(
+        self,
+        issue: ValidationIssue | None,
+        control_id: str,
+        source_file: str,
+        extraction_date: str,
+        control_meta: dict[str, str],
+    ) -> dict[str, Any]:
+        if issue is None:
+            return {
+                "control_id": control_id,
+                "source_file": source_file,
+                "extraction_date": extraction_date,
+                "category": control_meta.get("category", "-"),
+                "risk_level": control_meta.get("risk_level", "-"),
+                "description": control_meta.get("description", "-"),
+                "check_type": control_meta.get("check_type", "-"),
+                "actual_value": "-",
+                "expected_value": "-",
+                "status": "תקין",
+                "full_description": "לא נמצאו ממצאים עבור הבקרה.",
+            }
+
+        return {
+            "control_id": control_id,
+            "source_file": issue.source_file or source_file,
+            "extraction_date": extraction_date,
+            "category": issue.category or control_meta.get("category", "-"),
+            "risk_level": issue.risk_level or control_meta.get("risk_level", "-"),
+            "description": issue.description or control_meta.get("description", "-"),
+            "check_type": issue.check_type or control_meta.get("check_type", "-"),
+            "actual_value": issue.actual_value or "-",
+            "expected_value": issue.expected_value or "-",
+            "status": issue.status or "עם ממצא",
+            "full_description": issue.full_description or issue.message,
+        }
+
+    def _upsert_audit_control_data(
+        self,
+        slot_key: str,
+        result: Any,
+        audit_issues: list[ValidationIssue],
+        extraction_date: str,
+    ) -> None:
+        control_ids = [issue.control_id for issue in audit_issues if issue.control_id]
+        expected_controls = get_profile_audit_controls(getattr(result, "detected_profile", slot_key))
+        all_control_ids = sorted(set(control_ids + expected_controls))
+        if not all_control_ids:
+            return
+
+        source_file_label = ", ".join(getattr(result, "source_files", []) or [self._get_slot_display_name(slot_key)])
+        for control_id in all_control_ids:
+            control_meta = get_audit_control_definition(control_id)
+            control_issues = [issue for issue in audit_issues if issue.control_id == control_id]
+            finding_records = len(control_issues)
+
+            if control_id == "44":
+                total_records = self._count_stms_control_records(getattr(result, "rows", []))
+            else:
+                total_records = 1
+
+            if total_records <= 0:
+                total_records = max(finding_records, 1)
+            valid_records = max(total_records - finding_records, 0)
+
+            self.audit_summary_records[control_id] = {
+                "control_id": control_id,
+                "check_type": control_meta.get("check_type", "-"),
+                "source_file": source_file_label,
+                "extraction_date": extraction_date,
+                "risk_level": control_meta.get("risk_level", "-"),
+                "description": control_meta.get("description", "-"),
+                "valid_records": valid_records,
+                "finding_records": finding_records,
+                "total_records": total_records,
+            }
+
+            detail_rows = [
+                self._build_audit_detail_row(issue, control_id, source_file_label, extraction_date, control_meta)
+                for issue in control_issues
+            ]
+            if not detail_rows:
+                detail_rows = [self._build_audit_detail_row(None, control_id, source_file_label, extraction_date, control_meta)]
+            self.audit_details_by_control[control_id] = detail_rows
+
+    def _refresh_audit_summary_table(self) -> None:
+        self.audit_summary_table.setRowCount(0)
+        if not self.audit_summary_records:
+            self.audit_detail_table.setRowCount(0)
+            self.audit_detail_table.insertRow(0)
+            for column, value in enumerate(["-", "-", "-", "-", "-", "-", "-", "-", "-", "אין ממצאים להצגה"]):
+                item = QTableWidgetItem(self.format_rtl_text(value))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.audit_detail_table.setItem(0, column, item)
+            return
+
+        for row_data in sorted(self.audit_summary_records.values(), key=lambda item: str(item.get("control_id", ""))):
+            row_index = self.audit_summary_table.rowCount()
+            self.audit_summary_table.insertRow(row_index)
+            values = [
+                str(row_data.get("control_id", "-")),
+                str(row_data.get("check_type", "-")),
+                str(row_data.get("source_file", "-")),
+                str(row_data.get("extraction_date", "-")),
+                str(row_data.get("risk_level", "-")),
+                str(row_data.get("description", "-")),
+                str(row_data.get("valid_records", 0)),
+                str(row_data.get("finding_records", 0)),
+                str(row_data.get("total_records", 0)),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(self.format_rtl_text(value))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, row_data.get("control_id", ""))
+                self.audit_summary_table.setItem(row_index, column, item)
+
+        if self.audit_summary_table.rowCount() > 0:
+            self.audit_summary_table.selectRow(0)
+            self._refresh_selected_audit_detail()
+
+    def _refresh_selected_audit_detail(self) -> None:
+        selected_items = self.audit_summary_table.selectedItems()
+        if not selected_items:
+            return
+
+        selected_row = selected_items[0].row()
+        control_item = self.audit_summary_table.item(selected_row, 0)
+        if control_item is None:
+            return
+
+        control_id = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text())
+        detail_rows = self.audit_details_by_control.get(control_id, [])
+        self.audit_detail_table.setRowCount(0)
+
+        for detail in detail_rows:
+            row_index = self.audit_detail_table.rowCount()
+            self.audit_detail_table.insertRow(row_index)
+            values = [
+                str(detail.get("source_file", "-")),
+                str(detail.get("extraction_date", "-")),
+                str(detail.get("category", "-")),
+                str(detail.get("risk_level", "-")),
+                str(detail.get("description", "-")),
+                str(detail.get("check_type", "-")),
+                str(detail.get("actual_value", "-")),
+                str(detail.get("expected_value", "-")),
+                str(detail.get("status", "-")),
+                str(detail.get("full_description", "-")),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(self.format_rtl_text(value))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.audit_detail_table.setItem(row_index, column, item)
+
+    def export_audit_findings_to_excel(self, open_after_export: bool = False) -> Path | None:
+        if not self.audit_summary_records:
+            QMessageBox.warning(self, "אין נתונים לייצוא", "לא קיימים ממצאי ביקורת לייצוא.")
+            return None
+
+        summary_rows = sorted(self.audit_summary_records.values(), key=lambda item: str(item.get("control_id", "")))
+        detail_rows: list[dict[str, Any]] = []
+        for control_id in sorted(self.audit_details_by_control.keys()):
+            detail_rows.extend(self.audit_details_by_control.get(control_id, []))
+
+        export_path = self.config.output_dir / f"audit_findings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        ExcelReportWriter.write_audit_findings_report(summary_rows, detail_rows, export_path)
+        self.audit_findings_export_path = export_path
+
+        if open_after_export:
+            QMessageBox.information(self, "הייצוא הושלם", f"קובץ הממצאים נשמר בהצלחה:\n{export_path}")
+
+        return export_path
+
     def _build_log_details(self, row_index: int) -> str:
         if row_index < 0 or row_index >= len(self.run_log_records):
             return "לא נמצא פירוט עבור הרשומה שנבחרה."
@@ -3237,8 +3481,13 @@ class ValidationDesktopApp(QMainWindow):
         self.results_group.hide()
         self.report_path = None
         self.log_export_path = None
+        self.audit_findings_export_path = None
         self.report_button.setEnabled(False)
         self.issues_table.setRowCount(0)
+        self.audit_summary_records = {}
+        self.audit_details_by_control = {}
+        self.audit_summary_table.setRowCount(0)
+        self.audit_detail_table.setRowCount(0)
         self.run_log_records = []
         self.run_log_table.setRowCount(0)
         self.refresh_user_preview()

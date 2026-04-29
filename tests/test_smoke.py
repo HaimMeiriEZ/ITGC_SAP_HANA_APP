@@ -981,6 +981,99 @@ class TestSmoke(unittest.TestCase):
             finally:
                 window.close()
 
+    def test_audit_summary_and_drill_down_are_populated(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            result = ValidationResult(
+                rows=[
+                    {"TRKORR": "REQ001", "IMPORT_USER": "BAD_USER", "AS4DATE": "2026-04-15", "__source_file": "stms.txt"},
+                    {"TRKORR": "REQ002", "IMPORT_USER": "GOOD_USER", "AS4DATE": "2026-04-15", "__source_file": "stms.txt"},
+                ],
+                issues=[
+                    ValidationIssue(
+                        row_number=1,
+                        column_name="IMPORT_USER",
+                        message="בקרה 44: BAD_USER אינו מורשה",
+                        source_file="stms.txt",
+                        control_id="44",
+                        category="MC - ניהול שינויים",
+                        risk_level="גבוה",
+                        check_type="STMS - Import מורשים בלבד",
+                        description="Import לסביבת ייצור יתבצע רק על ידי משתמשים מורשים.",
+                        actual_value="BAD_USER",
+                        expected_value="משתמש מורשה",
+                        status="עם ממצא",
+                        full_description="טרנספורט הועבר עי משתמש לא מורשה",
+                    )
+                ],
+                source_files=["stms.txt"],
+                detected_profile="STMS",
+            )
+
+            audit_issues = [issue for issue in result.issues if not window._is_intake_issue(issue)]
+            window._upsert_audit_control_data("STMS", result, audit_issues, "2026-04-15")
+            window._refresh_audit_summary_table()
+
+            self.assertEqual(window.audit_summary_table.rowCount(), 1)
+            self.assertEqual(window.audit_summary_table.item(0, 0).text(), "44")
+            self.assertEqual(window.audit_summary_table.item(0, 7).text(), "1")
+            self.assertEqual(window.audit_summary_table.item(0, 8).text(), "2")
+            self.assertIn("44", window.audit_details_by_control)
+            self.assertGreaterEqual(len(window.audit_details_by_control["44"]), 1)
+
+            window.audit_summary_table.setCurrentCell(0, 0)
+            window.audit_summary_table.selectRow(0)
+            window._refresh_selected_audit_detail()
+            self.assertGreaterEqual(window.audit_detail_table.rowCount(), 1)
+            self.assertEqual(window.audit_detail_table.item(0, 2).text(), "MC - ניהול שינויים")
+            self.assertEqual(window.audit_detail_table.item(0, 8).text(), "עם ממצא")
+        finally:
+            window.close()
+
+    def test_export_audit_findings_to_excel_creates_two_sheets(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                result = ValidationResult(
+                    rows=[{"TRKORR": "REQ001", "IMPORT_USER": "BAD_USER", "__source_file": "stms.txt"}],
+                    issues=[
+                        ValidationIssue(
+                            row_number=1,
+                            column_name="IMPORT_USER",
+                            message="בקרה 44: BAD_USER אינו מורשה",
+                            source_file="stms.txt",
+                            control_id="44",
+                            category="MC - ניהול שינויים",
+                            risk_level="גבוה",
+                            check_type="STMS - Import מורשים בלבד",
+                            description="Import לסביבת ייצור יתבצע רק על ידי משתמשים מורשים.",
+                            actual_value="BAD_USER",
+                            expected_value="משתמש מורשה",
+                            status="עם ממצא",
+                            full_description="טרנספורט הועבר עי משתמש לא מורשה",
+                        )
+                    ],
+                    source_files=["stms.txt"],
+                    detected_profile="STMS",
+                )
+
+                window._upsert_audit_control_data("STMS", result, result.issues, "2026-04-15")
+                export_path = window.export_audit_findings_to_excel()
+
+                self.assertIsNotNone(export_path)
+                assert export_path is not None
+                self.assertTrue(export_path.exists())
+                workbook = load_workbook(export_path)
+                self.assertIn("ריכוז ממצאים", workbook.sheetnames)
+                self.assertIn("פירוט ממצאים", workbook.sheetnames)
+                self.assertEqual(workbook["ריכוז ממצאים"]["A2"].value, "44")
+                self.assertEqual(workbook["פירוט ממצאים"]["A2"].value, "44")
+            finally:
+                window.close()
+
     def test_category_run_button_validates_selected_group(self) -> None:
         with TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)

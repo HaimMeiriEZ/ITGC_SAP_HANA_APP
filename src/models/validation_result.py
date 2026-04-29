@@ -9,6 +9,15 @@ class ValidationIssue:
     column_name: str
     message: str
     source_file: str = ""
+    control_id: str = ""
+    category: str = ""
+    risk_level: str = ""
+    check_type: str = ""
+    description: str = ""
+    actual_value: str = ""
+    expected_value: str = ""
+    status: str = "עם ממצא"
+    full_description: str = ""
 
 
 @dataclass

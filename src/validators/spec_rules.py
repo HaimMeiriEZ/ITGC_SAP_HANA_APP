@@ -147,14 +147,65 @@ PROFILE_STRUCTURE_RULES: dict[str, dict[str, Any]] = {
     },
 }
 
+AUDIT_CONTROL_DEFINITIONS: dict[str, dict[str, str]] = {
+    "44": {
+        "category": "MC - ניהול שינויים",
+        "risk_level": "גבוה",
+        "check_type": "STMS - Import מורשים בלבד",
+        "description": "Import לסביבת ייצור יתבצע רק על ידי משתמשים מורשים.",
+    },
+    "MA-PWD-01": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "מדיניות סיסמאות",
+        "description": "אורך סיסמה מינימלי חייב להיות לפחות 8 תווים.",
+    },
+    "MA-PWD-02": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "מדיניות סיסמאות",
+        "description": "נעילת משתמש לאחר ניסיונות כושלים חייבת להיות לכל היותר 6.",
+    },
+    "MA-PWD-03": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "בינוני",
+        "check_type": "מדיניות סיסמאות",
+        "description": "ביטול נעילה אוטומטי לאחר כישלון חייב להיות מבוטל (0).",
+    },
+    "MA-PWD-04": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "מדיניות סיסמאות",
+        "description": "תקופת תפוגת סיסמה חייבת להיות לכל היותר 90 ימים.",
+    },
+    "MA-PWD-05": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "בינוני",
+        "check_type": "מדיניות סיסמאות",
+        "description": "היסטוריית סיסמאות חייבת לכלול לפחות 5 ערכים.",
+    },
+    "MA-PWD-06": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "משתמשי מערכת",
+        "description": "פרמטר SAP* האוטומטי חייב להיות מבוטל (1).",
+    },
+}
+
+PROFILE_AUDIT_CONTROLS: dict[str, list[str]] = {
+    "STMS": ["44"],
+    "RSPARAM": ["MA-PWD-01", "MA-PWD-02", "MA-PWD-03", "MA-PWD-04", "MA-PWD-05", "MA-PWD-06"],
+    "TPFET": ["MA-PWD-01", "MA-PWD-02", "MA-PWD-03", "MA-PWD-04", "MA-PWD-05", "MA-PWD-06"],
+}
+
 SAP_APP_RSPARAM_RULES = [
-    # (parameter_name, expected_value, rule_type, message)
-    ("login/min_password_lng", 8, "minimum", "אורך סיסמה מינימלי חייב להיות לפחות 8 תווים"),
-    ("login/fails_to_user_lock", 6, "maximum", "נעילת משתמש לאחר ניסיונות כושלים חייבת להיות לכל היותר 6"),
-    ("login/failed_user_auto_unlock", 0, "maximum", "ביטול נעילה אוטומטי לאחר כישלון חייב להיות מבוטל (0)"),
-    ("login/password_expiration_time", 90, "maximum", "תקופת תפוגת סיסמה חייבת להיות לכל היותר 90 ימים"),
-    ("login/password_history_size", 5, "minimum", "היסטוריית סיסמאות חייבת לכלול לפחות 5 ערכים"),
-    ("login/no_automatic_user_sapstar", 1, "minimum", "פרמטר SAP* האוטומטי חייב להיות מבוטל (1)"),
+    # (control_id, parameter_name, expected_value, rule_type, message)
+    ("MA-PWD-01", "login/min_password_lng", 8, "minimum", "אורך סיסמה מינימלי חייב להיות לפחות 8 תווים"),
+    ("MA-PWD-02", "login/fails_to_user_lock", 6, "maximum", "נעילת משתמש לאחר ניסיונות כושלים חייבת להיות לכל היותר 6"),
+    ("MA-PWD-03", "login/failed_user_auto_unlock", 0, "maximum", "ביטול נעילה אוטומטי לאחר כישלון חייב להיות מבוטל (0)"),
+    ("MA-PWD-04", "login/password_expiration_time", 90, "maximum", "תקופת תפוגת סיסמה חייבת להיות לכל היותר 90 ימים"),
+    ("MA-PWD-05", "login/password_history_size", 5, "minimum", "היסטוריית סיסמאות חייבת לכלול לפחות 5 ערכים"),
+    ("MA-PWD-06", "login/no_automatic_user_sapstar", 1, "minimum", "פרמטר SAP* האוטומטי חייב להיות מבוטל (1)"),
 ]
 
 SAP_ITGC_RELEVANT_PARAMETERS = {
@@ -348,6 +399,15 @@ def build_control_44_issues(
                     column_name="IMPORT_USER",
                     message=f"בקרה 44: המשתמש {import_user} העביר את טרנספורט {trkorr} ב-{as4date} אך אינו ברשימת המורשים",
                     source_file=str(row.get("__source_file", "")),
+                    control_id="44",
+                    category=AUDIT_CONTROL_DEFINITIONS["44"]["category"],
+                    risk_level=AUDIT_CONTROL_DEFINITIONS["44"]["risk_level"],
+                    check_type=AUDIT_CONTROL_DEFINITIONS["44"]["check_type"],
+                    description=AUDIT_CONTROL_DEFINITIONS["44"]["description"],
+                    actual_value=import_user,
+                    expected_value="משתמש מורשה",
+                    status="עם ממצא",
+                    full_description=f"טרנספורט {trkorr} הועבר בתאריך {as4date or '-'} על ידי המשתמש {import_user}, שאינו מורשה.",
                 )
             )
 
@@ -446,14 +506,45 @@ def _evaluate_rsparam_policy(rows: list[dict[str, Any]]) -> list[ValidationIssue
         if param_column and value_column:
             param_map[normalize_text(row[param_column])] = (row_number, row[value_column])
 
-    for param_name, expected, rule_type, message in SAP_APP_RSPARAM_RULES:
+    for control_id, param_name, expected, rule_type, message in SAP_APP_RSPARAM_RULES:
+        control_meta = AUDIT_CONTROL_DEFINITIONS.get(control_id, {})
         if param_name not in param_map:
-            issues.append(ValidationIssue(row_number=0, column_name=param_name, message=f"לא נמצא פרמטר נדרש: {param_name}"))
+            issues.append(
+                ValidationIssue(
+                    row_number=0,
+                    column_name=param_name,
+                    message=f"לא נמצא פרמטר נדרש: {param_name}",
+                    control_id=control_id,
+                    category=control_meta.get("category", ""),
+                    risk_level=control_meta.get("risk_level", ""),
+                    check_type=control_meta.get("check_type", ""),
+                    description=control_meta.get("description", message),
+                    actual_value="-",
+                    expected_value=str(expected),
+                    status="עם ממצא",
+                    full_description=f"הפרמטר {param_name} לא נמצא בקובץ המדיניות.",
+                )
+            )
             continue
 
         row_number, actual_value = param_map[param_name]
         if not _compare_values(actual_value, expected, rule_type):
-            issues.append(ValidationIssue(row_number=row_number, column_name=param_name, message=message))
+            issues.append(
+                ValidationIssue(
+                    row_number=row_number,
+                    column_name=param_name,
+                    message=message,
+                    control_id=control_id,
+                    category=control_meta.get("category", ""),
+                    risk_level=control_meta.get("risk_level", ""),
+                    check_type=control_meta.get("check_type", ""),
+                    description=control_meta.get("description", message),
+                    actual_value=str(actual_value),
+                    expected_value=str(expected),
+                    status="עם ממצא",
+                    full_description=f"הערך בפועל עבור {param_name} הוא {actual_value}, בעוד שהערך המצופה הוא {expected}.",
+                )
+            )
 
     return issues
 
@@ -472,3 +563,11 @@ def _compare_values(actual_value: object, expected_value: object, rule_type: str
     if rule_type == "maximum":
         return actual_number <= expected_number
     return False
+
+
+def get_audit_control_definition(control_id: str) -> dict[str, str]:
+    return dict(AUDIT_CONTROL_DEFINITIONS.get(control_id, {}))
+
+
+def get_profile_audit_controls(profile: str | None) -> list[str]:
+    return list(PROFILE_AUDIT_CONTROLS.get(profile or "", []))
