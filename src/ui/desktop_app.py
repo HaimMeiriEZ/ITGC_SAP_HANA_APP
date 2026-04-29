@@ -486,6 +486,24 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_run_button.clicked.connect(self.run_validation)
         self.analysis_layout.addWidget(self.audit_run_button, 0, Qt.AlignmentFlag.AlignRight)
 
+        # --- Audit findings group ---
+        self.audit_findings_group = QGroupBox(self.format_ui_rtl_text("ממצאי ביקורת"))
+        self.audit_findings_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        audit_findings_layout = QVBoxLayout(self.audit_findings_group)
+        audit_findings_layout.setContentsMargins(8, 14, 8, 8)
+        self.audit_findings_table = QTableWidget(0, 3)
+        self.audit_findings_table.setHorizontalHeaderLabels(
+            [self.format_rtl_text("שורה"), self.format_rtl_text("עמודה"), self.format_rtl_text("ממצא")]
+        )
+        self.audit_findings_table.horizontalHeader().setStretchLastSection(True)
+        self.audit_findings_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.audit_findings_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.audit_findings_table.setAlternatingRowColors(True)
+        self.audit_findings_table.setMinimumHeight(200)
+        audit_findings_layout.addWidget(self.audit_findings_table)
+        self.analysis_layout.addWidget(self.audit_findings_group)
+        self.audit_findings_group.hide()
+
         self.review_tab = QWidget()
         self.review_tab.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.review_layout = QVBoxLayout(self.review_tab)
@@ -2951,6 +2969,30 @@ class ValidationDesktopApp(QMainWindow):
                 item = QTableWidgetItem(value)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.issues_table.setItem(0, column, item)
+
+        # Populate audit findings table in the analysis tab
+        audit_issues = [iss for iss in result.issues if not self._is_intake_issue(iss)]
+        self.audit_findings_table.setRowCount(0)
+        if audit_issues:
+            self.audit_findings_group.setTitle(
+                self.format_ui_rtl_text(f"ממצאי ביקורת — {slot_key} ({len(audit_issues)} ממצאים)")
+            )
+            self.audit_findings_group.show()
+            for issue in audit_issues:
+                row_index = self.audit_findings_table.rowCount()
+                self.audit_findings_table.insertRow(row_index)
+                values = [
+                    str(issue.row_number if issue.row_number > 0 else "מבנה"),
+                    self.format_rtl_text(issue.column_name),
+                    self.format_rtl_text(issue.message),
+                ]
+                for column, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    self.audit_findings_table.setItem(row_index, column, item)
+        else:
+            self.audit_findings_group.setTitle(self.format_ui_rtl_text("ממצאי ביקורת"))
+            self.audit_findings_group.hide()
 
         self._append_run_log_entries(slot_key, file_paths, result)
         if result.report_path is not None:
