@@ -55,6 +55,10 @@ class TextFileReader:
         "SMTP_ADDR",
         "ADDRNUMBER",
         "PERSNUMBER",
+        "IMPORT_USER",
+        "TARSYSTEM",
+        "RC",
+        "RETURN CODE",
     }
 
     def read(self, file_path: Path) -> list[dict[str, Any]]:

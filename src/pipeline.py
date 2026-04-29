@@ -4,6 +4,7 @@ from typing import Iterable
 from src.models.validation_result import ValidationIssue, ValidationResult
 from src.readers.excel_reader import ExcelFileReader
 from src.readers.text_reader import TextFileReader
+from src.readers.sap_transport_reader import SapTransportReader
 from src.reporting.excel_report import ExcelReportWriter
 from src.validators.engine import ValidationEngine
 
@@ -86,7 +87,7 @@ def _process_source_map(
         for key, paths in source_map.items():
             key_rows: list[dict] = []
             for path in paths:
-                file_rows = _read_rows(path)
+                file_rows = _read_rows(path, source_hint=key)
                 file_row_counts[path.name] = len(file_rows)
                 annotated = _attach_source(file_rows, path)
                 rows.extend(annotated)
@@ -114,8 +115,13 @@ def _normalize_paths(file_path: str | Path | Iterable[str | Path]) -> list[Path]
     return paths
 
 
-def _read_rows(path: Path) -> list[dict]:
+_TRANSPORT_READER_SLOTS = {"STMS", "E070"}
+
+
+def _read_rows(path: Path, source_hint: str | None = None) -> list[dict]:
     suffix = path.suffix.lower()
+    if source_hint in _TRANSPORT_READER_SLOTS and suffix in {".txt", ".csv"}:
+        return SapTransportReader().read(path)
     if suffix in {".txt", ".csv"}:
         return TextFileReader().read(path)
     if suffix in {".xlsx", ".xlsm"}:
