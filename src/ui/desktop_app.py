@@ -1046,7 +1046,7 @@ class ValidationDesktopApp(QMainWindow):
         self.summary_group.hide()
         self.analysis_layout.addWidget(self.summary_group)
 
-        self.results_group = QGroupBox(self.format_ui_rtl_text("רשימת שגיאות"))
+        self.results_group = QGroupBox(self.format_ui_rtl_text("שגיאות קליטה"))
         self.results_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         results_layout = QVBoxLayout(self.results_group)
         results_layout.setContentsMargins(12, 18, 12, 12)
@@ -2758,7 +2758,7 @@ class ValidationDesktopApp(QMainWindow):
             self.tabs.setCurrentIndex(0)
             return
 
-        self.tabs.setCurrentIndex(1)
+        self.tabs.setCurrentIndex(3)
         self._run_slot_validation(self.selected_slot_key, file_paths, show_feedback=True)
 
     def run_domain_validation(self, domain: str) -> None:
@@ -2992,7 +2992,13 @@ class ValidationDesktopApp(QMainWindow):
                     self.audit_findings_table.setItem(row_index, column, item)
         else:
             self.audit_findings_group.setTitle(self.format_ui_rtl_text("ממצאי ביקורת"))
-            self.audit_findings_group.hide()
+            self.audit_findings_table.setRowCount(1)
+            no_findings_item = QTableWidgetItem(self.format_rtl_text("לא נמצאו ממצאי ביקורת עבור המשבצת שנבחרה"))
+            no_findings_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.audit_findings_table.setItem(0, 2, no_findings_item)
+            self.audit_findings_table.setItem(0, 0, QTableWidgetItem("-"))
+            self.audit_findings_table.setItem(0, 1, QTableWidgetItem("-"))
+            self.audit_findings_group.show()
 
         self._append_run_log_entries(slot_key, file_paths, result)
         if result.report_path is not None:
