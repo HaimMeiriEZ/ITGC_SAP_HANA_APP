@@ -1103,6 +1103,40 @@ class TestSmoke(unittest.TestCase):
         finally:
             window.close()
 
+    def test_rsparam_passed_control_detail_shows_actual_and_expected_values(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            result = ValidationResult(
+                rows=[
+                    {
+                        "Parameter Name": "login/min_password_lng",
+                        "User-Defined Value": "",
+                        "System Default Value": "10",
+                        "__source_file": "rsparam.csv",
+                    },
+                    {"Parameter Name": "login/fails_to_user_lock", "User-Defined Value": "", "System Default Value": "5", "__source_file": "rsparam.csv"},
+                    {"Parameter Name": "login/failed_user_auto_unlock", "User-Defined Value": "", "System Default Value": "0", "__source_file": "rsparam.csv"},
+                    {"Parameter Name": "login/password_expiration_time", "User-Defined Value": "", "System Default Value": "60", "__source_file": "rsparam.csv"},
+                    {"Parameter Name": "login/password_history_size", "User-Defined Value": "", "System Default Value": "6", "__source_file": "rsparam.csv"},
+                    {"Parameter Name": "login/no_automatic_user_sapstar", "User-Defined Value": "", "System Default Value": "1", "__source_file": "rsparam.csv"},
+                ],
+                issues=[],
+                source_files=["rsparam.csv"],
+                detected_profile="RSPARAM",
+            )
+
+            window._upsert_audit_control_data("RSPARAM", result, [], "2026-04-30")
+
+            detail_rows = window.audit_details_by_control.get("MA-PWD-01", [])
+            self.assertGreaterEqual(len(detail_rows), 1)
+            self.assertEqual(detail_rows[0]["status"], "תקין")
+            self.assertEqual(detail_rows[0]["actual_value"], "10")
+            self.assertEqual(detail_rows[0]["expected_value"], "8")
+            self.assertIn("ההגדרה תקינה", detail_rows[0]["full_description"])
+        finally:
+            window.close()
+
     def test_category_run_button_validates_selected_group(self) -> None:
         with TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)
@@ -1258,6 +1292,25 @@ class TestSmoke(unittest.TestCase):
         ]
 
         self.assertEqual(policy_messages, [])
+
+    def test_rsparam_uses_system_default_when_user_defined_is_empty(self) -> None:
+        rows = [
+            {
+                "Parameter Name": "login/min_password_lng",
+                "User-Defined Value": "",
+                "System Default Value": "10",
+            },
+            {"Parameter Name": "login/fails_to_user_lock", "User-Defined Value": "", "System Default Value": "5"},
+            {"Parameter Name": "login/failed_user_auto_unlock", "User-Defined Value": "", "System Default Value": "0"},
+            {"Parameter Name": "login/password_expiration_time", "User-Defined Value": "", "System Default Value": "60"},
+            {"Parameter Name": "login/password_history_size", "User-Defined Value": "", "System Default Value": "6"},
+            {"Parameter Name": "login/no_automatic_user_sapstar", "User-Defined Value": "", "System Default Value": "1"},
+        ]
+
+        result = ValidationEngine().validate(rows, source_name="rsparam.csv")
+
+        self.assertFalse(any(issue.control_id == "MA-PWD-01" for issue in result.issues))
+
     def test_users_profile_requires_last_login_field(self) -> None:
         rows = [
             {"USER_NAME": "DANA"},

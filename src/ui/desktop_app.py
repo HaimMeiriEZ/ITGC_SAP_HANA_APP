@@ -50,6 +50,7 @@ from src.readers.excel_reader import ExcelFileReader
 from src.readers.text_reader import TextFileReader
 from src.reporting.excel_report import ExcelReportWriter
 from src.validators.spec_rules import (
+    SAP_APP_RSPARAM_RULES,
     get_audit_control_definition,
     get_column_aliases,
     get_profile_audit_controls,
@@ -1768,6 +1769,18 @@ class ValidationDesktopApp(QMainWindow):
             )
         return "ערך חובה חסר" in msg
 
+    @staticmethod
+    def _compute_intake_summary(total_rows: int, intake_issues: list["ValidationIssue"]) -> tuple[int, int]:
+        """Return (valid_rows, invalid_rows) for intake-only issues."""
+        row_level_issues = {issue.row_number for issue in intake_issues if issue.row_number > 0}
+        invalid_rows = len(row_level_issues)
+
+        if any(issue.row_number == 0 for issue in intake_issues):
+            invalid_rows = total_rows if total_rows else invalid_rows
+
+        valid_rows = max(total_rows - invalid_rows, 0)
+        return valid_rows, invalid_rows
+
     def _get_slot_category(self, slot_key: str) -> str:
         return str(self.SLOT_DEFINITIONS.get(slot_key, {}).get("sub_category", "לא סווג"))
 
@@ -3164,13 +3177,14 @@ class ValidationDesktopApp(QMainWindow):
 
         self.summary_group.show()
         self.results_group.show()
+        intake_issues = [iss for iss in result.issues if self._is_intake_issue(iss)]
+        valid_rows, invalid_rows = self._compute_intake_summary(result.summary.total_rows, intake_issues)
         self.summary_labels["total"].setText(str(result.summary.total_rows))
-        self.summary_labels["valid"].setText(str(result.summary.valid_rows))
-        self.summary_labels["invalid"].setText(str(result.summary.invalid_rows))
+        self.summary_labels["valid"].setText(str(valid_rows))
+        self.summary_labels["invalid"].setText(str(invalid_rows))
 
         # Only intake-level issues (structural / missing required) surface in this tab.
         # Audit/analysis findings (e.g. RSPARAM policy) are deferred to the analysis tab.
-        intake_issues = [iss for iss in result.issues if self._is_intake_issue(iss)]
         status_text = "תקין" if not intake_issues else f"שגיאות קליטה - {slot_key}"
         self.summary_labels["status"].setText(status_text)
 
@@ -3238,7 +3252,7 @@ class ValidationDesktopApp(QMainWindow):
             "status": "ok",
             "file_count": file_count,
             "total_rows": result.summary.total_rows,
-            "invalid_rows": result.summary.invalid_rows,
+            "invalid_rows": invalid_rows,
             "is_valid": len(intake_issues) == 0,
         }
 
@@ -3382,6 +3396,64 @@ class ValidationDesktopApp(QMainWindow):
                 count += 1
         return count
 
+    @staticmethod
+    def _find_row_column_by_alias(row: dict[str, Any], candidate: str) -> str | None:
+        normalized_map = {str(column).strip().upper(): str(column) for column in row.keys()}
+        for alias in get_column_aliases(candidate):
+            if alias in normalized_map:
+                return normalized_map[alias]
+        return None
+
+    @classmethod
+    def _resolve_row_value_by_priority(cls, row: dict[str, Any], candidate: str) -> object | None:
+        normalized_map = {str(column).strip().upper(): str(column) for column in row.keys()}
+        fallback_value: object | None = None
+        for alias in get_column_aliases(candidate):
+            if alias not in normalized_map:
+                continue
+            value = row.get(normalized_map[alias])
+            if fallback_value is None:
+                fallback_value = value
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            return value
+        return fallback_value
+
+    @classmethod
+    def _build_password_control_snapshots(cls, rows: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+        param_map: dict[str, object] = {}
+        for row in rows:
+            parameter_column = cls._find_row_column_by_alias(row, "PARAMETER")
+            if not parameter_column:
+                continue
+
+            parameter_name = str(row.get(parameter_column, "")).strip().casefold()
+            if not parameter_name:
+                continue
+
+            value = cls._resolve_row_value_by_priority(row, "VALUE")
+            if value is None:
+                continue
+
+            param_map[parameter_name] = value
+
+        snapshots: dict[str, dict[str, str]] = {}
+        for control_id, param_name, expected, _rule_type, _message in SAP_APP_RSPARAM_RULES:
+            if param_name not in param_map:
+                continue
+
+            actual = param_map[param_name]
+            snapshots[control_id] = {
+                "actual_value": str(actual),
+                "expected_value": str(expected),
+                "status": "תקין",
+                "full_description": f"הערך בפועל עבור {param_name} הוא {actual}, בעוד שהערך המצופה הוא {expected}. ההגדרה תקינה לפי דרישת הבקרה.",
+            }
+
+        return snapshots
+
     def _build_audit_detail_row(
         self,
         issue: ValidationIssue | None,
@@ -3389,6 +3461,7 @@ class ValidationDesktopApp(QMainWindow):
         source_file: str,
         extraction_date: str,
         control_meta: dict[str, str],
+        control_snapshot: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         if issue is None:
             return {
@@ -3399,10 +3472,10 @@ class ValidationDesktopApp(QMainWindow):
                 "risk_level": control_meta.get("risk_level", "-"),
                 "description": control_meta.get("description", "-"),
                 "check_type": control_meta.get("check_type", "-"),
-                "actual_value": "-",
-                "expected_value": "-",
-                "status": "תקין",
-                "full_description": "לא נמצאו ממצאים עבור הבקרה.",
+                "actual_value": (control_snapshot or {}).get("actual_value", "-"),
+                "expected_value": (control_snapshot or {}).get("expected_value", "-"),
+                "status": (control_snapshot or {}).get("status", "תקין"),
+                "full_description": (control_snapshot or {}).get("full_description", "לא נמצאו ממצאים עבור הבקרה."),
             }
 
         return {
@@ -3433,6 +3506,8 @@ class ValidationDesktopApp(QMainWindow):
             return
 
         source_file_label = ", ".join(getattr(result, "source_files", []) or [self._get_slot_display_name(slot_key)])
+        detected_profile = str(getattr(result, "detected_profile", slot_key) or slot_key).upper()
+        password_snapshots = self._build_password_control_snapshots(getattr(result, "rows", [])) if detected_profile in {"RSPARAM", "TPFET"} else {}
         for control_id in all_control_ids:
             control_meta = get_audit_control_definition(control_id)
             control_issues = [issue for issue in audit_issues if issue.control_id == control_id]
@@ -3464,7 +3539,16 @@ class ValidationDesktopApp(QMainWindow):
                 for issue in control_issues
             ]
             if not detail_rows:
-                detail_rows = [self._build_audit_detail_row(None, control_id, source_file_label, extraction_date, control_meta)]
+                detail_rows = [
+                    self._build_audit_detail_row(
+                        None,
+                        control_id,
+                        source_file_label,
+                        extraction_date,
+                        control_meta,
+                        password_snapshots.get(control_id),
+                    )
+                ]
             self.audit_details_by_control[control_id] = detail_rows
 
     def _refresh_audit_summary_table(self) -> None:

@@ -495,6 +495,26 @@ def _parse_numeric(value: object) -> float | None:
         return None
 
 
+def _resolve_value_by_alias_priority(row: dict[str, Any]) -> object | None:
+    """Resolve VALUE-like columns by priority, preferring first non-empty value."""
+    normalized_map = {normalize_name(column): column for column in row.keys()}
+    fallback_value: object | None = None
+
+    for alias in get_column_aliases("VALUE"):
+        if alias not in normalized_map:
+            continue
+        raw_value = row.get(normalized_map[alias])
+        if fallback_value is None:
+            fallback_value = raw_value
+        if raw_value is None:
+            continue
+        if isinstance(raw_value, str) and not raw_value.strip():
+            continue
+        return raw_value
+
+    return fallback_value
+
+
 def _evaluate_rsparam_policy(rows: list[dict[str, Any]]) -> list[ValidationIssue]:
     """Evaluate SAP APP (ABAP) password policy parameters from RSPARAM / TPFET data."""
     issues: list[ValidationIssue] = []
@@ -502,9 +522,14 @@ def _evaluate_rsparam_policy(rows: list[dict[str, Any]]) -> list[ValidationIssue
 
     for row_number, row in enumerate(rows, start=1):
         param_column = _find_column_name(row, ("PARAMETER", "NAME"))
-        value_column = _find_column_name(row, ("VALUE",))
-        if param_column and value_column:
-            param_map[normalize_text(row[param_column])] = (row_number, row[value_column])
+        if not param_column:
+            continue
+
+        resolved_value = _resolve_value_by_alias_priority(row)
+        if resolved_value is None:
+            continue
+
+        param_map[normalize_text(row[param_column])] = (row_number, resolved_value)
 
     for control_id, param_name, expected, rule_type, message in SAP_APP_RSPARAM_RULES:
         control_meta = AUDIT_CONTROL_DEFINITIONS.get(control_id, {})
