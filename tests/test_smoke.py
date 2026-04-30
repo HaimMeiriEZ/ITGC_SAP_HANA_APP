@@ -176,11 +176,12 @@ class TestSmoke(unittest.TestCase):
         window = ValidationDesktopApp()
         try:
             self.assertEqual(window.windowTitle(), "כלי להערכת בקרות ITGC בסביבת SAP HANA APP")
-            self.assertEqual(window.tabs.count(), 4)
+            self.assertEqual(window.tabs.count(), 5)
             self.assertEqual(window.tabs.tabText(0), "קליטת קבצים")
             self.assertEqual(window.tabs.tabText(1), "הגדרות מערכת לביקורת")
             self.assertEqual(window.tabs.tabText(2), "סקירת דוח משתמשים")
-            self.assertEqual(window.tabs.tabText(3), "ביצוע ניתוח לביקורת")
+            self.assertEqual(window.tabs.tabText(3), "סקירת הרשאות")
+            self.assertEqual(window.tabs.tabText(4), "ביצוע ניתוח לביקורת")
             self.assertIn("QTabBar::tab:selected", window.tabs.styleSheet())
             self.assertIn("background-color: #6d002f", window.tabs.styleSheet())
             self.assertIn("color: white", window.tabs.styleSheet())
@@ -373,6 +374,9 @@ class TestSmoke(unittest.TestCase):
             self.assertEqual(window.user_preview_status_filter.count(), 3)
             self.assertEqual(window.audit_period_from_edit.text(), "")
             self.assertEqual(window.audit_period_to_edit.text(), "")
+            self.assertEqual(window.permissions_inner_tabs.count(), 8)
+            self.assertEqual(window.permissions_inner_tabs.tabText(0), "פרופילים למשתמשים חזקים")
+            self.assertEqual(window.permissions_inner_tabs.tabText(7), "הרשאה לעידכון ג'ובים")
         finally:
             window.close()
 
@@ -1031,6 +1035,71 @@ class TestSmoke(unittest.TestCase):
         finally:
             window.close()
 
+    def test_permissions_summary_and_drill_down_are_populated(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            result = ValidationResult(
+                rows=[
+                    {"MANDT": "100", "BNAME": "AUDIT_ADMIN", "PROFILE": "SAP_ALL", "__source_file": "ust04.txt"},
+                    {"MANDT": "400", "BNAME": "POWER_ADMIN", "PROFILE": "S_A.ADMIN", "__source_file": "ust04.txt"},
+                    {"MANDT": "100", "BNAME": "REPORT_USER", "PROFILE": "Z_READ_ONLY", "__source_file": "ust04.txt"},
+                ],
+                issues=[
+                    ValidationIssue(
+                        row_number=1,
+                        column_name="PROFILE",
+                        message="זוהה פרופיל חזק SAP_ALL למשתמש AUDIT_ADMIN",
+                        source_file="ust04.txt",
+                        control_id="MA-PERM-01",
+                        category="MA - ניהול גישה",
+                        risk_level="גבוה",
+                        check_type="פרופילים למשתמשים חזקים",
+                        description="הקצאת פרופילי-על למשתמש מעניקה הרשאות מערכת רחבות ודורשת בקרה הדוקה.",
+                        actual_value="AUDIT_ADMIN",
+                        expected_value="SAP_ALL",
+                        status="עם ממצא",
+                        full_description="למשתמש AUDIT_ADMIN הוקצה הפרופיל החזק SAP_ALL.",
+                    ),
+                    ValidationIssue(
+                        row_number=2,
+                        column_name="PROFILE",
+                        message="זוהה פרופיל חזק S_A.ADMIN למשתמש POWER_ADMIN",
+                        source_file="ust04.txt",
+                        control_id="MA-PERM-01",
+                        category="MA - ניהול גישה",
+                        risk_level="גבוה",
+                        check_type="פרופילים למשתמשים חזקים",
+                        description="הקצאת פרופילי-על למשתמש מעניקה הרשאות מערכת רחבות ודורשת בקרה הדוקה.",
+                        actual_value="POWER_ADMIN",
+                        expected_value="S_A.ADMIN",
+                        status="עם ממצא",
+                        full_description="למשתמש POWER_ADMIN הוקצה הפרופיל החזק S_A.ADMIN.",
+                    ),
+                ],
+                source_files=["ust04.txt"],
+                detected_profile="UST04",
+            )
+
+            audit_issues = [issue for issue in result.issues if not window._is_intake_issue(issue)]
+            window._upsert_permissions_control_data("UST04", result, audit_issues, "2026-04-30")
+            window._refresh_permissions_summary_table()
+
+            self.assertEqual(window.permissions_summary_group.title(), ValidationDesktopApp.format_ui_rtl_text("ממצאי הרשאות - משתמשים חזקים"))
+            self.assertEqual(window.permissions_summary_table.rowCount(), 2)
+            self.assertEqual(window.permissions_summary_table.item(0, 0).text(), "MA-PERM-01")
+            self.assertEqual(window.permissions_summary_table.item(0, 1).text(), "100")
+            self.assertEqual(window.permissions_summary_table.item(0, 3).text(), "1")
+
+            window.permissions_summary_table.setCurrentCell(0, 0)
+            window.permissions_summary_table.selectRow(0)
+            window._refresh_selected_permissions_users()
+            self.assertEqual(window.permissions_users_table.rowCount(), 1)
+            self.assertEqual(window.permissions_users_table.item(0, 0).text(), "100")
+            self.assertEqual(window.permissions_users_table.item(0, 1).text(), "AUDIT_ADMIN")
+        finally:
+            window.close()
+
     def test_export_audit_findings_to_excel_creates_two_sheets(self) -> None:
         with TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)
@@ -1310,6 +1379,20 @@ class TestSmoke(unittest.TestCase):
         result = ValidationEngine().validate(rows, source_name="rsparam.csv")
 
         self.assertFalse(any(issue.control_id == "MA-PWD-01" for issue in result.issues))
+
+    def test_ust04_flags_users_with_strong_profiles(self) -> None:
+        rows = [
+            {"BNAME": "ADMIN_USER", "PROFILE": "SAP_ALL"},
+            {"BNAME": "POWER_USER", "PROFILE": "S_A.ADMIN"},
+            {"BNAME": "NORMAL_USER", "PROFILE": "Z_READ_ONLY"},
+        ]
+
+        result = ValidationEngine().validate(rows, source_name="ust04.txt")
+        strong_profile_issues = [issue for issue in result.issues if issue.control_id == "MA-PERM-01"]
+
+        self.assertEqual(len(strong_profile_issues), 2)
+        self.assertEqual({issue.actual_value for issue in strong_profile_issues}, {"ADMIN_USER", "POWER_USER"})
+        self.assertEqual({issue.expected_value for issue in strong_profile_issues}, {"SAP_ALL", "S_A.ADMIN"})
 
     def test_users_profile_requires_last_login_field(self) -> None:
         rows = [

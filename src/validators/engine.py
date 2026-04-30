@@ -4,6 +4,7 @@ from src.models.validation_result import ValidationIssue, ValidationResult
 from src.validators.spec_rules import (
     build_control_44_issues,
     build_profile_issues,
+    build_strong_profile_issues,
     detect_validation_profile,
     filter_required_value_columns,
     get_column_aliases,
@@ -115,5 +116,6 @@ class ValidationEngine:
                 self.authorized_users,
             )
         )
+        issues.extend(build_strong_profile_issues(detected_profile, rows))
 
         return ValidationResult(rows=rows, issues=issues, detected_profile=detected_profile)

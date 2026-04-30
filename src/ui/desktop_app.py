@@ -373,6 +373,8 @@ class ValidationDesktopApp(QMainWindow):
         self.run_log_records: list[dict[str, Any]] = []
         self.audit_summary_records: dict[str, dict[str, Any]] = {}
         self.audit_details_by_control: dict[str, list[dict[str, Any]]] = {}
+        self.permissions_summary_records: dict[str, dict[str, Any]] = {}
+        self.permissions_users_by_control: dict[str, list[dict[str, Any]]] = {}
         self.audit_findings_export_path: Path | None = None
         self.validation_thread: QThread | None = None
         self.validation_worker: SlotValidationWorker | None = None
@@ -643,6 +645,54 @@ class ValidationDesktopApp(QMainWindow):
         self.review_layout.setContentsMargins(6, 6, 6, 6)
         self.review_layout.setSpacing(6)
 
+        self.permissions_review_tab = QWidget()
+        self.permissions_review_tab.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.permissions_review_layout = QVBoxLayout(self.permissions_review_tab)
+        self.permissions_review_layout.setContentsMargins(12, 12, 12, 12)
+        self.permissions_review_layout.setSpacing(10)
+
+        self.permissions_hint_label = QLabel(
+            self.format_ui_rtl_text("סקירת הרשאות מרכזת ממצאים רוחביים על הרשאות משתמשים במערכת.")
+        )
+        self.permissions_hint_label.setWordWrap(True)
+        self.permissions_hint_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        self.permissions_review_layout.addWidget(self.permissions_hint_label)
+
+        self.permissions_inner_tabs = QTabWidget()
+        self.permissions_inner_tabs.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        strong_profiles_page = QWidget()
+        strong_profiles_page_layout = QVBoxLayout(strong_profiles_page)
+        strong_profiles_page_layout.setContentsMargins(0, 0, 0, 0)
+        strong_profiles_page_layout.setSpacing(8)
+        self._build_strong_profiles_permissions_section(strong_profiles_page_layout)
+        self.permissions_inner_tabs.addTab(strong_profiles_page, self.format_rtl_text("פרופילים למשתמשים חזקים"))
+
+        placeholder_titles = [
+            "הרשאות ניהול משתמשים",
+            "הרשאות ניהול הרשאות",
+            "הרשאות לתוכנית RSCDOK99",
+            "הרשאות לניהול נתונים",
+            "הרשאה להעברת שינויים",
+            "הרשאה לשימוש ב DEBUG",
+            "הרשאה לעידכון ג'ובים",
+        ]
+        for placeholder_title in placeholder_titles:
+            placeholder_page = QWidget()
+            placeholder_layout = QVBoxLayout(placeholder_page)
+            placeholder_layout.setContentsMargins(0, 0, 0, 0)
+            placeholder_layout.setSpacing(8)
+            placeholder_label = QLabel(
+                self.format_ui_rtl_text("חוצץ זה ישופעל בשלב הבא של סקירת ההרשאות.")
+            )
+            placeholder_label.setWordWrap(True)
+            placeholder_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+            placeholder_layout.addWidget(placeholder_label)
+            placeholder_layout.addStretch(1)
+            self.permissions_inner_tabs.addTab(placeholder_page, self.format_rtl_text(placeholder_title))
+
+        self.permissions_review_layout.addWidget(self.permissions_inner_tabs)
+
         self.settings_tab = QWidget()
         self.settings_tab.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.settings_tab_layout = QVBoxLayout(self.settings_tab)
@@ -687,6 +737,7 @@ class ValidationDesktopApp(QMainWindow):
         self.tabs.addTab(self.intake_tab, self.format_rtl_text("קליטת קבצים"))
         self.tabs.addTab(self.settings_tab, self.format_rtl_text("הגדרות מערכת לביקורת"))
         self.tabs.addTab(self.review_tab, self.format_rtl_text("סקירת דוח משתמשים"))
+        self.tabs.addTab(self.permissions_review_tab, self.format_rtl_text("סקירת הרשאות"))
         self.tabs.addTab(self.analysis_tab, self.format_rtl_text("ביצוע ניתוח לביקורת"))
         main_layout.addWidget(self.tabs)
 
@@ -1151,8 +1202,7 @@ class ValidationDesktopApp(QMainWindow):
         self.required_columns_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.required_columns_edit.setPlaceholderText("יוזן אוטומטית לפי המשבצת שנבחרה")
         required_layout.addWidget(self.required_columns_edit)
-        self.required_columns_group.show()
-        self.settings_layout.addWidget(self.required_columns_group)
+        self.required_columns_group.hide()
 
         self.summary_group = QGroupBox(self.format_ui_rtl_text("סיכום בדיקה"))
         self.summary_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -1292,12 +1342,8 @@ class ValidationDesktopApp(QMainWindow):
         self.settings_layout.addWidget(buttons_row, alignment=Qt.AlignmentFlag.AlignRight)
 
         review_group, review_layout, review_unavailable_label = self._build_settings_group(
-            "טווח בחינה לסקירת משתמשים",
-            "הגדרה מרכזית של טווח תקופת הבחינה, מסונכרנת עם מסך סקירת המשתמשים.",
+            "טווח תקופת הביקורת",
         )
-        review_form = QFormLayout()
-        review_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        review_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
         start_widget = QDateEdit()
         start_widget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
@@ -1310,9 +1356,21 @@ class ValidationDesktopApp(QMainWindow):
 
         self.system_settings_widgets["user_review_period.start_date"] = start_widget
         self.system_settings_widgets["user_review_period.end_date"] = end_widget
-        review_form.addRow("מתאריך", start_widget)
-        review_form.addRow("עד תאריך", end_widget)
-        review_layout.addLayout(review_form)
+
+        date_row = QWidget()
+        date_row.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        date_row_layout = QHBoxLayout(date_row)
+        date_row_layout.setContentsMargins(0, 0, 0, 0)
+        date_row_layout.setSpacing(8)
+        # LTR layout: stretch pushes content to the right.
+        # Items added last are rightmost. For RTL label convention (label to the right of field):
+        # Visual (RTL read): מתאריך: [start] | עד תאריך: [end]
+        date_row_layout.addStretch(1)
+        date_row_layout.addWidget(end_widget)
+        date_row_layout.addWidget(QLabel(self.format_ui_rtl_text("עד תאריך:")))
+        date_row_layout.addWidget(start_widget)
+        date_row_layout.addWidget(QLabel(self.format_ui_rtl_text("מתאריך:")))
+        review_layout.addWidget(date_row)
 
         self.settings_layout.addWidget(review_group)
         self.system_settings_sections["user_review_period"] = review_group
@@ -1327,11 +1385,20 @@ class ValidationDesktopApp(QMainWindow):
         self.system_settings_unavailable_labels["authorized_stms_users"] = authorized_stms_unavailable_label
         self.system_settings_unavailable_labels["super_users"] = authorized_stms_unavailable_label
 
-        generic_users_group = self._add_settings_text_list_section("generic_users", "משתמשים גנריים", "רשימה מופרדת שורות")
+        generic_users_group = self._add_settings_text_list_section(
+            "generic_users",
+            "משתמשים גנריים",
+            "רשימה מופרדת שורות",
+            read_only=True,
+        )
         self.system_settings_sections["generic_users"] = generic_users_group
 
-        self._add_settings_text_list_section("critical_roles", "פרופילים משתמשיי על", "רשימה מופרדת שורות")
-        self._add_settings_text_list_section("critical_privileges", "הרשאות על", "רשימה מופרדת שורות")
+        self._add_settings_text_list_section(
+            "critical_roles",
+            "פרופילים משתמשיי על",
+            "רשימה מופרדת שורות",
+            read_only=True,
+        )
 
         password_group, password_layout, password_unavailable_label = self._build_settings_group(
             "ברירות מחדל למדיניות סיסמה",
@@ -1376,26 +1443,6 @@ class ValidationDesktopApp(QMainWindow):
         self.settings_layout.addWidget(password_group)
         self.system_settings_sections["password_policy_defaults"] = password_group
         self.system_settings_unavailable_labels["password_policy_defaults"] = password_unavailable_label
-
-        mapping_group, mapping_layout, mapping_unavailable_label = self._build_settings_group(
-            "מיפוי קבצים",
-            "התאמת שמות קבצים צפויים לכל משבצת, עבור וריאציות ייצוא בין כלים.",
-        )
-        mapping_form = QFormLayout()
-        mapping_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        mapping_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        self.system_settings_file_mapping_order = list(self.SLOT_DEFINITIONS.keys())
-        for slot_key in self.system_settings_file_mapping_order:
-            metadata = self.SLOT_DEFINITIONS[slot_key]
-            display_name = str(metadata.get("label", slot_key))
-            field_widget = QLineEdit()
-            field_widget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-            self.system_settings_widgets[f"file_mappings.{slot_key}"] = field_widget
-            mapping_form.addRow(self.format_ui_rtl_text(display_name), field_widget)
-        mapping_layout.addLayout(mapping_form)
-        self.settings_layout.addWidget(mapping_group)
-        self.system_settings_sections["file_mappings"] = mapping_group
-        self.system_settings_unavailable_labels["file_mappings"] = mapping_unavailable_label
 
         threshold_group, threshold_layout, threshold_unavailable_label = self._build_settings_group(
             "הגדרות נוספות",
@@ -1474,10 +1521,19 @@ class ValidationDesktopApp(QMainWindow):
         for row_index in selected_rows:
             table.removeRow(row_index)
 
-    def _add_settings_text_list_section(self, key: str, title: str, description: str) -> QGroupBox:
+    def _add_settings_text_list_section(
+        self,
+        key: str,
+        title: str,
+        description: str,
+        read_only: bool = False,
+    ) -> QGroupBox:
         group, group_layout, unavailable_label = self._build_settings_group(title, description)
         editor = QPlainTextEdit()
         editor.setMinimumHeight(90)
+        if read_only:
+            editor.setReadOnly(True)
+            editor.setToolTip(self.format_ui_rtl_text("שדה זה מוצג לקריאה בלבד ואינו ניתן לשינוי"))
         self.system_settings_widgets[key] = editor
         group_layout.addWidget(editor)
         self.settings_layout.addWidget(group)
@@ -1635,10 +1691,20 @@ class ValidationDesktopApp(QMainWindow):
                 return []
             return [line.strip() for line in editor.toPlainText().splitlines() if line.strip()]
 
-        settings = self._default_system_settings()
-        settings["generic_users"] = _lines_from_editor(self.system_settings_widgets.get("generic_users"))
-        settings["critical_roles"] = _lines_from_editor(self.system_settings_widgets.get("critical_roles"))
-        settings["critical_privileges"] = _lines_from_editor(self.system_settings_widgets.get("critical_privileges"))
+        settings = copy.deepcopy(self._current_system_settings())
+        default_settings = self._default_system_settings()
+
+        generic_users_editor = self.system_settings_widgets.get("generic_users")
+        if isinstance(generic_users_editor, QPlainTextEdit):
+            settings["generic_users"] = _lines_from_editor(generic_users_editor)
+
+        critical_roles_editor = self.system_settings_widgets.get("critical_roles")
+        if isinstance(critical_roles_editor, QPlainTextEdit):
+            settings["critical_roles"] = _lines_from_editor(critical_roles_editor)
+
+        critical_privileges_editor = self.system_settings_widgets.get("critical_privileges")
+        if isinstance(critical_privileges_editor, QPlainTextEdit):
+            settings["critical_privileges"] = _lines_from_editor(critical_privileges_editor)
 
         authorized_table = self.system_settings_widgets.get("authorized_stms_users")
         authorized_users: list[dict[str, str]] = []
@@ -1662,11 +1728,14 @@ class ValidationDesktopApp(QMainWindow):
             }
 
         file_mappings = {}
+        has_mapping_widgets = False
         for mapping_key in self.system_settings_file_mapping_order:
             widget = self.system_settings_widgets.get(f"file_mappings.{mapping_key}")
             if isinstance(widget, QLineEdit):
+                has_mapping_widgets = True
                 file_mappings[mapping_key] = widget.text().strip()
-        settings["file_mappings"] = file_mappings
+        if has_mapping_widgets:
+            settings["file_mappings"] = file_mappings
 
         threshold_widget = self.system_settings_widgets.get("inactive_days_threshold")
         if isinstance(threshold_widget, QLineEdit):
@@ -1693,7 +1762,7 @@ class ValidationDesktopApp(QMainWindow):
             if isinstance(widget, QComboBox):
                 password_defaults[field_name] = widget.currentText().strip()
             elif isinstance(widget, QLineEdit):
-                default_value = self._default_system_settings()["password_policy_defaults"].get(field_name, 0)
+                default_value = default_settings["password_policy_defaults"].get(field_name, 0)
                 password_defaults[field_name] = self._safe_int(widget.text(), int(default_value))
         settings["password_policy_defaults"] = password_defaults
 
@@ -2921,7 +2990,9 @@ class ValidationDesktopApp(QMainWindow):
             QMessageBox.information(self, "בדיקה פעילה", "בדיקה כבר רצה ברקע. יש להמתין לסיום.")
             return
 
-        self.tabs.setCurrentIndex(3)
+        analysis_tab_index = self.tabs.indexOf(self.analysis_tab)
+        if analysis_tab_index >= 0:
+            self.tabs.setCurrentIndex(analysis_tab_index)
         self._start_slot_validation_async(self.selected_slot_key, file_paths)
 
     def _set_validation_running_state(self, is_running: bool, slot_key: str | None = None) -> None:
@@ -3016,14 +3087,25 @@ class ValidationDesktopApp(QMainWindow):
         processed_slots = 0
         processed_files = 0
         total_rows = 0
+        total_invalid_rows = 0
         invalid_slots = 0
         failed_slots: list[str] = []
 
+        # Keep the intake summary hidden while multiple slots are still processing.
+        self.summary_group.hide()
+        self.results_group.hide()
+
         for slot_key, file_paths in selected_slots:
-            slot_summary = self._run_slot_validation(slot_key, file_paths, show_feedback=False)
+            slot_summary = self._run_slot_validation(
+                slot_key,
+                file_paths,
+                show_feedback=False,
+                update_summary_ui=False,
+            )
             processed_slots += 1
             processed_files += int(slot_summary["file_count"])
             total_rows += int(slot_summary["total_rows"])
+            total_invalid_rows += int(slot_summary["invalid_rows"])
 
             if slot_summary["status"] == "error":
                 failed_slots.append(slot_key)
@@ -3042,6 +3124,24 @@ class ValidationDesktopApp(QMainWindow):
         if failed_slots:
             summary_lines.append(f"משבצות שנכשלו בעיבוד: {', '.join(failed_slots)}")
         summary_lines.append("ניתן לבצע לחיצה כפולה על הרשומה בלוג לצפייה בפירוט.")
+
+        total_valid_rows = max(total_rows - total_invalid_rows, 0)
+        self.summary_labels["total"].setText(str(total_rows))
+        self.summary_labels["valid"].setText(str(total_valid_rows))
+        self.summary_labels["invalid"].setText(str(total_invalid_rows))
+        if failed_slots:
+            self.summary_labels["status"].setText("הושלם עם שגיאות עיבוד")
+        elif total_invalid_rows > 0:
+            self.summary_labels["status"].setText("הושלם עם שגיאות קליטה")
+        else:
+            self.summary_labels["status"].setText("תקין")
+
+        self.issues_table.setRowCount(0)
+        self.issues_table.insertRow(0)
+        for column, value in enumerate(["-", "-", "הסיכום מתייחס לכל המשבצות שנבדקו בריצה הנוכחית"]):
+            item = QTableWidgetItem(self.format_rtl_text(value))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.issues_table.setItem(0, column, item)
 
         self.summary_group.show()
         self.results_group.show()
@@ -3080,14 +3180,25 @@ class ValidationDesktopApp(QMainWindow):
         processed_slots = 0
         processed_files = 0
         total_rows = 0
+        total_invalid_rows = 0
         invalid_slots = 0
         failed_slots: list[str] = []
 
+        # Keep the intake summary hidden while multiple slots are still processing.
+        self.summary_group.hide()
+        self.results_group.hide()
+
         for slot_key, file_paths in selected_slots:
-            slot_summary = self._run_slot_validation(slot_key, file_paths, show_feedback=False)
+            slot_summary = self._run_slot_validation(
+                slot_key,
+                file_paths,
+                show_feedback=False,
+                update_summary_ui=False,
+            )
             processed_slots += 1
             processed_files += int(slot_summary["file_count"])
             total_rows += int(slot_summary["total_rows"])
+            total_invalid_rows += int(slot_summary["invalid_rows"])
 
             if slot_summary["status"] == "error":
                 failed_slots.append(slot_key)
@@ -3107,6 +3218,24 @@ class ValidationDesktopApp(QMainWindow):
             summary_lines.append(f"משבצות שנכשלו בעיבוד: {', '.join(failed_slots)}")
         summary_lines.append("ניתן לבצע לחיצה כפולה על הרשומה בלוג לצפייה בפירוט.")
 
+        total_valid_rows = max(total_rows - total_invalid_rows, 0)
+        self.summary_labels["total"].setText(str(total_rows))
+        self.summary_labels["valid"].setText(str(total_valid_rows))
+        self.summary_labels["invalid"].setText(str(total_invalid_rows))
+        if failed_slots:
+            self.summary_labels["status"].setText("הושלם עם שגיאות עיבוד")
+        elif total_invalid_rows > 0:
+            self.summary_labels["status"].setText("הושלם עם שגיאות קליטה")
+        else:
+            self.summary_labels["status"].setText("תקין")
+
+        self.issues_table.setRowCount(0)
+        self.issues_table.insertRow(0)
+        for column, value in enumerate(["-", "-", "הסיכום מתייחס לכל המשבצות שנבדקו בריצה הנוכחית"]):
+            item = QTableWidgetItem(self.format_rtl_text(value))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.issues_table.setItem(0, column, item)
+
         self.summary_group.show()
         self.results_group.show()
 
@@ -3115,13 +3244,31 @@ class ValidationDesktopApp(QMainWindow):
         else:
             QMessageBox.information(self, "בדיקת קבוצה הושלמה", "\n".join(summary_lines))
 
-    def _run_slot_validation(self, slot_key: str, file_paths: list[str], show_feedback: bool = True) -> dict[str, Any]:
+    def _run_slot_validation(
+        self,
+        slot_key: str,
+        file_paths: list[str],
+        show_feedback: bool = True,
+        update_summary_ui: bool = True,
+    ) -> dict[str, Any]:
         try:
             result = self._process_slot_validation(slot_key, file_paths)
         except Exception as error:
-            return self._handle_slot_validation_error(slot_key, file_paths, str(error), show_feedback)
+            return self._handle_slot_validation_error(
+                slot_key,
+                file_paths,
+                str(error),
+                show_feedback,
+                update_summary_ui,
+            )
 
-        return self._handle_slot_validation_success(slot_key, file_paths, result, show_feedback)
+        return self._handle_slot_validation_success(
+            slot_key,
+            file_paths,
+            result,
+            show_feedback,
+            update_summary_ui,
+        )
 
     def _process_slot_validation(self, slot_key: str, file_paths: list[str]) -> Any:
         if slot_key == "AGR_1251":
@@ -3146,15 +3293,17 @@ class ValidationDesktopApp(QMainWindow):
         file_paths: list[str],
         error_text: str,
         show_feedback: bool,
+        update_summary_ui: bool = True,
     ) -> dict[str, Any]:
-        self.summary_labels["status"].setText(f"שגיאה בעיבוד {slot_key}")
-        self.issues_table.setRowCount(0)
-        error_message = f"אירעה שגיאה במהלך העיבוד של המשבצת {slot_key}: {error_text}"
-        self.issues_table.insertRow(0)
-        for column, value in enumerate(["מבנה", "SYSTEM", error_message]):
-            item = QTableWidgetItem(self.format_rtl_text(value))
-            item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.issues_table.setItem(0, column, item)
+        if update_summary_ui:
+            self.summary_labels["status"].setText(f"שגיאה בעיבוד {slot_key}")
+            self.issues_table.setRowCount(0)
+            error_message = f"אירעה שגיאה במהלך העיבוד של המשבצת {slot_key}: {error_text}"
+            self.issues_table.insertRow(0)
+            for column, value in enumerate(["מבנה", "SYSTEM", error_message]):
+                item = QTableWidgetItem(self.format_rtl_text(value))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.issues_table.setItem(0, column, item)
         self._append_error_log_entries(slot_key, file_paths, str(error_text))
         if show_feedback:
             QMessageBox.critical(self, "שגיאה", f"אירעה שגיאה במהלך העיבוד של המשבצת {slot_key}:\n{error_text}")
@@ -3173,41 +3322,44 @@ class ValidationDesktopApp(QMainWindow):
         file_paths: list[str],
         result: Any,
         show_feedback: bool,
+        update_summary_ui: bool = True,
     ) -> dict[str, Any]:
 
-        self.summary_group.show()
-        self.results_group.show()
         intake_issues = [iss for iss in result.issues if self._is_intake_issue(iss)]
         valid_rows, invalid_rows = self._compute_intake_summary(result.summary.total_rows, intake_issues)
-        self.summary_labels["total"].setText(str(result.summary.total_rows))
-        self.summary_labels["valid"].setText(str(valid_rows))
-        self.summary_labels["invalid"].setText(str(invalid_rows))
 
-        # Only intake-level issues (structural / missing required) surface in this tab.
-        # Audit/analysis findings (e.g. RSPARAM policy) are deferred to the analysis tab.
-        status_text = "תקין" if not intake_issues else f"שגיאות קליטה - {slot_key}"
-        self.summary_labels["status"].setText(status_text)
+        if update_summary_ui:
+            self.summary_group.show()
+            self.results_group.show()
+            self.summary_labels["total"].setText(str(result.summary.total_rows))
+            self.summary_labels["valid"].setText(str(valid_rows))
+            self.summary_labels["invalid"].setText(str(invalid_rows))
 
-        self.issues_table.setRowCount(0)
-        if intake_issues:
-            for issue in intake_issues:
-                row_index = self.issues_table.rowCount()
-                self.issues_table.insertRow(row_index)
-                values = [
-                    str(issue.row_number if issue.row_number > 0 else "מבנה"),
-                    self.format_rtl_text(issue.column_name),
-                    self.format_rtl_text(issue.message),
-                ]
-                for column, value in enumerate(values):
+            # Only intake-level issues (structural / missing required) surface in this tab.
+            # Audit/analysis findings (e.g. RSPARAM policy) are deferred to the analysis tab.
+            status_text = "תקין" if not intake_issues else f"שגיאות קליטה - {slot_key}"
+            self.summary_labels["status"].setText(status_text)
+
+            self.issues_table.setRowCount(0)
+            if intake_issues:
+                for issue in intake_issues:
+                    row_index = self.issues_table.rowCount()
+                    self.issues_table.insertRow(row_index)
+                    values = [
+                        str(issue.row_number if issue.row_number > 0 else "מבנה"),
+                        self.format_rtl_text(issue.column_name),
+                        self.format_rtl_text(issue.message),
+                    ]
+                    for column, value in enumerate(values):
+                        item = QTableWidgetItem(value)
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                        self.issues_table.setItem(row_index, column, item)
+            else:
+                self.issues_table.insertRow(0)
+                for column, value in enumerate(["-", "-", "לא נמצאו שגיאות קליטה"]):
                     item = QTableWidgetItem(value)
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                    self.issues_table.setItem(row_index, column, item)
-        else:
-            self.issues_table.insertRow(0)
-            for column, value in enumerate(["-", "-", "לא נמצאו שגיאות קליטה"]):
-                item = QTableWidgetItem(value)
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self.issues_table.setItem(0, column, item)
+                    self.issues_table.setItem(0, column, item)
 
         audit_issues = [iss for iss in result.issues if not self._is_intake_issue(iss)]
         self._upsert_audit_control_data(
@@ -3217,6 +3369,13 @@ class ValidationDesktopApp(QMainWindow):
             extraction_date=self._get_slot_extraction_date(slot_key),
         )
         self._refresh_audit_summary_table()
+        self._upsert_permissions_control_data(
+            slot_key=slot_key,
+            result=result,
+            audit_issues=audit_issues,
+            extraction_date=self._get_slot_extraction_date(slot_key),
+        )
+        self._refresh_permissions_summary_table()
 
         self._append_run_log_entries(slot_key, file_paths, result)
         if result.report_path is not None:
@@ -3453,6 +3612,276 @@ class ValidationDesktopApp(QMainWindow):
             }
 
         return snapshots
+
+    def _build_strong_profiles_permissions_section(self, parent_layout: QVBoxLayout) -> None:
+        self.permissions_summary_group = QGroupBox(self.format_ui_rtl_text("ממצאי הרשאות - משתמשים חזקים"))
+        self.permissions_summary_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        permissions_summary_layout = QVBoxLayout(self.permissions_summary_group)
+        permissions_summary_layout.setContentsMargins(8, 14, 8, 8)
+
+        self.permissions_summary_table = QTableWidget(0, 6)
+        self.permissions_summary_table.setHorizontalHeaderLabels([
+            self.format_rtl_text("מזהה בקרה"),
+            self.format_rtl_text("קליינט"),
+            self.format_rtl_text("ממצא"),
+            self.format_rtl_text("כמות משתמשים"),
+            self.format_rtl_text("רמת סיכון"),
+            self.format_rtl_text("סטטוס"),
+        ])
+        self.permissions_summary_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.permissions_summary_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.permissions_summary_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.permissions_summary_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.permissions_summary_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.permissions_summary_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.permissions_summary_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.permissions_summary_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.permissions_summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.permissions_summary_table.setAlternatingRowColors(True)
+        self.permissions_summary_table.setMinimumHeight(160)
+        self.permissions_summary_table.itemSelectionChanged.connect(self._refresh_selected_permissions_users)
+        permissions_summary_layout.addWidget(self.permissions_summary_table)
+        parent_layout.addWidget(self.permissions_summary_group)
+
+        self.permissions_users_group = QGroupBox(self.format_ui_rtl_text("משתמשים הכלולים בממצא"))
+        self.permissions_users_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        permissions_users_layout = QVBoxLayout(self.permissions_users_group)
+        permissions_users_layout.setContentsMargins(8, 14, 8, 8)
+
+        self.permissions_users_table = QTableWidget(0, 2)
+        self.permissions_users_table.setHorizontalHeaderLabels([
+            self.format_rtl_text("קליינט"),
+            self.format_rtl_text("משתמש"),
+        ])
+        self.permissions_users_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.permissions_users_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.permissions_users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.permissions_users_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.permissions_users_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.permissions_users_table.setAlternatingRowColors(True)
+        self.permissions_users_table.setMinimumHeight(180)
+        self.permissions_users_table.setToolTip(self.format_ui_rtl_text("לחיצה כפולה על משתמש תציג את הפרופילים החזקים שלו"))
+        self.permissions_users_table.cellDoubleClicked.connect(self.show_permissions_user_profiles_dialog)
+        permissions_users_layout.addWidget(self.permissions_users_table)
+        parent_layout.addWidget(self.permissions_users_group)
+
+        self._refresh_permissions_summary_table()
+
+    def _upsert_permissions_control_data(
+        self,
+        slot_key: str,
+        result: Any,
+        audit_issues: list[ValidationIssue],
+        extraction_date: str,
+    ) -> None:
+        del slot_key
+        del extraction_date
+        detected_profile = str(getattr(result, "detected_profile", "") or "").upper()
+        control_id = "MA-PERM-01"
+        if detected_profile != "UST04":
+            return
+        if control_id not in get_profile_audit_controls(detected_profile):
+            return
+
+        strong_issues = [issue for issue in audit_issues if issue.control_id == control_id]
+        users_by_client: dict[str, dict[str, set[str]]] = {}
+        rows = list(getattr(result, "rows", []))
+
+        for issue in strong_issues:
+            client_name = "-"
+            user_name = str(issue.actual_value or "").strip().upper()
+            profile_name = str(issue.expected_value or "").strip().upper()
+
+            if issue.row_number > 0 and issue.row_number <= len(rows):
+                row = rows[issue.row_number - 1]
+                row_client = self._resolve_row_value_by_priority(row, "MANDT")
+                if row_client is not None and str(row_client).strip():
+                    client_name = str(row_client).strip()
+                if not user_name:
+                    row_user = self._resolve_row_value_by_priority(row, "BNAME")
+                    if row_user is not None:
+                        user_name = str(row_user).strip().upper()
+                if not profile_name:
+                    row_profile = self._resolve_row_value_by_priority(row, "PROFILE")
+                    if row_profile is not None:
+                        profile_name = str(row_profile).strip().upper()
+
+            if not user_name:
+                continue
+
+            client_users = users_by_client.setdefault(client_name, {})
+            client_users.setdefault(user_name, set())
+            if profile_name:
+                client_users[user_name].add(profile_name)
+
+        keys_to_delete = [key for key in self.permissions_summary_records if str(key).startswith(f"{control_id}|")]
+        for key in keys_to_delete:
+            self.permissions_summary_records.pop(key, None)
+            self.permissions_users_by_control.pop(key, None)
+
+        control_meta = get_audit_control_definition(control_id)
+        if not users_by_client:
+            record_key = f"{control_id}|-"
+            self.permissions_summary_records[record_key] = {
+                "record_key": record_key,
+                "control_id": control_id,
+                "client": "-",
+                "finding_text": "נמצאו 0 משתמשים בעלי פרופילים חזקים",
+                "users_count": 0,
+                "risk_level": control_meta.get("risk_level", "-"),
+                "status": "תקין",
+            }
+            self.permissions_users_by_control[record_key] = []
+            return
+
+        for client_name, client_users in sorted(users_by_client.items(), key=lambda item: item[0]):
+            users_count = len(client_users)
+            record_key = f"{control_id}|{client_name}"
+            self.permissions_summary_records[record_key] = {
+                "record_key": record_key,
+                "control_id": control_id,
+                "client": client_name,
+                "finding_text": f"נמצאו {users_count} משתמשים בעלי פרופילים חזקים",
+                "users_count": users_count,
+                "risk_level": control_meta.get("risk_level", "-"),
+                "status": "עם ממצא" if users_count > 0 else "תקין",
+            }
+            self.permissions_users_by_control[record_key] = [
+                {
+                    "client": client_name,
+                    "user_name": user_name,
+                    "profiles": sorted(profiles),
+                }
+                for user_name, profiles in sorted(client_users.items())
+            ]
+
+    def _refresh_permissions_summary_table(self) -> None:
+        self.permissions_summary_table.setRowCount(0)
+        self.permissions_users_table.setRowCount(0)
+        if not self.permissions_summary_records:
+            self.permissions_users_table.insertRow(0)
+            item = QTableWidgetItem(self.format_rtl_text("אין משתמשים להצגה"))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.permissions_users_table.setItem(0, 1, item)
+            return
+
+        for row_data in sorted(
+            self.permissions_summary_records.values(),
+            key=lambda item: (str(item.get("control_id", "")), str(item.get("client", ""))),
+        ):
+            row_index = self.permissions_summary_table.rowCount()
+            self.permissions_summary_table.insertRow(row_index)
+            values = [
+                str(row_data.get("control_id", "-")),
+                str(row_data.get("client", "-")),
+                str(row_data.get("finding_text", "-")),
+                str(row_data.get("users_count", 0)),
+                str(row_data.get("risk_level", "-")),
+                str(row_data.get("status", "-")),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(self.format_rtl_text(value))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, row_data.get("record_key", ""))
+                self.permissions_summary_table.setItem(row_index, column, item)
+
+        if self.permissions_summary_table.rowCount() > 0:
+            self.permissions_summary_table.selectRow(0)
+            self._refresh_selected_permissions_users()
+
+    def _refresh_selected_permissions_users(self) -> None:
+        selected_items = self.permissions_summary_table.selectedItems()
+        if not selected_items:
+            return
+
+        selected_row = selected_items[0].row()
+        control_item = self.permissions_summary_table.item(selected_row, 0)
+        if control_item is None:
+            return
+
+        record_key = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text())
+        user_rows = self.permissions_users_by_control.get(record_key, [])
+        self.permissions_users_table.setRowCount(0)
+
+        if not user_rows:
+            self.permissions_users_table.insertRow(0)
+            empty_item = QTableWidgetItem(self.format_rtl_text("לא נמצאו משתמשים להצגה"))
+            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.permissions_users_table.setItem(0, 1, empty_item)
+            return
+
+        for user_data in user_rows:
+            row_index = self.permissions_users_table.rowCount()
+            self.permissions_users_table.insertRow(row_index)
+            client_name = str(user_data.get("client", "-") or "-")
+            user_name = str(user_data.get("user_name", "-") or "-")
+            client_item = QTableWidgetItem(self.format_rtl_text(client_name))
+            client_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            user_item = QTableWidgetItem(self.format_rtl_text(user_name))
+            user_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            user_item.setData(Qt.ItemDataRole.UserRole, {"client": client_name, "user": user_name})
+            self.permissions_users_table.setItem(row_index, 0, client_item)
+            self.permissions_users_table.setItem(row_index, 1, user_item)
+
+    def show_permissions_user_profiles_dialog(self, row_index: int, _column: int) -> None:
+        if row_index < 0 or row_index >= self.permissions_users_table.rowCount():
+            return
+
+        user_item = self.permissions_users_table.item(row_index, 1)
+        if user_item is None:
+            return
+
+        user_payload = user_item.data(Qt.ItemDataRole.UserRole)
+        user_name = ""
+        client_name = "-"
+        if isinstance(user_payload, dict):
+            user_name = str(user_payload.get("user", "") or "").strip()
+            client_name = str(user_payload.get("client", "-") or "-").strip()
+        if not user_name:
+            user_name = str(user_item.text() or "").strip()
+        if not user_name or user_name.startswith("לא נמצאו") or user_name.startswith("אין "):
+            return
+
+        selected_items = self.permissions_summary_table.selectedItems()
+        if not selected_items:
+            return
+
+        control_item = self.permissions_summary_table.item(selected_items[0].row(), 0)
+        if control_item is None:
+            return
+
+        record_key = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text())
+        user_rows = self.permissions_users_by_control.get(record_key, [])
+        profiles: list[str] = []
+        for user_data in user_rows:
+            if (
+                str(user_data.get("user_name", "")).strip().upper() == user_name.upper()
+                and str(user_data.get("client", "-") or "-").strip() == client_name
+            ):
+                profiles = [str(profile) for profile in user_data.get("profiles", []) if str(profile).strip()]
+                break
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("פירוט פרופילים חזקים למשתמש")
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dialog.resize(640, 360)
+
+        layout = QVBoxLayout(dialog)
+        details_box = QTextEdit()
+        details_box.setReadOnly(True)
+        lines = [f"קליינט: {client_name}", f"משתמש: {user_name}", "", "פרופילים חזקים:"]
+        if profiles:
+            lines.extend(f"- {profile}" for profile in profiles)
+        else:
+            lines.append("- לא נמצאו פרופילים להצגה")
+        details_box.setPlainText(self.format_rtl_text("\n".join(lines)))
+        layout.addWidget(details_box)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def _build_audit_detail_row(
         self,
@@ -3770,8 +4199,12 @@ class ValidationDesktopApp(QMainWindow):
         self.issues_table.setRowCount(0)
         self.audit_summary_records = {}
         self.audit_details_by_control = {}
+        self.permissions_summary_records = {}
+        self.permissions_users_by_control = {}
         self.audit_summary_table.setRowCount(0)
         self.audit_detail_table.setRowCount(0)
+        self.permissions_summary_table.setRowCount(0)
+        self.permissions_users_table.setRowCount(0)
         self.run_log_records = []
         self.run_log_table.setRowCount(0)
         self.refresh_user_preview()

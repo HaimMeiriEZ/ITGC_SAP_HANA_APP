@@ -190,13 +190,33 @@ AUDIT_CONTROL_DEFINITIONS: dict[str, dict[str, str]] = {
         "check_type": "משתמשי מערכת",
         "description": "פרמטר SAP* האוטומטי חייב להיות מבוטל (1).",
     },
+    "MA-PERM-01": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "פרופילים למשתמשים חזקים",
+        "description": "הקצאת פרופילי-על למשתמש מעניקה הרשאות מערכת רחבות ודורשת בקרה הדוקה.",
+    },
 }
 
 PROFILE_AUDIT_CONTROLS: dict[str, list[str]] = {
     "STMS": ["44"],
     "RSPARAM": ["MA-PWD-01", "MA-PWD-02", "MA-PWD-03", "MA-PWD-04", "MA-PWD-05", "MA-PWD-06"],
     "TPFET": ["MA-PWD-01", "MA-PWD-02", "MA-PWD-03", "MA-PWD-04", "MA-PWD-05", "MA-PWD-06"],
+    "UST04": ["MA-PERM-01"],
 }
+
+STRONG_PERMISSION_PROFILES: tuple[str, ...] = (
+    "SAP_ALL",
+    "SAP_NEW",
+    "S_ABAP_ALL",
+    "S_RZL_ADMIN",
+    "S_A.SYSTEM",
+    "S_A.ADMIN",
+    "A_S.CUSTOMIZ",
+    "S_A.DEVELOP",
+    "S_A.USER",
+    "S_USER_ALL",
+)
 
 SAP_APP_RSPARAM_RULES = [
     # (control_id, parameter_name, expected_value, rule_type, message)
@@ -410,6 +430,63 @@ def build_control_44_issues(
                     full_description=f"טרנספורט {trkorr} הועבר בתאריך {as4date or '-'} על ידי המשתמש {import_user}, שאינו מורשה.",
                 )
             )
+
+    return issues
+
+
+def build_strong_profile_issues(
+    profile: str | None,
+    rows: list[dict[str, Any]],
+) -> list[ValidationIssue]:
+    """Detect users with strong system profiles from UST04 rows."""
+    if profile != "UST04" or not rows:
+        return []
+
+    strong_profiles = {normalize_name(value) for value in STRONG_PERMISSION_PROFILES}
+    control_meta = AUDIT_CONTROL_DEFINITIONS.get("MA-PERM-01", {})
+    issues: list[ValidationIssue] = []
+
+    for row_index, row in enumerate(rows, start=1):
+        normalized_row = {
+            normalize_name(key): value
+            for key, value in row.items()
+            if not str(key).startswith("__")
+        }
+
+        user_name = ""
+        for candidate in get_column_aliases("BNAME"):
+            if candidate in normalized_row:
+                user_name = str(normalized_row.get(candidate, "")).strip().upper()
+                if user_name:
+                    break
+
+        profile_name = ""
+        for candidate in get_column_aliases("PROFILE"):
+            if candidate in normalized_row:
+                profile_name = str(normalized_row.get(candidate, "")).strip().upper()
+                if profile_name:
+                    break
+
+        if not user_name or not profile_name or profile_name not in strong_profiles:
+            continue
+
+        issues.append(
+            ValidationIssue(
+                row_number=row_index,
+                column_name="PROFILE",
+                message=f"זוהה פרופיל חזק {profile_name} למשתמש {user_name}",
+                source_file=str(row.get("__source_file", "")),
+                control_id="MA-PERM-01",
+                category=control_meta.get("category", ""),
+                risk_level=control_meta.get("risk_level", ""),
+                check_type=control_meta.get("check_type", ""),
+                description=control_meta.get("description", ""),
+                actual_value=user_name,
+                expected_value=profile_name,
+                status="עם ממצא",
+                full_description=f"למשתמש {user_name} הוקצה הפרופיל החזק {profile_name}.",
+            )
+        )
 
     return issues
 
