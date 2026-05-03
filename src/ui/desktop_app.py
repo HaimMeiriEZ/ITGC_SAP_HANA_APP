@@ -50,7 +50,10 @@ from src.readers.excel_reader import ExcelFileReader
 from src.readers.text_reader import TextFileReader
 from src.reporting.excel_report import ExcelReportWriter
 from src.validators.spec_rules import (
+    AUTH_MGMT_PERMISSION_CRITERIA,
+    RSCDOK99_PERMISSION_CRITERIA,
     SAP_APP_RSPARAM_RULES,
+    USER_MGMT_PERMISSION_CRITERIA,
     get_audit_control_definition,
     get_column_aliases,
     get_profile_audit_controls,
@@ -375,6 +378,14 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_details_by_control: dict[str, list[dict[str, Any]]] = {}
         self.permissions_summary_records: dict[str, dict[str, Any]] = {}
         self.permissions_users_by_control: dict[str, list[dict[str, Any]]] = {}
+        self.agr_1251_cached_rows: list[dict[str, Any]] = []
+        self.agr_users_cached_rows: list[dict[str, Any]] = []
+        self.user_mgmt_summary_records: dict[str, dict[str, Any]] = {}
+        self.user_mgmt_users_by_control: dict[str, list[dict[str, Any]]] = {}
+        self.auth_mgmt_summary_records: dict[str, dict[str, Any]] = {}
+        self.auth_mgmt_users_by_control: dict[str, list[dict[str, Any]]] = {}
+        self.rscdok99_summary_records: dict[str, dict[str, Any]] = {}
+        self.rscdok99_users_by_control: dict[str, list[dict[str, Any]]] = {}
         self.audit_findings_export_path: Path | None = None
         self.validation_thread: QThread | None = None
         self.validation_worker: SlotValidationWorker | None = None
@@ -585,15 +596,10 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("רשומות עם ממצא"),
             self.format_rtl_text("סהכ רשומות"),
         ])
-        self.audit_summary_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_summary_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_summary_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_summary_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_summary_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_summary_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        self.audit_summary_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_summary_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_summary_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
+        _audit_summary_hdr = self.audit_summary_table.horizontalHeader()
+        _audit_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        _audit_summary_hdr.setStretchLastSection(False)
+        self.audit_summary_table.setColumnWidth(5, 220)  # תיאור הבדיקה
         self.audit_summary_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.audit_summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.audit_summary_table.setAlternatingRowColors(True)
@@ -620,16 +626,9 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("סטטוס"),
             self.format_rtl_text("תיאור מלא"),
         ])
-        self.audit_detail_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_detail_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_detail_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_detail_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_detail_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_detail_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_detail_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_detail_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_detail_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_detail_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeMode.Stretch)
+        _audit_detail_hdr = self.audit_detail_table.horizontalHeader()
+        _audit_detail_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        _audit_detail_hdr.setStretchLastSection(True)  # תיאור מלא
         self.audit_detail_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.audit_detail_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.audit_detail_table.setAlternatingRowColors(True)
@@ -669,14 +668,33 @@ class ValidationDesktopApp(QMainWindow):
         self.permissions_inner_tabs.addTab(strong_profiles_page, self.format_rtl_text("פרופילים למשתמשים חזקים"))
 
         placeholder_titles = [
-            "הרשאות ניהול משתמשים",
-            "הרשאות ניהול הרשאות",
-            "הרשאות לתוכנית RSCDOK99",
             "הרשאות לניהול נתונים",
             "הרשאה להעברת שינויים",
             "הרשאה לשימוש ב DEBUG",
             "הרשאה לעידכון ג'ובים",
         ]
+
+        user_mgmt_page = QWidget()
+        user_mgmt_page_layout = QVBoxLayout(user_mgmt_page)
+        user_mgmt_page_layout.setContentsMargins(0, 0, 0, 0)
+        user_mgmt_page_layout.setSpacing(8)
+        self._build_user_mgmt_permissions_section(user_mgmt_page_layout)
+        self.permissions_inner_tabs.addTab(user_mgmt_page, self.format_rtl_text("הרשאות ניהול משתמשים"))
+
+        auth_mgmt_page = QWidget()
+        auth_mgmt_page_layout = QVBoxLayout(auth_mgmt_page)
+        auth_mgmt_page_layout.setContentsMargins(0, 0, 0, 0)
+        auth_mgmt_page_layout.setSpacing(8)
+        self._build_auth_mgmt_permissions_section(auth_mgmt_page_layout)
+        self.permissions_inner_tabs.addTab(auth_mgmt_page, self.format_rtl_text("הרשאות ניהול הרשאות"))
+
+        rscdok99_page = QWidget()
+        rscdok99_page_layout = QVBoxLayout(rscdok99_page)
+        rscdok99_page_layout.setContentsMargins(0, 0, 0, 0)
+        rscdok99_page_layout.setSpacing(8)
+        self._build_rscdok99_permissions_section(rscdok99_page_layout)
+        self.permissions_inner_tabs.addTab(rscdok99_page, self.format_rtl_text("הרשאות לתוכנית RSCDOK99"))
+
         for placeholder_title in placeholder_titles:
             placeholder_page = QWidget()
             placeholder_layout = QVBoxLayout(placeholder_page)
@@ -1170,18 +1188,12 @@ class ValidationDesktopApp(QMainWindow):
         self.run_log_table.setHorizontalHeaderLabels(["משבצת", "קבוצת דוחות", "קובץ", "תאריך הפקה", "רשומות שנקלטו", "סטטוס", "מספר שגיאות", "תיאור שגיאה", "תאריך בדיקה", "שעת בדיקה"])
         self.run_log_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.run_log_table.verticalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
-        self.run_log_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)
+        _run_log_hdr = self.run_log_table.horizontalHeader()
+        _run_log_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        _run_log_hdr.setStretchLastSection(False)
         self.run_log_table.setColumnWidth(1, 150)
         self.run_log_table.setColumnWidth(2, 180)
+        self.run_log_table.setColumnWidth(7, 220)  # תיאור שגיאה
         self.run_log_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.run_log_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.run_log_table.setAlternatingRowColors(True)
@@ -1237,9 +1249,9 @@ class ValidationDesktopApp(QMainWindow):
         self.issues_table.setHorizontalHeaderLabels(["מספר שורה", "שם עמודה", "הודעת שגיאה"])
         self.issues_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.issues_table.verticalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.issues_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.issues_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.issues_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        _issues_hdr = self.issues_table.horizontalHeader()
+        _issues_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        _issues_hdr.setStretchLastSection(True)  # הודעת שגיאה
         self.issues_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.issues_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.issues_table.setAlternatingRowColors(True)
@@ -3142,6 +3154,7 @@ class ValidationDesktopApp(QMainWindow):
             item = QTableWidgetItem(self.format_rtl_text(value))
             item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.issues_table.setItem(0, column, item)
+        self.issues_table.resizeColumnsToContents()
 
         self.summary_group.show()
         self.results_group.show()
@@ -3235,6 +3248,7 @@ class ValidationDesktopApp(QMainWindow):
             item = QTableWidgetItem(self.format_rtl_text(value))
             item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.issues_table.setItem(0, column, item)
+        self.issues_table.resizeColumnsToContents()
 
         self.summary_group.show()
         self.results_group.show()
@@ -3304,6 +3318,7 @@ class ValidationDesktopApp(QMainWindow):
                 item = QTableWidgetItem(self.format_rtl_text(value))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.issues_table.setItem(0, column, item)
+            self.issues_table.resizeColumnsToContents()
         self._append_error_log_entries(slot_key, file_paths, str(error_text))
         if show_feedback:
             QMessageBox.critical(self, "שגיאה", f"אירעה שגיאה במהלך העיבוד של המשבצת {slot_key}:\n{error_text}")
@@ -3360,6 +3375,7 @@ class ValidationDesktopApp(QMainWindow):
                     item = QTableWidgetItem(value)
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                     self.issues_table.setItem(0, column, item)
+            self.issues_table.resizeColumnsToContents()
 
         audit_issues = [iss for iss in result.issues if not self._is_intake_issue(iss)]
         self._upsert_audit_control_data(
@@ -3376,6 +3392,19 @@ class ValidationDesktopApp(QMainWindow):
             extraction_date=self._get_slot_extraction_date(slot_key),
         )
         self._refresh_permissions_summary_table()
+
+        # Cache AGR_1251 / AGR_USERS rows for cross-join user-management permission check
+        detected_profile = str(getattr(result, "detected_profile", "") or "").upper()
+        if detected_profile == "AGR_1251":
+            self.agr_1251_cached_rows = list(getattr(result, "rows", []))
+            self._compute_user_mgmt_permissions()
+            self._compute_auth_mgmt_permissions()
+            self._compute_rscdok99_permissions()
+        elif detected_profile == "AGR_USERS":
+            self.agr_users_cached_rows = list(getattr(result, "rows", []))
+            self._compute_user_mgmt_permissions()
+            self._compute_auth_mgmt_permissions()
+            self._compute_rscdok99_permissions()
 
         self._append_run_log_entries(slot_key, file_paths, result)
         if result.report_path is not None:
@@ -3480,6 +3509,7 @@ class ValidationDesktopApp(QMainWindow):
                 if column == 5:
                     item.setBackground(QColor("#fdecec") if status_text in {"שגוי", "שגיאה"} else QColor("#eaf7ea"))
                 self.run_log_table.setItem(row_index, column, item)
+        self.run_log_table.resizeColumnsToContents()
 
     def _append_error_log_entries(self, slot_key: str, file_paths: list[str], error_text: str) -> None:
         checked_at = datetime.now()
@@ -3531,6 +3561,7 @@ class ValidationDesktopApp(QMainWindow):
                 if column == 5:
                     item.setBackground(QColor("#fdecec"))
                 self.run_log_table.setItem(row_index, column, item)
+        self.run_log_table.resizeColumnsToContents()
 
     @staticmethod
     def _count_stms_control_records(rows: list[dict[str, Any]]) -> int:
@@ -3628,12 +3659,10 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("רמת סיכון"),
             self.format_rtl_text("סטטוס"),
         ])
-        self.permissions_summary_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.permissions_summary_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.permissions_summary_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.permissions_summary_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.permissions_summary_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.permissions_summary_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        _perm_summary_hdr = self.permissions_summary_table.horizontalHeader()
+        _perm_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        _perm_summary_hdr.setStretchLastSection(False)
+        self.permissions_summary_table.setColumnWidth(2, 220)  # ממצא
         self.permissions_summary_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.permissions_summary_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.permissions_summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -3653,8 +3682,9 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("משתמש"),
         ])
-        self.permissions_users_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.permissions_users_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        _perm_users_hdr = self.permissions_users_table.horizontalHeader()
+        _perm_users_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        _perm_users_hdr.setStretchLastSection(True)  # משתמש
         self.permissions_users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.permissions_users_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.permissions_users_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -3666,6 +3696,63 @@ class ValidationDesktopApp(QMainWindow):
         parent_layout.addWidget(self.permissions_users_group)
 
         self._refresh_permissions_summary_table()
+
+    def _build_user_mgmt_permissions_section(self, parent_layout: QVBoxLayout) -> None:
+        self.user_mgmt_summary_group = QGroupBox(self.format_ui_rtl_text("ממצאי הרשאות - ניהול משתמשים"))
+        self.user_mgmt_summary_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        user_mgmt_summary_layout = QVBoxLayout(self.user_mgmt_summary_group)
+        user_mgmt_summary_layout.setContentsMargins(8, 14, 8, 8)
+
+        self.user_mgmt_summary_table = QTableWidget(0, 5)
+        self.user_mgmt_summary_table.setHorizontalHeaderLabels([
+            self.format_rtl_text("קליינט"),
+            self.format_rtl_text("ממצא"),
+            self.format_rtl_text("כמות משתמשים"),
+            self.format_rtl_text("רמת סיכון"),
+            self.format_rtl_text("סטטוס"),
+        ])
+        _usrmgmt_summary_hdr = self.user_mgmt_summary_table.horizontalHeader()
+        _usrmgmt_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        _usrmgmt_summary_hdr.setStretchLastSection(False)
+        self.user_mgmt_summary_table.setColumnWidth(1, 280)  # ממצא
+        self.user_mgmt_summary_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.user_mgmt_summary_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.user_mgmt_summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.user_mgmt_summary_table.setAlternatingRowColors(True)
+        self.user_mgmt_summary_table.setMinimumHeight(160)
+        self.user_mgmt_summary_table.setToolTip(
+            self.format_ui_rtl_text("לחיצה על שורה תציג את המשתמשים בעלי הרשאת ניהול משתמשים")
+        )
+        self.user_mgmt_summary_table.itemSelectionChanged.connect(self._refresh_selected_user_mgmt_users)
+        user_mgmt_summary_layout.addWidget(self.user_mgmt_summary_table)
+        parent_layout.addWidget(self.user_mgmt_summary_group)
+
+        self.user_mgmt_users_group = QGroupBox(self.format_ui_rtl_text("משתמשים בעלי הרשאת ניהול משתמשים"))
+        self.user_mgmt_users_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        user_mgmt_users_layout = QVBoxLayout(self.user_mgmt_users_group)
+        user_mgmt_users_layout.setContentsMargins(8, 14, 8, 8)
+
+        self.user_mgmt_users_table = QTableWidget(0, 2)
+        self.user_mgmt_users_table.setHorizontalHeaderLabels([
+            self.format_rtl_text("קליינט"),
+            self.format_rtl_text("משתמש"),
+        ])
+        _usrmgmt_users_hdr = self.user_mgmt_users_table.horizontalHeader()
+        _usrmgmt_users_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        _usrmgmt_users_hdr.setStretchLastSection(True)
+        self.user_mgmt_users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.user_mgmt_users_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.user_mgmt_users_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.user_mgmt_users_table.setAlternatingRowColors(True)
+        self.user_mgmt_users_table.setMinimumHeight(180)
+        self.user_mgmt_users_table.setToolTip(
+            self.format_ui_rtl_text("לחיצה כפולה על משתמש תציג את הרולים המעניקים לו הרשאת ניהול משתמשים")
+        )
+        self.user_mgmt_users_table.cellDoubleClicked.connect(self.show_user_mgmt_user_dialog)
+        user_mgmt_users_layout.addWidget(self.user_mgmt_users_table)
+        parent_layout.addWidget(self.user_mgmt_users_group)
+
+        self._refresh_user_mgmt_summary_table()
 
     def _upsert_permissions_control_data(
         self,
@@ -3789,6 +3876,7 @@ class ValidationDesktopApp(QMainWindow):
         if self.permissions_summary_table.rowCount() > 0:
             self.permissions_summary_table.selectRow(0)
             self._refresh_selected_permissions_users()
+        self.permissions_summary_table.resizeColumnsToContents()
 
     def _refresh_selected_permissions_users(self) -> None:
         selected_items = self.permissions_summary_table.selectedItems()
@@ -3823,6 +3911,7 @@ class ValidationDesktopApp(QMainWindow):
             user_item.setData(Qt.ItemDataRole.UserRole, {"client": client_name, "user": user_name})
             self.permissions_users_table.setItem(row_index, 0, client_item)
             self.permissions_users_table.setItem(row_index, 1, user_item)
+        self.permissions_users_table.resizeColumnsToContents()
 
     def show_permissions_user_profiles_dialog(self, row_index: int, _column: int) -> None:
         if row_index < 0 or row_index >= self.permissions_users_table.rowCount():
@@ -3875,6 +3964,909 @@ class ValidationDesktopApp(QMainWindow):
             lines.extend(f"- {profile}" for profile in profiles)
         else:
             lines.append("- לא נמצאו פרופילים להצגה")
+        details_box.setPlainText(self.format_rtl_text("\n".join(lines)))
+        layout.addWidget(details_box)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
+
+    # ------------------------------------------------------------------
+    # User-Management Permissions (MA-USRMGMT-01)
+    # Cross-join: AGR_1251 (permission objects) × AGR_USERS (role assignments)
+    # ------------------------------------------------------------------
+
+    def _compute_user_mgmt_permissions(self) -> None:
+        """Recompute user-management permission findings from cached AGR_1251 + AGR_USERS rows."""
+        if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
+            return
+
+        control_id = "MA-USRMGMT-01"
+        control_meta = get_audit_control_definition(control_id)
+
+        # Step A: find AGR_NAMEs that carry user-management permission objects.
+        # qualifying_values: (OBJECT_upper, FIELD_upper) -> set of qualifying LOW/HIGH values
+        qualifying_map: dict[tuple[str, str], set[str]] = {
+            (obj.upper(), fld.upper()): {v.upper() for v in vals}
+            for (obj, fld), vals in USER_MGMT_PERMISSION_CRITERIA.items()
+        }
+
+        # agr_name_objects: AGR_NAME -> set of (OBJECT, FIELD, LOW_display) tuples that qualified
+        agr_name_objects: dict[str, set[tuple[str, str, str]]] = {}
+        for row in self.agr_1251_cached_rows:
+            obj_val = self._resolve_row_value_by_priority(row, "OBJECT")
+            fld_val = self._resolve_row_value_by_priority(row, "FIELD")
+            low_val = self._resolve_row_value_by_priority(row, "LOW")
+            high_val = self._resolve_row_value_by_priority(row, "HIGH")
+            if obj_val is None or fld_val is None:
+                continue
+            obj_upper = str(obj_val).strip().upper()
+            fld_upper = str(fld_val).strip().upper()
+            key = (obj_upper, fld_upper)
+            if key not in qualifying_map:
+                continue
+            low_str = str(low_val).strip().upper() if low_val is not None else ""
+            high_str = str(high_val).strip().upper() if high_val is not None else ""
+            # wildcard or value in qualifying set
+            if low_str == "*" or high_str == "*":
+                qualifies = True
+            else:
+                qualifies = bool(low_str and low_str in qualifying_map[key]) or bool(
+                    high_str and high_str in qualifying_map[key]
+                )
+            if not qualifies:
+                continue
+            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
+            if agr_name_val is None or not str(agr_name_val).strip():
+                continue
+            agr_name_upper = str(agr_name_val).strip().upper()
+            low_display = low_str if low_str else "-"
+            agr_name_objects.setdefault(agr_name_upper, set()).add((obj_upper, fld_upper, low_display))
+
+        matching_agr_names: set[str] = set(agr_name_objects.keys())
+
+        # Step B: scan AGR_USERS; for each row whose AGR_NAME is in matching set,
+        #         group by MANDT → UNAME → set of AGR_NAMEs.
+        users_by_client: dict[str, dict[str, set[str]]] = {}
+        for row in self.agr_users_cached_rows:
+            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
+            if agr_name_val is None:
+                continue
+            agr_name_upper = str(agr_name_val).strip().upper()
+            if agr_name_upper not in matching_agr_names:
+                continue
+
+            # Resolve MANDT with fallback to filename
+            mandt_val = self._resolve_row_value_by_priority(row, "MANDT")
+            if mandt_val is not None and str(mandt_val).strip():
+                mandt = str(mandt_val).strip()
+            else:
+                source_file = str(row.get("__source_file", ""))
+                digits_match = re.search(r"\d{3}", Path(source_file).name)
+                mandt = digits_match.group(0) if digits_match else "-"
+
+            uname_val = self._resolve_row_value_by_priority(row, "UNAME")
+            if uname_val is None or not str(uname_val).strip():
+                continue
+            uname = str(uname_val).strip().upper()
+
+            client_users = users_by_client.setdefault(mandt, {})
+            client_users.setdefault(uname, set()).add(agr_name_upper)
+
+        # Step C: rebuild summary/users dicts
+        self.user_mgmt_summary_records.clear()
+        self.user_mgmt_users_by_control.clear()
+
+        if not users_by_client:
+            record_key = f"{control_id}|-"
+            self.user_mgmt_summary_records[record_key] = {
+                "record_key": record_key,
+                "client": "-",
+                "finding_text": "לא נמצאו משתמשים בעלי הרשאות ניהול משתמשים",
+                "users_count": 0,
+                "risk_level": control_meta.get("risk_level", "-"),
+                "status": "תקין",
+            }
+            self.user_mgmt_users_by_control[record_key] = []
+        else:
+            for mandt, client_users in sorted(users_by_client.items()):
+                users_count = len(client_users)
+                record_key = f"{control_id}|{mandt}"
+                self.user_mgmt_summary_records[record_key] = {
+                    "record_key": record_key,
+                    "client": mandt,
+                    "finding_text": f"נמצאו {users_count} משתמשים בעלי הרשאות ניהול משתמשים",
+                    "users_count": users_count,
+                    "risk_level": control_meta.get("risk_level", "-"),
+                    "status": "עם ממצא" if users_count > 0 else "תקין",
+                }
+                self.user_mgmt_users_by_control[record_key] = [
+                    {
+                        "client": mandt,
+                        "user_name": uname,
+                        "roles": [
+                            {
+                                "agr_name": r,
+                                "objects": sorted(agr_name_objects.get(r, set())),
+                            }
+                            for r in sorted(roles)
+                        ],
+                    }
+                    for uname, roles in sorted(client_users.items())
+                ]
+
+        self._refresh_user_mgmt_summary_table()
+
+    def _refresh_user_mgmt_summary_table(self) -> None:
+        self.user_mgmt_summary_table.setRowCount(0)
+        self.user_mgmt_users_table.setRowCount(0)
+        if not self.user_mgmt_summary_records:
+            self.user_mgmt_users_table.insertRow(0)
+            empty_item = QTableWidgetItem(self.format_rtl_text("יש לטעון קבצי AGR_1251 ו-AGR_USERS"))
+            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.user_mgmt_users_table.setItem(0, 1, empty_item)
+            return
+
+        for row_data in sorted(
+            self.user_mgmt_summary_records.values(),
+            key=lambda item: str(item.get("client", "")),
+        ):
+            row_index = self.user_mgmt_summary_table.rowCount()
+            self.user_mgmt_summary_table.insertRow(row_index)
+            values = [
+                str(row_data.get("client", "-")),
+                str(row_data.get("finding_text", "-")),
+                str(row_data.get("users_count", 0)),
+                str(row_data.get("risk_level", "-")),
+                str(row_data.get("status", "-")),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(self.format_rtl_text(value))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, row_data.get("record_key", ""))
+                self.user_mgmt_summary_table.setItem(row_index, column, item)
+
+        if self.user_mgmt_summary_table.rowCount() > 0:
+            self.user_mgmt_summary_table.selectRow(0)
+            self._refresh_selected_user_mgmt_users()
+        self.user_mgmt_summary_table.resizeColumnsToContents()
+
+    def _refresh_selected_user_mgmt_users(self) -> None:
+        selected_items = self.user_mgmt_summary_table.selectedItems()
+        if not selected_items:
+            return
+
+        selected_row = selected_items[0].row()
+        control_item = self.user_mgmt_summary_table.item(selected_row, 0)
+        if control_item is None:
+            return
+
+        record_key = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text())
+        user_rows = self.user_mgmt_users_by_control.get(record_key, [])
+        self.user_mgmt_users_table.setRowCount(0)
+
+        if not user_rows:
+            self.user_mgmt_users_table.insertRow(0)
+            empty_item = QTableWidgetItem(self.format_rtl_text("לא נמצאו משתמשים להצגה"))
+            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.user_mgmt_users_table.setItem(0, 1, empty_item)
+            return
+
+        for user_data in user_rows:
+            row_index = self.user_mgmt_users_table.rowCount()
+            self.user_mgmt_users_table.insertRow(row_index)
+            client_name = str(user_data.get("client", "-") or "-")
+            user_name = str(user_data.get("user_name", "-") or "-")
+            client_item = QTableWidgetItem(self.format_rtl_text(client_name))
+            client_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            user_item = QTableWidgetItem(self.format_rtl_text(user_name))
+            user_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            user_item.setData(Qt.ItemDataRole.UserRole, {"client": client_name, "user": user_name})
+            self.user_mgmt_users_table.setItem(row_index, 0, client_item)
+            self.user_mgmt_users_table.setItem(row_index, 1, user_item)
+        self.user_mgmt_users_table.resizeColumnsToContents()
+
+    def show_user_mgmt_user_dialog(self, row_index: int, _column: int) -> None:
+        if row_index < 0 or row_index >= self.user_mgmt_users_table.rowCount():
+            return
+
+        user_item = self.user_mgmt_users_table.item(row_index, 1)
+        if user_item is None:
+            return
+
+        user_payload = user_item.data(Qt.ItemDataRole.UserRole)
+        user_name = ""
+        client_name = "-"
+        if isinstance(user_payload, dict):
+            user_name = str(user_payload.get("user", "") or "").strip()
+            client_name = str(user_payload.get("client", "-") or "-").strip()
+        if not user_name:
+            user_name = str(user_item.text() or "").strip()
+        if not user_name or user_name.startswith("לא נמצאו") or user_name.startswith("אין "):
+            return
+
+        selected_items = self.user_mgmt_summary_table.selectedItems()
+        if not selected_items:
+            return
+
+        summary_item = self.user_mgmt_summary_table.item(selected_items[0].row(), 0)
+        if summary_item is None:
+            return
+
+        record_key = str(summary_item.data(Qt.ItemDataRole.UserRole) or summary_item.text())
+        user_rows = self.user_mgmt_users_by_control.get(record_key, [])
+        roles: list[dict] = []
+        for user_data in user_rows:
+            if (
+                str(user_data.get("user_name", "")).strip().upper() == user_name.upper()
+                and str(user_data.get("client", "-") or "-").strip() == client_name
+            ):
+                roles = list(user_data.get("roles", []))
+                break
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("פירוט הרשאות ניהול משתמשים")
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dialog.resize(640, 480)
+
+        layout = QVBoxLayout(dialog)
+        details_box = QTextEdit()
+        details_box.setReadOnly(True)
+        lines = [
+            f"קליינט: {client_name}",
+            f"משתמש: {user_name}",
+            "",
+            "רולים ואובייקטי הרשאה:",
+        ]
+        if roles:
+            for role_entry in roles:
+                lines.append(f"- {role_entry.get('agr_name', '')}")
+                for obj, fld, low in role_entry.get("objects", []):
+                    lines.append(f"    {obj} | {fld} | {low}")
+        else:
+            lines.append("- לא נמצאו רולים להצגה")
+        details_box.setPlainText(self.format_rtl_text("\n".join(lines)))
+        layout.addWidget(details_box)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
+
+    # ------------------------------------------------------------------
+    # Authorization-Management Permissions (MA-AUTHMGMT-01)
+    # Cross-join: AGR_1251 (permission objects) × AGR_USERS (role assignments)
+    # ------------------------------------------------------------------
+
+    def _build_auth_mgmt_permissions_section(self, parent_layout: QVBoxLayout) -> None:
+        self.auth_mgmt_summary_group = QGroupBox(self.format_ui_rtl_text("ממצאי הרשאות - ניהול הרשאות"))
+        self.auth_mgmt_summary_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        auth_mgmt_summary_layout = QVBoxLayout(self.auth_mgmt_summary_group)
+        auth_mgmt_summary_layout.setContentsMargins(8, 14, 8, 8)
+
+        self.auth_mgmt_summary_table = QTableWidget(0, 5)
+        self.auth_mgmt_summary_table.setHorizontalHeaderLabels([
+            self.format_rtl_text("קליינט"),
+            self.format_rtl_text("ממצא"),
+            self.format_rtl_text("כמות משתמשים"),
+            self.format_rtl_text("רמת סיכון"),
+            self.format_rtl_text("סטטוס"),
+        ])
+        _authmgmt_summary_hdr = self.auth_mgmt_summary_table.horizontalHeader()
+        _authmgmt_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        _authmgmt_summary_hdr.setStretchLastSection(False)
+        self.auth_mgmt_summary_table.setColumnWidth(1, 280)  # ממצא
+        self.auth_mgmt_summary_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.auth_mgmt_summary_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.auth_mgmt_summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.auth_mgmt_summary_table.setAlternatingRowColors(True)
+        self.auth_mgmt_summary_table.setMinimumHeight(160)
+        self.auth_mgmt_summary_table.setToolTip(
+            self.format_ui_rtl_text("לחיצה על שורה תציג את המשתמשים בעלי הרשאת ניהול הרשאות")
+        )
+        self.auth_mgmt_summary_table.itemSelectionChanged.connect(self._refresh_selected_auth_mgmt_users)
+        auth_mgmt_summary_layout.addWidget(self.auth_mgmt_summary_table)
+        parent_layout.addWidget(self.auth_mgmt_summary_group)
+
+        self.auth_mgmt_users_group = QGroupBox(self.format_ui_rtl_text("משתמשים בעלי הרשאת ניהול הרשאות"))
+        self.auth_mgmt_users_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        auth_mgmt_users_layout = QVBoxLayout(self.auth_mgmt_users_group)
+        auth_mgmt_users_layout.setContentsMargins(8, 14, 8, 8)
+
+        self.auth_mgmt_users_table = QTableWidget(0, 2)
+        self.auth_mgmt_users_table.setHorizontalHeaderLabels([
+            self.format_rtl_text("קליינט"),
+            self.format_rtl_text("משתמש"),
+        ])
+        _authmgmt_users_hdr = self.auth_mgmt_users_table.horizontalHeader()
+        _authmgmt_users_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        _authmgmt_users_hdr.setStretchLastSection(True)
+        self.auth_mgmt_users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.auth_mgmt_users_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.auth_mgmt_users_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.auth_mgmt_users_table.setAlternatingRowColors(True)
+        self.auth_mgmt_users_table.setMinimumHeight(180)
+        self.auth_mgmt_users_table.setToolTip(
+            self.format_ui_rtl_text("לחיצה כפולה על משתמש תציג את הרולים המעניקים לו הרשאת ניהול הרשאות")
+        )
+        self.auth_mgmt_users_table.cellDoubleClicked.connect(self.show_auth_mgmt_user_dialog)
+        auth_mgmt_users_layout.addWidget(self.auth_mgmt_users_table)
+        parent_layout.addWidget(self.auth_mgmt_users_group)
+
+        self._refresh_auth_mgmt_summary_table()
+
+    def _compute_auth_mgmt_permissions(self) -> None:
+        """Recompute authorization-management permission findings from cached AGR_1251 + AGR_USERS rows."""
+        if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
+            return
+
+        control_id = "MA-AUTHMGMT-01"
+        control_meta = get_audit_control_definition(control_id)
+
+        qualifying_map: dict[tuple[str, str], set[str]] = {
+            (obj.upper(), fld.upper()): {v.upper() for v in vals}
+            for (obj, fld), vals in AUTH_MGMT_PERMISSION_CRITERIA.items()
+        }
+
+        # agr_name_objects: AGR_NAME -> set of (OBJECT, FIELD, LOW_display) tuples that qualified
+        agr_name_objects: dict[str, set[tuple[str, str, str]]] = {}
+        for row in self.agr_1251_cached_rows:
+            obj_val = self._resolve_row_value_by_priority(row, "OBJECT")
+            fld_val = self._resolve_row_value_by_priority(row, "FIELD")
+            low_val = self._resolve_row_value_by_priority(row, "LOW")
+            high_val = self._resolve_row_value_by_priority(row, "HIGH")
+            if obj_val is None or fld_val is None:
+                continue
+            obj_upper = str(obj_val).strip().upper()
+            fld_upper = str(fld_val).strip().upper()
+            key = (obj_upper, fld_upper)
+            if key not in qualifying_map:
+                continue
+            low_str = str(low_val).strip().upper() if low_val is not None else ""
+            high_str = str(high_val).strip().upper() if high_val is not None else ""
+            if low_str == "*" or high_str == "*":
+                qualifies = True
+            else:
+                qualifies = bool(low_str and low_str in qualifying_map[key]) or bool(
+                    high_str and high_str in qualifying_map[key]
+                )
+            if not qualifies:
+                continue
+            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
+            if agr_name_val is None or not str(agr_name_val).strip():
+                continue
+            agr_name_upper = str(agr_name_val).strip().upper()
+            low_display = low_str if low_str else "-"
+            agr_name_objects.setdefault(agr_name_upper, set()).add((obj_upper, fld_upper, low_display))
+
+        matching_agr_names: set[str] = set(agr_name_objects.keys())
+
+        users_by_client: dict[str, dict[str, set[str]]] = {}
+        for row in self.agr_users_cached_rows:
+            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
+            if agr_name_val is None:
+                continue
+            agr_name_upper = str(agr_name_val).strip().upper()
+            if agr_name_upper not in matching_agr_names:
+                continue
+
+            mandt_val = self._resolve_row_value_by_priority(row, "MANDT")
+            if mandt_val is not None and str(mandt_val).strip():
+                mandt = str(mandt_val).strip()
+            else:
+                source_file = str(row.get("__source_file", ""))
+                digits_match = re.search(r"\d{3}", Path(source_file).name)
+                mandt = digits_match.group(0) if digits_match else "-"
+
+            uname_val = self._resolve_row_value_by_priority(row, "UNAME")
+            if uname_val is None or not str(uname_val).strip():
+                continue
+            uname = str(uname_val).strip().upper()
+
+            client_users = users_by_client.setdefault(mandt, {})
+            client_users.setdefault(uname, set()).add(agr_name_upper)
+
+        self.auth_mgmt_summary_records.clear()
+        self.auth_mgmt_users_by_control.clear()
+
+        if not users_by_client:
+            record_key = f"{control_id}|-"
+            self.auth_mgmt_summary_records[record_key] = {
+                "record_key": record_key,
+                "client": "-",
+                "finding_text": "לא נמצאו משתמשים בעלי הרשאות ניהול הרשאות",
+                "users_count": 0,
+                "risk_level": control_meta.get("risk_level", "-"),
+                "status": "תקין",
+            }
+            self.auth_mgmt_users_by_control[record_key] = []
+        else:
+            for mandt, client_users in sorted(users_by_client.items()):
+                users_count = len(client_users)
+                record_key = f"{control_id}|{mandt}"
+                self.auth_mgmt_summary_records[record_key] = {
+                    "record_key": record_key,
+                    "client": mandt,
+                    "finding_text": f"נמצאו {users_count} משתמשים בעלי הרשאות ניהול הרשאות",
+                    "users_count": users_count,
+                    "risk_level": control_meta.get("risk_level", "-"),
+                    "status": "עם ממצא" if users_count > 0 else "תקין",
+                }
+                self.auth_mgmt_users_by_control[record_key] = [
+                    {
+                        "client": mandt,
+                        "user_name": uname,
+                        "roles": [
+                            {
+                                "agr_name": r,
+                                "objects": sorted(agr_name_objects.get(r, set())),
+                            }
+                            for r in sorted(roles)
+                        ],
+                    }
+                    for uname, roles in sorted(client_users.items())
+                ]
+
+        self._refresh_auth_mgmt_summary_table()
+
+    def _refresh_auth_mgmt_summary_table(self) -> None:
+        self.auth_mgmt_summary_table.setRowCount(0)
+        self.auth_mgmt_users_table.setRowCount(0)
+        if not self.auth_mgmt_summary_records:
+            self.auth_mgmt_users_table.insertRow(0)
+            empty_item = QTableWidgetItem(self.format_rtl_text("יש לטעון קבצי AGR_1251 ו-AGR_USERS"))
+            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.auth_mgmt_users_table.setItem(0, 1, empty_item)
+            return
+
+        for row_data in sorted(
+            self.auth_mgmt_summary_records.values(),
+            key=lambda item: str(item.get("client", "")),
+        ):
+            row_index = self.auth_mgmt_summary_table.rowCount()
+            self.auth_mgmt_summary_table.insertRow(row_index)
+            values = [
+                str(row_data.get("client", "-")),
+                str(row_data.get("finding_text", "-")),
+                str(row_data.get("users_count", 0)),
+                str(row_data.get("risk_level", "-")),
+                str(row_data.get("status", "-")),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(self.format_rtl_text(value))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, row_data.get("record_key", ""))
+                self.auth_mgmt_summary_table.setItem(row_index, column, item)
+
+        if self.auth_mgmt_summary_table.rowCount() > 0:
+            self.auth_mgmt_summary_table.selectRow(0)
+            self._refresh_selected_auth_mgmt_users()
+        self.auth_mgmt_summary_table.resizeColumnsToContents()
+
+    def _refresh_selected_auth_mgmt_users(self) -> None:
+        selected_items = self.auth_mgmt_summary_table.selectedItems()
+        if not selected_items:
+            return
+
+        selected_row = selected_items[0].row()
+        control_item = self.auth_mgmt_summary_table.item(selected_row, 0)
+        if control_item is None:
+            return
+
+        record_key = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text())
+        user_rows = self.auth_mgmt_users_by_control.get(record_key, [])
+        self.auth_mgmt_users_table.setRowCount(0)
+
+        if not user_rows:
+            self.auth_mgmt_users_table.insertRow(0)
+            empty_item = QTableWidgetItem(self.format_rtl_text("לא נמצאו משתמשים להצגה"))
+            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.auth_mgmt_users_table.setItem(0, 1, empty_item)
+            return
+
+        for user_data in user_rows:
+            row_index = self.auth_mgmt_users_table.rowCount()
+            self.auth_mgmt_users_table.insertRow(row_index)
+            client_name = str(user_data.get("client", "-") or "-")
+            user_name = str(user_data.get("user_name", "-") or "-")
+            client_item = QTableWidgetItem(self.format_rtl_text(client_name))
+            client_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            user_item = QTableWidgetItem(self.format_rtl_text(user_name))
+            user_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            user_item.setData(Qt.ItemDataRole.UserRole, {"client": client_name, "user": user_name})
+            self.auth_mgmt_users_table.setItem(row_index, 0, client_item)
+            self.auth_mgmt_users_table.setItem(row_index, 1, user_item)
+        self.auth_mgmt_users_table.resizeColumnsToContents()
+
+    def show_auth_mgmt_user_dialog(self, row_index: int, _column: int) -> None:
+        if row_index < 0 or row_index >= self.auth_mgmt_users_table.rowCount():
+            return
+
+        user_item = self.auth_mgmt_users_table.item(row_index, 1)
+        if user_item is None:
+            return
+
+        user_payload = user_item.data(Qt.ItemDataRole.UserRole)
+        user_name = ""
+        client_name = "-"
+        if isinstance(user_payload, dict):
+            user_name = str(user_payload.get("user", "") or "").strip()
+            client_name = str(user_payload.get("client", "-") or "-").strip()
+        if not user_name:
+            user_name = str(user_item.text() or "").strip()
+        if not user_name or user_name.startswith("לא נמצאו") or user_name.startswith("אין "):
+            return
+
+        selected_items = self.auth_mgmt_summary_table.selectedItems()
+        if not selected_items:
+            return
+
+        summary_item = self.auth_mgmt_summary_table.item(selected_items[0].row(), 0)
+        if summary_item is None:
+            return
+
+        record_key = str(summary_item.data(Qt.ItemDataRole.UserRole) or summary_item.text())
+        user_rows = self.auth_mgmt_users_by_control.get(record_key, [])
+        roles: list[dict] = []
+        for user_data in user_rows:
+            if (
+                str(user_data.get("user_name", "")).strip().upper() == user_name.upper()
+                and str(user_data.get("client", "-") or "-").strip() == client_name
+            ):
+                roles = list(user_data.get("roles", []))
+                break
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("פירוט הרשאות ניהול הרשאות")
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dialog.resize(640, 480)
+
+        layout = QVBoxLayout(dialog)
+        details_box = QTextEdit()
+        details_box.setReadOnly(True)
+        lines = [
+            f"קליינט: {client_name}",
+            f"משתמש: {user_name}",
+            "",
+            "רולים ואובייקטי הרשאה:",
+        ]
+        if roles:
+            for role_entry in roles:
+                lines.append(f"- {role_entry.get('agr_name', '')}")
+                for obj, fld, low in role_entry.get("objects", []):
+                    lines.append(f"    {obj} | {fld} | {low}")
+        else:
+            lines.append("- לא נמצאו רולים להצגה")
+        details_box.setPlainText(self.format_rtl_text("\n".join(lines)))
+        layout.addWidget(details_box)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
+
+    # ------------------------------------------------------------------
+    # RSCDOK99 Program Permissions (MA-RSCDOK99-01)
+    # Cross-join: AGR_1251 (permission objects) × AGR_USERS (role assignments)
+    # AND logic: an AGR_NAME qualifies only when it satisfies ALL criteria
+    # (S_PROGRAM/P_GROUP=RSCDOK99 AND S_PROGRAM/P_ACTION=SUB).
+    # ------------------------------------------------------------------
+
+    def _build_rscdok99_permissions_section(self, parent_layout: QVBoxLayout) -> None:
+        self.rscdok99_summary_group = QGroupBox(self.format_ui_rtl_text("ממצאי הרשאות - תוכנית RSCDOK99"))
+        self.rscdok99_summary_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        rscdok99_summary_layout = QVBoxLayout(self.rscdok99_summary_group)
+        rscdok99_summary_layout.setContentsMargins(8, 14, 8, 8)
+
+        self.rscdok99_summary_table = QTableWidget(0, 5)
+        self.rscdok99_summary_table.setHorizontalHeaderLabels([
+            self.format_rtl_text("קליינט"),
+            self.format_rtl_text("ממצא"),
+            self.format_rtl_text("כמות משתמשים"),
+            self.format_rtl_text("רמת סיכון"),
+            self.format_rtl_text("סטטוס"),
+        ])
+        _rscdok99_summary_hdr = self.rscdok99_summary_table.horizontalHeader()
+        _rscdok99_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        _rscdok99_summary_hdr.setStretchLastSection(False)
+        self.rscdok99_summary_table.setColumnWidth(1, 300)  # ממצא
+        self.rscdok99_summary_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.rscdok99_summary_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.rscdok99_summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.rscdok99_summary_table.setAlternatingRowColors(True)
+        self.rscdok99_summary_table.setMinimumHeight(160)
+        self.rscdok99_summary_table.setToolTip(
+            self.format_ui_rtl_text("לחיצה על שורה תציג את המשתמשים בעלי הרשאה לתוכנית RSCDOK99")
+        )
+        self.rscdok99_summary_table.itemSelectionChanged.connect(self._refresh_selected_rscdok99_users)
+        rscdok99_summary_layout.addWidget(self.rscdok99_summary_table)
+        parent_layout.addWidget(self.rscdok99_summary_group)
+
+        self.rscdok99_users_group = QGroupBox(self.format_ui_rtl_text("משתמשים בעלי הרשאה לתוכנית RSCDOK99"))
+        self.rscdok99_users_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        rscdok99_users_layout = QVBoxLayout(self.rscdok99_users_group)
+        rscdok99_users_layout.setContentsMargins(8, 14, 8, 8)
+
+        self.rscdok99_users_table = QTableWidget(0, 2)
+        self.rscdok99_users_table.setHorizontalHeaderLabels([
+            self.format_rtl_text("קליינט"),
+            self.format_rtl_text("משתמש"),
+        ])
+        _rscdok99_users_hdr = self.rscdok99_users_table.horizontalHeader()
+        _rscdok99_users_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        _rscdok99_users_hdr.setStretchLastSection(True)
+        self.rscdok99_users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.rscdok99_users_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.rscdok99_users_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.rscdok99_users_table.setAlternatingRowColors(True)
+        self.rscdok99_users_table.setMinimumHeight(180)
+        self.rscdok99_users_table.setToolTip(
+            self.format_ui_rtl_text("לחיצה כפולה על משתמש תציג את הרולים המעניקים לו הרשאה לתוכנית RSCDOK99")
+        )
+        self.rscdok99_users_table.cellDoubleClicked.connect(self.show_rscdok99_user_dialog)
+        rscdok99_users_layout.addWidget(self.rscdok99_users_table)
+        parent_layout.addWidget(self.rscdok99_users_group)
+
+        self._refresh_rscdok99_summary_table()
+
+    def _compute_rscdok99_permissions(self) -> None:
+        """Recompute RSCDOK99 permission findings from cached AGR_1251 + AGR_USERS rows.
+
+        An AGR_NAME qualifies only when ALL criteria in RSCDOK99_PERMISSION_CRITERIA
+        are satisfied (AND logic): both S_PROGRAM/P_GROUP=RSCDOK99 and
+        S_PROGRAM/P_ACTION=SUB must appear in the role's permission rows.
+        """
+        if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
+            return
+
+        control_id = "MA-RSCDOK99-01"
+        control_meta = get_audit_control_definition(control_id)
+
+        # Build per-AGR_NAME satisfied-criteria tracking.
+        # criteria_count[agr_name] = set of criterion indexes satisfied
+        # agr_name_objects[agr_name] = set of (OBJECT, FIELD, LOW_display) tuples that qualified
+        criteria_count: dict[str, set[int]] = {}
+        agr_name_objects: dict[str, set[tuple[str, str, str]]] = {}
+        total_criteria = len(RSCDOK99_PERMISSION_CRITERIA)
+
+        for row in self.agr_1251_cached_rows:
+            obj_val = self._resolve_row_value_by_priority(row, "OBJECT")
+            fld_val = self._resolve_row_value_by_priority(row, "FIELD")
+            if obj_val is None or fld_val is None:
+                continue
+            obj_upper = str(obj_val).strip().upper()
+            fld_upper = str(fld_val).strip().upper()
+            low_val = self._resolve_row_value_by_priority(row, "LOW")
+            high_val = self._resolve_row_value_by_priority(row, "HIGH")
+            low_str = str(low_val).strip().upper() if low_val is not None else ""
+            high_str = str(high_val).strip().upper() if high_val is not None else ""
+
+            for idx, (crit_obj, crit_fld, crit_values) in enumerate(RSCDOK99_PERMISSION_CRITERIA):
+                if obj_upper != crit_obj.upper() or fld_upper != crit_fld.upper():
+                    continue
+                crit_upper = {v.upper() for v in crit_values}
+                if low_str == "*" or high_str == "*":
+                    qualifies = True
+                else:
+                    qualifies = bool(low_str and low_str in crit_upper) or bool(
+                        high_str and high_str in crit_upper
+                    )
+                if not qualifies:
+                    continue
+                agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
+                if agr_name_val is None or not str(agr_name_val).strip():
+                    continue
+                agr_name_upper = str(agr_name_val).strip().upper()
+                criteria_count.setdefault(agr_name_upper, set()).add(idx)
+                low_display = low_str if low_str else "-"
+                agr_name_objects.setdefault(agr_name_upper, set()).add((obj_upper, fld_upper, low_display))
+
+        # Only keep roles that satisfy ALL criteria
+        matching_agr_names: set[str] = {
+            agr for agr, satisfied in criteria_count.items()
+            if len(satisfied) >= total_criteria
+        }
+
+        users_by_client: dict[str, dict[str, set[str]]] = {}
+        for row in self.agr_users_cached_rows:
+            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
+            if agr_name_val is None:
+                continue
+            agr_name_upper = str(agr_name_val).strip().upper()
+            if agr_name_upper not in matching_agr_names:
+                continue
+
+            mandt_val = self._resolve_row_value_by_priority(row, "MANDT")
+            if mandt_val is not None and str(mandt_val).strip():
+                mandt = str(mandt_val).strip()
+            else:
+                source_file = str(row.get("__source_file", ""))
+                digits_match = re.search(r"\d{3}", Path(source_file).name)
+                mandt = digits_match.group(0) if digits_match else "-"
+
+            uname_val = self._resolve_row_value_by_priority(row, "UNAME")
+            if uname_val is None or not str(uname_val).strip():
+                continue
+            uname = str(uname_val).strip().upper()
+
+            client_users = users_by_client.setdefault(mandt, {})
+            client_users.setdefault(uname, set()).add(agr_name_upper)
+
+        self.rscdok99_summary_records.clear()
+        self.rscdok99_users_by_control.clear()
+
+        if not users_by_client:
+            record_key = f"{control_id}|-"
+            self.rscdok99_summary_records[record_key] = {
+                "record_key": record_key,
+                "client": "-",
+                "finding_text": "לא נמצאו משתמשים בעלי הרשאה לתוכנית RSCDOK99",
+                "users_count": 0,
+                "risk_level": control_meta.get("risk_level", "-"),
+                "status": "תקין",
+            }
+            self.rscdok99_users_by_control[record_key] = []
+        else:
+            for mandt, client_users in sorted(users_by_client.items()):
+                users_count = len(client_users)
+                record_key = f"{control_id}|{mandt}"
+                self.rscdok99_summary_records[record_key] = {
+                    "record_key": record_key,
+                    "client": mandt,
+                    "finding_text": f"נמצאו {users_count} משתמשים בעלי הרשאה לתוכנית RSCDOK99",
+                    "users_count": users_count,
+                    "risk_level": control_meta.get("risk_level", "-"),
+                    "status": "עם ממצא" if users_count > 0 else "תקין",
+                }
+                self.rscdok99_users_by_control[record_key] = [
+                    {
+                        "client": mandt,
+                        "user_name": uname,
+                        "roles": [
+                            {
+                                "agr_name": r,
+                                "objects": sorted(agr_name_objects.get(r, set())),
+                            }
+                            for r in sorted(roles)
+                        ],
+                    }
+                    for uname, roles in sorted(client_users.items())
+                ]
+
+        self._refresh_rscdok99_summary_table()
+
+    def _refresh_rscdok99_summary_table(self) -> None:
+        self.rscdok99_summary_table.setRowCount(0)
+        self.rscdok99_users_table.setRowCount(0)
+        if not self.rscdok99_summary_records:
+            self.rscdok99_users_table.insertRow(0)
+            empty_item = QTableWidgetItem(self.format_rtl_text("יש לטעון קבצי AGR_1251 ו-AGR_USERS"))
+            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.rscdok99_users_table.setItem(0, 1, empty_item)
+            return
+
+        for row_data in sorted(
+            self.rscdok99_summary_records.values(),
+            key=lambda item: str(item.get("client", "")),
+        ):
+            row_index = self.rscdok99_summary_table.rowCount()
+            self.rscdok99_summary_table.insertRow(row_index)
+            values = [
+                str(row_data.get("client", "-")),
+                str(row_data.get("finding_text", "-")),
+                str(row_data.get("users_count", 0)),
+                str(row_data.get("risk_level", "-")),
+                str(row_data.get("status", "-")),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(self.format_rtl_text(value))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, row_data.get("record_key", ""))
+                self.rscdok99_summary_table.setItem(row_index, column, item)
+
+        if self.rscdok99_summary_table.rowCount() > 0:
+            self.rscdok99_summary_table.selectRow(0)
+            self._refresh_selected_rscdok99_users()
+        self.rscdok99_summary_table.resizeColumnsToContents()
+
+    def _refresh_selected_rscdok99_users(self) -> None:
+        selected_items = self.rscdok99_summary_table.selectedItems()
+        if not selected_items:
+            return
+
+        selected_row = selected_items[0].row()
+        control_item = self.rscdok99_summary_table.item(selected_row, 0)
+        if control_item is None:
+            return
+
+        record_key = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text())
+        user_rows = self.rscdok99_users_by_control.get(record_key, [])
+        self.rscdok99_users_table.setRowCount(0)
+
+        if not user_rows:
+            self.rscdok99_users_table.insertRow(0)
+            empty_item = QTableWidgetItem(self.format_rtl_text("לא נמצאו משתמשים להצגה"))
+            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.rscdok99_users_table.setItem(0, 1, empty_item)
+            return
+
+        for user_data in user_rows:
+            row_index = self.rscdok99_users_table.rowCount()
+            self.rscdok99_users_table.insertRow(row_index)
+            client_name = str(user_data.get("client", "-") or "-")
+            user_name = str(user_data.get("user_name", "-") or "-")
+            client_item = QTableWidgetItem(self.format_rtl_text(client_name))
+            client_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            user_item = QTableWidgetItem(self.format_rtl_text(user_name))
+            user_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            user_item.setData(Qt.ItemDataRole.UserRole, {"client": client_name, "user": user_name})
+            self.rscdok99_users_table.setItem(row_index, 0, client_item)
+            self.rscdok99_users_table.setItem(row_index, 1, user_item)
+        self.rscdok99_users_table.resizeColumnsToContents()
+
+    def show_rscdok99_user_dialog(self, row_index: int, _column: int) -> None:
+        if row_index < 0 or row_index >= self.rscdok99_users_table.rowCount():
+            return
+
+        user_item = self.rscdok99_users_table.item(row_index, 1)
+        if user_item is None:
+            return
+
+        user_payload = user_item.data(Qt.ItemDataRole.UserRole)
+        user_name = ""
+        client_name = "-"
+        if isinstance(user_payload, dict):
+            user_name = str(user_payload.get("user", "") or "").strip()
+            client_name = str(user_payload.get("client", "-") or "-").strip()
+        if not user_name:
+            user_name = str(user_item.text() or "").strip()
+        if not user_name or user_name.startswith("לא נמצאו") or user_name.startswith("אין "):
+            return
+
+        selected_items = self.rscdok99_summary_table.selectedItems()
+        if not selected_items:
+            return
+
+        summary_item = self.rscdok99_summary_table.item(selected_items[0].row(), 0)
+        if summary_item is None:
+            return
+
+        record_key = str(summary_item.data(Qt.ItemDataRole.UserRole) or summary_item.text())
+        user_rows = self.rscdok99_users_by_control.get(record_key, [])
+        roles: list[dict] = []
+        for user_data in user_rows:
+            if (
+                str(user_data.get("user_name", "")).strip().upper() == user_name.upper()
+                and str(user_data.get("client", "-") or "-").strip() == client_name
+            ):
+                roles = list(user_data.get("roles", []))
+                break
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("פירוט הרשאה לתוכנית RSCDOK99")
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dialog.resize(640, 480)
+
+        layout = QVBoxLayout(dialog)
+        details_box = QTextEdit()
+        details_box.setReadOnly(True)
+        lines = [
+            f"קליינט: {client_name}",
+            f"משתמש: {user_name}",
+            "",
+            "רולים ואובייקטי הרשאה:",
+        ]
+        if roles:
+            for role_entry in roles:
+                lines.append(f"- {role_entry.get('agr_name', '')}")
+                for obj, fld, low in role_entry.get("objects", []):
+                    lines.append(f"    {obj} | {fld} | {low}")
+        else:
+            lines.append("- לא נמצאו רולים להצגה")
         details_box.setPlainText(self.format_rtl_text("\n".join(lines)))
         layout.addWidget(details_box)
 
@@ -4015,6 +5007,7 @@ class ValidationDesktopApp(QMainWindow):
         if self.audit_summary_table.rowCount() > 0:
             self.audit_summary_table.selectRow(0)
             self._refresh_selected_audit_detail()
+        self.audit_summary_table.resizeColumnsToContents()
 
     def _refresh_selected_audit_detail(self) -> None:
         selected_items = self.audit_summary_table.selectedItems()
@@ -4049,6 +5042,7 @@ class ValidationDesktopApp(QMainWindow):
                 item = QTableWidgetItem(self.format_rtl_text(value))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.audit_detail_table.setItem(row_index, column, item)
+        self.audit_detail_table.resizeColumnsToContents()
 
     def export_audit_findings_to_excel(self, open_after_export: bool = False) -> Path | None:
         if not self.audit_summary_records:

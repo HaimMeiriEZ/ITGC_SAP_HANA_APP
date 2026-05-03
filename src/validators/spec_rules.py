@@ -196,6 +196,24 @@ AUDIT_CONTROL_DEFINITIONS: dict[str, dict[str, str]] = {
         "check_type": "פרופילים למשתמשים חזקים",
         "description": "הקצאת פרופילי-על למשתמש מעניקה הרשאות מערכת רחבות ודורשת בקרה הדוקה.",
     },
+    "MA-USRMGMT-01": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "AGR_1251+AGR_USERS - הרשאות ניהול משתמשים",
+        "description": "משתמשים בעלי הרשאות לניהול משתמשים (S_TCODE/SU01/SU10, S_USER_*) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
+    },
+    "MA-AUTHMGMT-01": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "AGR_1251+AGR_USERS - הרשאות ניהול הרשאות",
+        "description": "משתמשים בעלי הרשאות לניהול הרשאות (S_TCODE/PFCG, S_DEVELOP/ACGR, S_USER_ADM) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
+    },
+    "MA-RSCDOK99-01": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "AGR_1251+AGR_USERS - הרשאות לתוכנית RSCDOK99",
+        "description": "משתמשים בעלי הרשאה להרצת תוכנית RSCDOK99 (S_PROGRAM עם P_GROUP=RSCDOK99 ו-P_ACTION=SUB) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
+    },
 }
 
 PROFILE_AUDIT_CONTROLS: dict[str, list[str]] = {
@@ -204,6 +222,49 @@ PROFILE_AUDIT_CONTROLS: dict[str, list[str]] = {
     "TPFET": ["MA-PWD-01", "MA-PWD-02", "MA-PWD-03", "MA-PWD-04", "MA-PWD-05", "MA-PWD-06"],
     "UST04": ["MA-PERM-01"],
 }
+
+# Criteria for user-management permission check (control MA-USRMGMT-01).
+# Maps (OBJECT, FIELD) -> set of qualifying LOW/HIGH values.
+# A row in AGR_1251 qualifies when its OBJECT+FIELD match and either:
+#   - its LOW or HIGH value is "*" (wildcard), OR
+#   - its LOW or HIGH value is in the qualifying set below.
+USER_MGMT_PERMISSION_CRITERIA: dict[tuple[str, str], set[str]] = {
+    ("S_TCODE",    "TCD"):   {"SU01", "SU10"},
+    ("S_USER_PRO", "ACTVT"): {"01", "02"},
+    ("S_USER_AGR", "ACTVT"): {"01", "02"},
+    ("S_USER_AUT", "ACTVT"): {"01", "02"},
+    ("S_USER_GRP", "ACTVT"): {"01", "02"},
+    ("S_USER_SYS", "ACTVT"): {"01", "02"},
+    ("S_USER_SAS", "ACTVT"): {"01", "02"},
+}
+
+# Criteria for authorization-management permission check (control MA-AUTHMGMT-01).
+# Maps (OBJECT, FIELD) -> set of qualifying LOW/HIGH values.
+# A row in AGR_1251 qualifies when its OBJECT+FIELD match and either:
+#   - its LOW or HIGH value is "*" (wildcard), OR
+#   - its LOW or HIGH value is in the qualifying set below.
+AUTH_MGMT_PERMISSION_CRITERIA: dict[tuple[str, str], set[str]] = {
+    ("S_TCODE",    "TCD"):    {"PFCG"},
+    ("S_USER_PRO", "ACTVT"): {"01", "02"},
+    ("S_USER_AGR", "ACTVT"): {"01", "02"},
+    ("S_USER_AUT", "ACTVT"): {"01", "02"},
+    ("S_USER_GRP", "ACTVT"): {"01", "02"},
+    ("S_USER_SYS", "ACTVT"): {"01", "02"},
+    ("S_USER_TCD", "ACTVT"): {"01", "02"},
+    ("S_USER_VAL", "ACTVT"): {"01", "02"},
+    ("S_DEVELOP",  "OBJTYPE"): {"ACGR"},
+    ("S_USER_ADM", "ACTVT"): {"01"},
+}
+
+# Criteria for RSCDOK99 program permission check (control MA-RSCDOK99-01).
+# An AGR_NAME qualifies only when it satisfies ALL criteria below simultaneously
+# (i.e., it has BOTH S_PROGRAM/P_GROUP=RSCDOK99 AND S_PROGRAM/P_ACTION=SUB).
+# Wildcard "*" in LOW or HIGH also qualifies for that criterion.
+# Structure: list of (OBJECT, FIELD, qualifying_values)
+RSCDOK99_PERMISSION_CRITERIA: list[tuple[str, str, set[str]]] = [
+    ("S_PROGRAM", "P_GROUP",  {"RSCDOK99"}),
+    ("S_PROGRAM", "P_ACTION", {"SUB"}),
+]
 
 STRONG_PERMISSION_PROFILES: tuple[str, ...] = (
     "SAP_ALL",
