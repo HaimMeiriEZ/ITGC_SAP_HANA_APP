@@ -15,6 +15,7 @@ from PySide6.QtCore import QCoreApplication, QDate, QObject, QThread, Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QStyledItemDelegate,
     QSizePolicy,
     QTabWidget,
     QApplication,
@@ -74,6 +75,18 @@ def get_qt_app() -> QApplication:
         app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         app.setFont(QFont("Segoe UI", 10))
     return app
+
+
+class _RightAlignDelegate(QStyledItemDelegate):
+    """Forces physical-right alignment on all cells, regardless of RTL layout direction."""
+
+    def initStyleOption(self, option: Any, index: Any) -> None:  # type: ignore[override]
+        super().initStyleOption(option, index)
+        option.displayAlignment = (
+            Qt.AlignmentFlag.AlignAbsolute
+            | Qt.AlignmentFlag.AlignRight
+            | Qt.AlignmentFlag.AlignVCenter
+        )
 
 
 class SortableTableWidgetItem(QTableWidgetItem):
@@ -597,6 +610,7 @@ class ValidationDesktopApp(QMainWindow):
         audit_summary_layout = QVBoxLayout(self.audit_summary_group)
         audit_summary_layout.setContentsMargins(8, 14, 8, 8)
         self.audit_summary_table = QTableWidget(0, 9)
+        self.audit_summary_table.setItemDelegate(_RightAlignDelegate(self.audit_summary_table))
         self.audit_summary_table.setHorizontalHeaderLabels([
             self.format_rtl_text("מזהה בקרה"),
             self.format_rtl_text("סוג בדיקה"),
@@ -609,6 +623,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("סהכ רשומות"),
         ])
         _audit_summary_hdr = self.audit_summary_table.horizontalHeader()
+        _audit_summary_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _audit_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _audit_summary_hdr.setStretchLastSection(False)
         self.audit_summary_table.setColumnWidth(5, 220)  # תיאור הבדיקה
@@ -626,6 +641,7 @@ class ValidationDesktopApp(QMainWindow):
         audit_detail_layout = QVBoxLayout(self.audit_detail_group)
         audit_detail_layout.setContentsMargins(8, 14, 8, 8)
         self.audit_detail_table = QTableWidget(0, 10)
+        self.audit_detail_table.setItemDelegate(_RightAlignDelegate(self.audit_detail_table))
         self.audit_detail_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קובץ מקור"),
             self.format_rtl_text("תאריך הפקה"),
@@ -639,6 +655,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("תיאור מלא"),
         ])
         _audit_detail_hdr = self.audit_detail_table.horizontalHeader()
+        _audit_detail_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _audit_detail_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _audit_detail_hdr.setStretchLastSection(True)  # תיאור מלא
         self.audit_detail_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -1196,6 +1213,7 @@ class ValidationDesktopApp(QMainWindow):
         user_preview_layout.addWidget(self.user_preview_hint, 0, Qt.AlignmentFlag.AlignTop)
 
         self.user_preview_table = QTableWidget(0, 0)
+        self.user_preview_table.setItemDelegate(_RightAlignDelegate(self.user_preview_table))
         self.user_preview_table.setEditTriggers(
             QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed | QAbstractItemView.EditTrigger.SelectedClicked
         )
@@ -1220,8 +1238,9 @@ class ValidationDesktopApp(QMainWindow):
         run_log_layout = QVBoxLayout(self.run_log_group)
         run_log_layout.setContentsMargins(12, 18, 12, 12)
         self.run_log_table = QTableWidget(0, 10)
+        self.run_log_table.setItemDelegate(_RightAlignDelegate(self.run_log_table))
         self.run_log_table.setHorizontalHeaderLabels(["משבצת", "קבוצת דוחות", "קובץ", "תאריך הפקה", "רשומות שנקלטו", "סטטוס", "מספר שגיאות", "תיאור שגיאה", "תאריך בדיקה", "שעת בדיקה"])
-        self.run_log_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.run_log_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         self.run_log_table.verticalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         _run_log_hdr = self.run_log_table.horizontalHeader()
         _run_log_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
@@ -1266,10 +1285,10 @@ class ValidationDesktopApp(QMainWindow):
         for column, (title, key, default_value) in enumerate(summary_items):
             title_label = QLabel(title)
             title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            title_label.setStyleSheet("font-weight: bold;")
+            title_label.setStyleSheet("font-weight: bold; qproperty-alignment: 'AlignCenter|AlignVCenter';")
             value_label = QLabel(default_value)
             value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            value_label.setStyleSheet("font-size: 18px; padding: 6px;")
+            value_label.setStyleSheet("font-size: 18px; padding: 6px; qproperty-alignment: 'AlignCenter|AlignVCenter';")
             summary_layout.addWidget(title_label, 0, column)
             summary_layout.addWidget(value_label, 1, column)
             self.summary_labels[key] = value_label
@@ -1281,8 +1300,9 @@ class ValidationDesktopApp(QMainWindow):
         results_layout = QVBoxLayout(self.results_group)
         results_layout.setContentsMargins(12, 18, 12, 12)
         self.issues_table = QTableWidget(0, 3)
+        self.issues_table.setItemDelegate(_RightAlignDelegate(self.issues_table))
         self.issues_table.setHorizontalHeaderLabels(["מספר שורה", "שם עמודה", "הודעת שגיאה"])
-        self.issues_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.issues_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         self.issues_table.verticalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         _issues_hdr = self.issues_table.horizontalHeader()
         _issues_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
@@ -1339,6 +1359,9 @@ class ValidationDesktopApp(QMainWindow):
                 background-color: white;
                 border: 1px solid #cfd6e4;
                 gridline-color: #d7deea;
+            }
+            QTableWidget::item {
+                padding-right: 4px;
             }
             """
         )
@@ -1534,6 +1557,7 @@ class ValidationDesktopApp(QMainWindow):
             "רשימה לבנה של משתמשים מורשים להעברת טרנספורטים לייצור. יש להזין CLIENT ו-BNAME.",
         )
         table = QTableWidget(0, 2)
+        table.setItemDelegate(_RightAlignDelegate(table))
         table.setHorizontalHeaderLabels(["CLIENT", "BNAME מורשה STMS"])
         table.horizontalHeader().setStretchLastSection(True)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -2562,7 +2586,7 @@ class ValidationDesktopApp(QMainWindow):
             for field_name in self.user_preview_visible_columns
         ])
         header = self.user_preview_table.horizontalHeader()
-        header.setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         header.setSectionsMovable(False)
         header.setSectionsClickable(True)
         header.setMinimumSectionSize(70)
@@ -2592,7 +2616,7 @@ class ValidationDesktopApp(QMainWindow):
         selection_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         selection_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         selection_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        selection_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        selection_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         selection_table.verticalHeader().setVisible(False)
         selection_table.setAlternatingRowColors(True)
         selection_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -3694,6 +3718,7 @@ class ValidationDesktopApp(QMainWindow):
         permissions_summary_layout.setContentsMargins(8, 14, 8, 8)
 
         self.permissions_summary_table = QTableWidget(0, 6)
+        self.permissions_summary_table.setItemDelegate(_RightAlignDelegate(self.permissions_summary_table))
         self.permissions_summary_table.setHorizontalHeaderLabels([
             self.format_rtl_text("מזהה בקרה"),
             self.format_rtl_text("קליינט"),
@@ -3703,6 +3728,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("סטטוס"),
         ])
         _perm_summary_hdr = self.permissions_summary_table.horizontalHeader()
+        _perm_summary_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _perm_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _perm_summary_hdr.setStretchLastSection(False)
         self.permissions_summary_table.setColumnWidth(2, 220)  # ממצא
@@ -3721,11 +3747,13 @@ class ValidationDesktopApp(QMainWindow):
         permissions_users_layout.setContentsMargins(8, 14, 8, 8)
 
         self.permissions_users_table = QTableWidget(0, 2)
+        self.permissions_users_table.setItemDelegate(_RightAlignDelegate(self.permissions_users_table))
         self.permissions_users_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("משתמש"),
         ])
         _perm_users_hdr = self.permissions_users_table.horizontalHeader()
+        _perm_users_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _perm_users_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _perm_users_hdr.setStretchLastSection(True)  # משתמש
         self.permissions_users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -3747,6 +3775,7 @@ class ValidationDesktopApp(QMainWindow):
         user_mgmt_summary_layout.setContentsMargins(8, 14, 8, 8)
 
         self.user_mgmt_summary_table = QTableWidget(0, 5)
+        self.user_mgmt_summary_table.setItemDelegate(_RightAlignDelegate(self.user_mgmt_summary_table))
         self.user_mgmt_summary_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("ממצא"),
@@ -3755,6 +3784,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("סטטוס"),
         ])
         _usrmgmt_summary_hdr = self.user_mgmt_summary_table.horizontalHeader()
+        _usrmgmt_summary_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _usrmgmt_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _usrmgmt_summary_hdr.setStretchLastSection(False)
         self.user_mgmt_summary_table.setColumnWidth(1, 280)  # ממצא
@@ -3776,11 +3806,13 @@ class ValidationDesktopApp(QMainWindow):
         user_mgmt_users_layout.setContentsMargins(8, 14, 8, 8)
 
         self.user_mgmt_users_table = QTableWidget(0, 2)
+        self.user_mgmt_users_table.setItemDelegate(_RightAlignDelegate(self.user_mgmt_users_table))
         self.user_mgmt_users_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("משתמש"),
         ])
         _usrmgmt_users_hdr = self.user_mgmt_users_table.horizontalHeader()
+        _usrmgmt_users_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _usrmgmt_users_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _usrmgmt_users_hdr.setStretchLastSection(True)
         self.user_mgmt_users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -4290,6 +4322,7 @@ class ValidationDesktopApp(QMainWindow):
         auth_mgmt_summary_layout.setContentsMargins(8, 14, 8, 8)
 
         self.auth_mgmt_summary_table = QTableWidget(0, 5)
+        self.auth_mgmt_summary_table.setItemDelegate(_RightAlignDelegate(self.auth_mgmt_summary_table))
         self.auth_mgmt_summary_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("ממצא"),
@@ -4298,6 +4331,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("סטטוס"),
         ])
         _authmgmt_summary_hdr = self.auth_mgmt_summary_table.horizontalHeader()
+        _authmgmt_summary_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _authmgmt_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _authmgmt_summary_hdr.setStretchLastSection(False)
         self.auth_mgmt_summary_table.setColumnWidth(1, 280)  # ממצא
@@ -4319,11 +4353,13 @@ class ValidationDesktopApp(QMainWindow):
         auth_mgmt_users_layout.setContentsMargins(8, 14, 8, 8)
 
         self.auth_mgmt_users_table = QTableWidget(0, 2)
+        self.auth_mgmt_users_table.setItemDelegate(_RightAlignDelegate(self.auth_mgmt_users_table))
         self.auth_mgmt_users_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("משתמש"),
         ])
         _authmgmt_users_hdr = self.auth_mgmt_users_table.horizontalHeader()
+        _authmgmt_users_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _authmgmt_users_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _authmgmt_users_hdr.setStretchLastSection(True)
         self.auth_mgmt_users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -4605,6 +4641,7 @@ class ValidationDesktopApp(QMainWindow):
         rscdok99_summary_layout.setContentsMargins(8, 14, 8, 8)
 
         self.rscdok99_summary_table = QTableWidget(0, 5)
+        self.rscdok99_summary_table.setItemDelegate(_RightAlignDelegate(self.rscdok99_summary_table))
         self.rscdok99_summary_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("ממצא"),
@@ -4613,6 +4650,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("סטטוס"),
         ])
         _rscdok99_summary_hdr = self.rscdok99_summary_table.horizontalHeader()
+        _rscdok99_summary_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _rscdok99_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _rscdok99_summary_hdr.setStretchLastSection(False)
         self.rscdok99_summary_table.setColumnWidth(1, 300)  # ממצא
@@ -4634,11 +4672,13 @@ class ValidationDesktopApp(QMainWindow):
         rscdok99_users_layout.setContentsMargins(8, 14, 8, 8)
 
         self.rscdok99_users_table = QTableWidget(0, 2)
+        self.rscdok99_users_table.setItemDelegate(_RightAlignDelegate(self.rscdok99_users_table))
         self.rscdok99_users_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("משתמש"),
         ])
         _rscdok99_users_hdr = self.rscdok99_users_table.horizontalHeader()
+        _rscdok99_users_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _rscdok99_users_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _rscdok99_users_hdr.setStretchLastSection(True)
         self.rscdok99_users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -4935,6 +4975,7 @@ class ValidationDesktopApp(QMainWindow):
         data_mgmt_summary_layout.setContentsMargins(8, 14, 8, 8)
 
         self.data_mgmt_summary_table = QTableWidget(0, 5)
+        self.data_mgmt_summary_table.setItemDelegate(_RightAlignDelegate(self.data_mgmt_summary_table))
         self.data_mgmt_summary_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("ממצא"),
@@ -4943,6 +4984,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("סטטוס"),
         ])
         _datamgmt_summary_hdr = self.data_mgmt_summary_table.horizontalHeader()
+        _datamgmt_summary_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _datamgmt_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _datamgmt_summary_hdr.setStretchLastSection(False)
         self.data_mgmt_summary_table.setColumnWidth(1, 300)  # ממצא
@@ -4964,11 +5006,13 @@ class ValidationDesktopApp(QMainWindow):
         data_mgmt_users_layout.setContentsMargins(8, 14, 8, 8)
 
         self.data_mgmt_users_table = QTableWidget(0, 2)
+        self.data_mgmt_users_table.setItemDelegate(_RightAlignDelegate(self.data_mgmt_users_table))
         self.data_mgmt_users_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("משתמש"),
         ])
         _datamgmt_users_hdr = self.data_mgmt_users_table.horizontalHeader()
+        _datamgmt_users_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _datamgmt_users_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _datamgmt_users_hdr.setStretchLastSection(True)
         self.data_mgmt_users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -5265,6 +5309,7 @@ class ValidationDesktopApp(QMainWindow):
         transport_summary_layout.setContentsMargins(8, 14, 8, 8)
 
         self.transport_summary_table = QTableWidget(0, 5)
+        self.transport_summary_table.setItemDelegate(_RightAlignDelegate(self.transport_summary_table))
         self.transport_summary_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("ממצא"),
@@ -5273,6 +5318,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("סטטוס"),
         ])
         _transport_summary_hdr = self.transport_summary_table.horizontalHeader()
+        _transport_summary_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _transport_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _transport_summary_hdr.setStretchLastSection(False)
         self.transport_summary_table.setColumnWidth(1, 300)  # ממצא
@@ -5294,11 +5340,13 @@ class ValidationDesktopApp(QMainWindow):
         transport_users_layout.setContentsMargins(8, 14, 8, 8)
 
         self.transport_users_table = QTableWidget(0, 2)
+        self.transport_users_table.setItemDelegate(_RightAlignDelegate(self.transport_users_table))
         self.transport_users_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("משתמש"),
         ])
         _transport_users_hdr = self.transport_users_table.horizontalHeader()
+        _transport_users_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _transport_users_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _transport_users_hdr.setStretchLastSection(True)
         self.transport_users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -5589,6 +5637,7 @@ class ValidationDesktopApp(QMainWindow):
         debug_summary_layout.setContentsMargins(8, 14, 8, 8)
 
         self.debug_summary_table = QTableWidget(0, 5)
+        self.debug_summary_table.setItemDelegate(_RightAlignDelegate(self.debug_summary_table))
         self.debug_summary_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("ממצא"),
@@ -5597,6 +5646,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("סטטוס"),
         ])
         _debug_summary_hdr = self.debug_summary_table.horizontalHeader()
+        _debug_summary_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _debug_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _debug_summary_hdr.setStretchLastSection(False)
         self.debug_summary_table.setColumnWidth(1, 300)  # ממצא
@@ -5618,11 +5668,13 @@ class ValidationDesktopApp(QMainWindow):
         debug_users_layout.setContentsMargins(8, 14, 8, 8)
 
         self.debug_users_table = QTableWidget(0, 2)
+        self.debug_users_table.setItemDelegate(_RightAlignDelegate(self.debug_users_table))
         self.debug_users_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("משתמש"),
         ])
         _debug_users_hdr = self.debug_users_table.horizontalHeader()
+        _debug_users_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _debug_users_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _debug_users_hdr.setStretchLastSection(True)
         self.debug_users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -5917,6 +5969,7 @@ class ValidationDesktopApp(QMainWindow):
         job_mgmt_summary_layout.setContentsMargins(8, 14, 8, 8)
 
         self.job_mgmt_summary_table = QTableWidget(0, 5)
+        self.job_mgmt_summary_table.setItemDelegate(_RightAlignDelegate(self.job_mgmt_summary_table))
         self.job_mgmt_summary_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("ממצא"),
@@ -5925,6 +5978,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("סטטוס"),
         ])
         _job_mgmt_summary_hdr = self.job_mgmt_summary_table.horizontalHeader()
+        _job_mgmt_summary_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _job_mgmt_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _job_mgmt_summary_hdr.setStretchLastSection(False)
         self.job_mgmt_summary_table.setColumnWidth(1, 300)  # ממצא
@@ -5946,11 +6000,13 @@ class ValidationDesktopApp(QMainWindow):
         job_mgmt_users_layout.setContentsMargins(8, 14, 8, 8)
 
         self.job_mgmt_users_table = QTableWidget(0, 2)
+        self.job_mgmt_users_table.setItemDelegate(_RightAlignDelegate(self.job_mgmt_users_table))
         self.job_mgmt_users_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קליינט"),
             self.format_rtl_text("משתמש"),
         ])
         _job_mgmt_users_hdr = self.job_mgmt_users_table.horizontalHeader()
+        _job_mgmt_users_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _job_mgmt_users_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _job_mgmt_users_hdr.setStretchLastSection(True)
         self.job_mgmt_users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
