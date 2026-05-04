@@ -214,6 +214,30 @@ AUDIT_CONTROL_DEFINITIONS: dict[str, dict[str, str]] = {
         "check_type": "AGR_1251+AGR_USERS - הרשאות לתוכנית RSCDOK99",
         "description": "משתמשים בעלי הרשאה להרצת תוכנית RSCDOK99 (S_PROGRAM עם P_GROUP=RSCDOK99 ו-P_ACTION=SUB) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
     },
+    "MA-DATAMGMT-01": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "AGR_1251+AGR_USERS - הרשאות לניהול נתונים",
+        "description": "משתמשים בעלי הרשאות לניהול נתונים (S_TCODE/SE16/SM30/SM31/SE16N/SE17/SM38/SE37, S_TABU_DIS, S_TABU_NAM, S_TABU_CLI, S_DATASET) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
+    },
+    "MA-TRANSPORT-01": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "AGR_1251+AGR_USERS - הרשאה להעברת שינויים",
+        "description": "משתמשים בעלי הרשאה להעברת שינויים (S_TCODE/STMS/SCC4, S_TABU_DIS/DICBERCLS=SS, S_TRANSPORT, S_CTS_ADMI) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
+    },
+    "MA-DEBUG-01": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "AGR_1251+AGR_USERS - הרשאות לשימוש ב-DEBUG",
+        "description": "משתמשים בעלי הרשאות DEBUG (S_TCODE/SE38/SA38/SE80/ST05, S_DEVELOP/OBJTYPE=DEBUG, S_DEVELOP/ACTVT, S_PROGRAM/P_ACTION=SUB, S_PROGRAM/P_GROUP=*, S_ADMI_FCD/PADM) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
+    },
+    "MA-JOBMGMT-01": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "AGR_1251+AGR_USERS - הרשאה לעידכון ג'ובים",
+        "description": "משתמשים בעלי הרשאות ניהול ג'ובים (S_TCODE/SM36 וכד', S_BTCH_ADM, S_BTCH_JOB/DELE/RELE/PROT, S_BTCH_NAM/*, S_BTCH_MONI/DELE/RELE) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
+    },
 }
 
 PROFILE_AUDIT_CONTROLS: dict[str, list[str]] = {
@@ -265,6 +289,57 @@ RSCDOK99_PERMISSION_CRITERIA: list[tuple[str, str, set[str]]] = [
     ("S_PROGRAM", "P_GROUP",  {"RSCDOK99"}),
     ("S_PROGRAM", "P_ACTION", {"SUB"}),
 ]
+
+# Criteria for data-management permission check (control MA-DATAMGMT-01).
+# Maps (OBJECT, FIELD) -> set of qualifying LOW/HIGH values.
+# Special: {"*"} means ANY non-empty LOW or HIGH value qualifies for that criterion
+# (used for S_TABU_NAM/TABLE where any table name is considered sensitive).
+# OR logic: any single matching row qualifies the AGR_NAME.
+DATA_MGMT_PERMISSION_CRITERIA: dict[tuple[str, str], set[str]] = {
+    ("S_TCODE",    "TCD"):        {"SE16", "SM30", "SM31", "SE16N", "SE17", "SM38", "SE37"},
+    ("S_TABU_DIS", "ACTVT"):      {"01", "02", "06"},
+    ("S_TABU_NAM", "ACTVT"):      {"01", "02", "06"},
+    ("S_TABU_NAM", "TABLE"):      {"*"},   # any table name qualifies
+    ("S_TABU_CLI", "CLIIDMAINT"): {"X"},
+    ("S_DATASET",  "ACTVT"):      {"06", "34"},
+}
+
+# Criteria for transport/change-management permission check (control MA-TRANSPORT-01).
+# Maps (OBJECT, FIELD) -> set of qualifying LOW/HIGH values.
+# OR logic: any single matching row qualifies the AGR_NAME.
+# Note: "IMP*" is a literal SAP authorization value granting all import functions.
+TRANSPORT_PERMISSION_CRITERIA: dict[tuple[str, str], set[str]] = {
+    ("S_TCODE",     "TCD"):        {"STMS", "STMS_IMPORT", "SCC4"},
+    ("S_TABU_DIS",  "DICBERCLS"):  {"SS"},
+    ("S_TABU_DIS",  "ACTVT"):      {"02"},
+    ("S_TRANSPORT", "ACTVT"):      {"01", "02", "50", "60", "06", "43"},
+    ("S_CTS_ADMI",  "CTS_ADMFCT"): {"IMPT", "IMPA", "IMP*"},
+}
+
+# Criteria for DEBUG permission check (control MA-DEBUG-01).
+# Maps (OBJECT, FIELD) -> set of qualifying LOW/HIGH values.
+# Special: {"*"} means ANY non-empty LOW or HIGH value qualifies (S_PROGRAM/P_GROUP).
+# OR logic: any single matching row qualifies the AGR_NAME.
+DEBUG_PERMISSION_CRITERIA: dict[tuple[str, str], set[str]] = {
+    ("S_TCODE",    "TCD"):       {"SE38", "SA38", "SE80", "ST05"},
+    ("S_DEVELOP",  "OBJTYPE"):   {"DEBUG"},
+    ("S_DEVELOP",  "ACTVT"):     {"01", "02"},
+    ("S_PROGRAM",  "P_ACTION"):  {"SUB"},
+    ("S_PROGRAM",  "P_GROUP"):   {"*"},   # any program group qualifies
+    ("S_ADMI_FCD", "S_ADMI_FCD"): {"PADM"},
+}
+
+# Criteria for job-management permission check (control MA-JOBMGMT-01).
+# Maps (OBJECT, FIELD) -> set of qualifying LOW/HIGH values.
+# Special: {"*"} means ANY non-empty LOW or HIGH value qualifies (S_BTCH_NAM/BTCUNAME).
+# OR logic: any single matching row qualifies the AGR_NAME.
+JOB_MGMT_PERMISSION_CRITERIA: dict[tuple[str, str], set[str]] = {
+    ("S_TCODE",     "TCD"):      {"SE37", "SE36", "SM36", "SE35", "SE30", "SE34", "SHDB", "SM36WIZ"},
+    ("S_BTCH_ADM",  "BTCADMIN"): {"Y"},
+    ("S_BTCH_JOB",  "JOBACTION"): {"DELE", "RELE", "PROT"},
+    ("S_BTCH_NAM",  "BTCUNAME"): {"*"},   # any BTCUNAME value qualifies
+    ("S_BTCH_MONI", "BSCAKTI"):  {"DELE", "RELE"},
+}
 
 STRONG_PERMISSION_PROFILES: tuple[str, ...] = (
     "SAP_ALL",
