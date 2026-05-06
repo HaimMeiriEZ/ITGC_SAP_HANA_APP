@@ -212,6 +212,7 @@ class ValidationDesktopApp(QMainWindow):
     REVIEW_STATUS_OPTIONS = ["טרם נבדק", "נבדק - תקין", "נבדק - לא תקין"]
     DEFAULT_REVIEW_STATUS = "טרם נבדק"
     REVIEWED_STATUSES = {"נבדק - תקין", "נבדק - לא תקין"}
+    REVIEW_COMPLETION_CONTROL_ID = "MA-REVIEW-01"
     USER_TYPE_RULES = {
         "Dialog": ["A"],
         "System": ["B"],
@@ -2216,34 +2217,119 @@ class ValidationDesktopApp(QMainWindow):
             return 3
         return 4
 
-    def _update_review_row_highlight(self, row_index: int) -> None:
+    @staticmethod
+    def _has_review_note(technical_note: object, business_note: object) -> bool:
+        return bool(str(technical_note or "").strip() or str(business_note or "").strip())
+
+    def _is_user_review_complete(
+        self,
+        review_status: object,
+        findings_description: object,
+        technical_note: object,
+        business_note: object,
+    ) -> bool:
+        normalized_status = self._normalize_reviewer_status(review_status)
+        if normalized_status not in self.REVIEWED_STATUSES:
+            return False
+
+        if normalized_status == "נבדק - לא תקין":
+            return self._has_review_note(technical_note, business_note)
+
+        if str(findings_description or "").strip():
+            return self._has_review_note(technical_note, business_note)
+
+        return True
+
+    def _load_all_user_preview_rows(self) -> list[dict[str, str]]:
+        usr02_rows = self._load_preview_rows("USR02")
+        combined_rows = self._load_preview_rows("ADR6_USR21")
+        return self._build_user_preview_rows(usr02_rows, combined_rows)
+
+    def _get_user_review_completion_snapshot(self) -> tuple[list[dict[str, str]], int, list[dict[str, str]]]:
+        preview_rows = self._load_all_user_preview_rows()
+        incomplete_rows: list[dict[str, str]] = []
+        reviewed_rows = 0
+        for preview_row in preview_rows:
+            if self._is_user_review_complete(
+                preview_row.get("REVIEW_STATUS", ""),
+                preview_row.get("FINDINGS_DESCRIPTION", ""),
+                preview_row.get("TECH_REVIEW_NOTES", ""),
+                preview_row.get("BUS_REVIEW_NOTES", ""),
+            ):
+                reviewed_rows += 1
+            else:
+                incomplete_rows.append(preview_row)
+        return preview_rows, reviewed_rows, incomplete_rows
+
+    def _build_user_review_incomplete_reason(self, preview_row: dict[str, str]) -> str:
+        review_status = self._normalize_reviewer_status(preview_row.get("REVIEW_STATUS", ""))
+        findings_description = str(preview_row.get("FINDINGS_DESCRIPTION", "")).strip()
+        if review_status not in self.REVIEWED_STATUSES:
+            return "סטטוס הסקירה עדיין אינו מסומן כמשתמש שנבדק."
+        if review_status == "נבדק - לא תקין":
+            return "המשתמש סומן כלא תקין אך לא הוזנה הערה טכנית או עסקית."
+        if findings_description:
+            return "המשתמש סומן כתקין למרות שקיים ממצא, אך לא הוזנה הערה טכנית או עסקית."
+        return "הסקירה טרם הושלמה בהתאם לכלל ההשלמה שהוגדר."
+
+    def _update_review_row_highlight(self, row_index: int, preview_row: dict[str, str] | None = None) -> None:
         review_status_col: int | None = None
         technical_notes_col: int | None = None
+        business_notes_col: int | None = None
         for col_idx, field_name in enumerate(self.user_preview_visible_columns):
             if field_name == "REVIEW_STATUS":
                 review_status_col = col_idx
             elif field_name in {"TECH_REVIEW_NOTES", "REVIEW_NOTES"}:
                 technical_notes_col = col_idx
+            elif field_name == "BUS_REVIEW_NOTES":
+                business_notes_col = col_idx
 
-        review_status_text = ""
-        if review_status_col is not None:
-            combo = self.user_preview_table.cellWidget(row_index, review_status_col)
-            if isinstance(combo, QComboBox):
-                review_status_text = self.format_rtl_text(combo.currentText())
-            else:
-                status_item = self.user_preview_table.item(row_index, review_status_col)
-                if status_item is not None:
-                    review_status_text = status_item.text().strip()
+        if preview_row is not None:
+            review_status_text = str(preview_row.get("REVIEW_STATUS", "")).strip()
+            findings_text = str(preview_row.get("FINDINGS_DESCRIPTION", "")).strip()
+            technical_notes_text = str(preview_row.get("TECH_REVIEW_NOTES", "")).strip()
+            business_notes_text = str(preview_row.get("BUS_REVIEW_NOTES", "")).strip()
+        else:
+            review_status_text = ""
+            if review_status_col is not None:
+                combo = self.user_preview_table.cellWidget(row_index, review_status_col)
+                if isinstance(combo, QComboBox):
+                    review_status_text = self.format_rtl_text(combo.currentText())
+                else:
+                    status_item = self.user_preview_table.item(row_index, review_status_col)
+                    if status_item is not None:
+                        review_status_text = status_item.text().strip()
 
-        notes_text = ""
-        if technical_notes_col is not None:
-            notes_item = self.user_preview_table.item(row_index, technical_notes_col)
-            if notes_item is not None:
-                notes_text = notes_item.text().strip()
+            findings_text = ""
+            try:
+                findings_col = self.user_preview_visible_columns.index("FINDINGS_DESCRIPTION")
+            except ValueError:
+                findings_col = -1
+            if findings_col >= 0:
+                findings_item = self.user_preview_table.item(row_index, findings_col)
+                if findings_item is not None:
+                    findings_text = findings_item.text().strip()
+
+            technical_notes_text = ""
+            if technical_notes_col is not None:
+                notes_item = self.user_preview_table.item(row_index, technical_notes_col)
+                if notes_item is not None:
+                    technical_notes_text = notes_item.text().strip()
+
+            business_notes_text = ""
+            if business_notes_col is not None:
+                business_notes_item = self.user_preview_table.item(row_index, business_notes_col)
+                if business_notes_item is not None:
+                    business_notes_text = business_notes_item.text().strip()
 
         is_not_reviewed = review_status_text == "טרם נבדק"
-        is_not_ok = review_status_text == "נבדק - לא תקין"
-        needs_warning = is_not_ok and not notes_text
+        is_review_complete = self._is_user_review_complete(
+            review_status_text,
+            findings_text,
+            technical_notes_text,
+            business_notes_text,
+        )
+        needs_warning = (not is_not_reviewed) and (not is_review_complete)
 
         unreviewed_color = QColor("#d6e8ff")
         warning_color = QColor("#fff0c2")
@@ -2260,7 +2346,7 @@ class ValidationDesktopApp(QMainWindow):
                     item.setBackground(unreviewed_color)
                 continue
 
-            if needs_warning and field_name in {"REVIEW_STATUS", "TECH_REVIEW_NOTES", "REVIEW_NOTES"}:
+            if needs_warning and field_name in {"REVIEW_STATUS", "TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES", "REVIEW_NOTES"}:
                 if isinstance(combo, QComboBox):
                     combo.setStyleSheet("background-color: #fff0c2;")
                 elif item is not None:
@@ -2319,12 +2405,9 @@ class ValidationDesktopApp(QMainWindow):
         self.user_review_progress_bar.setFormat(f"{percent_complete}%")
 
     def _refresh_user_review_progress_summary_from_table(self) -> None:
-        total_rows = self.user_preview_table.rowCount()
-        reviewed_rows = 0
-        for row_index in range(total_rows):
-            if self._get_user_preview_row_review_status(row_index) in self.REVIEWED_STATUSES:
-                reviewed_rows += 1
-        self._update_user_review_progress_summary(total_rows, reviewed_rows, total_rows - reviewed_rows)
+        preview_rows, reviewed_rows, incomplete_rows = self._get_user_review_completion_snapshot()
+        total_rows = len(preview_rows)
+        self._update_user_review_progress_summary(total_rows, reviewed_rows, len(incomplete_rows))
 
     def _update_slot_path_label(self, slot_key: str, file_paths: list[str] | None = None) -> None:
         widget_data = self.slot_widgets.get(slot_key, {})
@@ -3170,7 +3253,7 @@ class ValidationDesktopApp(QMainWindow):
 
                     self.user_preview_table.setItem(row_index, column, item)
 
-                self._update_review_row_highlight(row_index)
+                self._update_review_row_highlight(row_index, preview_row)
 
             self.user_preview_table.resizeColumnsToContents()
             for column_index, field_name in enumerate(self.user_preview_visible_columns):
@@ -3184,6 +3267,7 @@ class ValidationDesktopApp(QMainWindow):
             self._refreshing_user_preview = False
             self.user_preview_table.setSortingEnabled(True)
             self._refresh_user_review_progress_summary_from_table()
+            self._refresh_audit_summary_table()
 
     def run_validation(self) -> None:
         file_paths = self._current_file_paths()
@@ -6721,7 +6805,53 @@ class ValidationDesktopApp(QMainWindow):
                 ]
             self.audit_details_by_control[control_id] = detail_rows
 
+    def _sync_user_review_completion_finding(self) -> None:
+        control_id = self.REVIEW_COMPLETION_CONTROL_ID
+        self.audit_summary_records.pop(control_id, None)
+        self.audit_details_by_control.pop(control_id, None)
+
+        preview_rows, reviewed_rows, incomplete_rows = self._get_user_review_completion_snapshot()
+        total_rows = len(preview_rows)
+        if total_rows <= 0 or not incomplete_rows:
+            return
+
+        control_meta = get_audit_control_definition(control_id)
+        source_file_label = self._get_slot_display_name("USR02")
+        extraction_date = self._get_slot_extraction_date("USR02") or "-"
+
+        self.audit_summary_records[control_id] = {
+            "control_id": control_id,
+            "check_type": control_meta.get("check_type", "השלמת סקירת משתמשים"),
+            "source_file": source_file_label,
+            "extraction_date": extraction_date,
+            "work_environment": self._current_work_environment_label(),
+            "risk_level": control_meta.get("risk_level", "בינוני"),
+            "description": control_meta.get("description", "סקירת המשתמשים טרם הושלמה במלואה."),
+            "valid_records": reviewed_rows,
+            "finding_records": len(incomplete_rows),
+            "total_records": total_rows,
+        }
+
+        self.audit_details_by_control[control_id] = [
+            {
+                "control_id": control_id,
+                "source_file": source_file_label,
+                "extraction_date": extraction_date,
+                "work_environment": self._current_work_environment_label(),
+                "category": control_meta.get("category", "MA - ניהול גישה"),
+                "risk_level": control_meta.get("risk_level", "בינוני"),
+                "description": control_meta.get("description", "סקירת המשתמשים טרם הושלמה במלואה."),
+                "check_type": control_meta.get("check_type", "השלמת סקירת משתמשים"),
+                "actual_value": str(preview_row.get("BNAME", "-")) or "-",
+                "expected_value": "השלמת סקירה בהתאם לכלל ההשלמה",
+                "status": "עם ממצא",
+                "full_description": self._build_user_review_incomplete_reason(preview_row),
+            }
+            for preview_row in incomplete_rows
+        ]
+
     def _refresh_audit_summary_table(self) -> None:
+        self._sync_user_review_completion_finding()
         self.audit_summary_table.setRowCount(0)
         if not self.audit_summary_records:
             self.audit_detail_table.setRowCount(0)
@@ -7124,14 +7254,21 @@ class ValidationDesktopApp(QMainWindow):
             if field and field not in col_map:
                 col_map[field] = col_idx
 
-        required_fields = {"BNAME", "REVIEW_STATUS"}
-        if not required_fields.issubset(col_map.keys()):
-            missing = required_fields - col_map.keys()
+        expected_import_fields = list(self.EXPORT_REVIEW_FIELDS)
+        missing = [field_name for field_name in expected_import_fields if field_name not in col_map]
+        non_empty_headers = [header for header in headers if header]
+        if missing or len(non_empty_headers) < len(expected_import_fields):
+            missing_labels = [
+                str(self._get_user_preview_column_definition(field_name).get("formal", field_name))
+                for field_name in missing
+            ]
             QMessageBox.warning(
                 self,
                 "שגיאת ייבוא",
-                f"הקובץ חסר עמודות נדרשות: {', '.join(sorted(missing))}\n"
-                "ודא שהקובץ יוצא מהכלי ומכיל את עמודות הסקירה.",
+                "קובץ הסקירה אינו תואם לתבנית המעודכנת של המערכת.\n"
+                f"מספר עמודות מזוהות: {len(non_empty_headers)} מתוך {len(expected_import_fields)} נדרשות.\n"
+                f"עמודות חסרות: {', '.join(missing_labels) if missing_labels else '-'}\n"
+                "יש לייבא קובץ אקסל שיוצא מהכלי לאחר השינוי האחרון במבנה דוח הסקירה.",
             )
             workbook.close()
             return

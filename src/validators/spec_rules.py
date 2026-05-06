@@ -238,6 +238,12 @@ AUDIT_CONTROL_DEFINITIONS: dict[str, dict[str, str]] = {
         "check_type": "AGR_1251+AGR_USERS - הרשאה לעידכון ג'ובים",
         "description": "משתמשים בעלי הרשאות ניהול ג'ובים (S_TCODE/SM36 וכד', S_BTCH_ADM, S_BTCH_JOB/DELE/RELE/PROT, S_BTCH_NAM/*, S_BTCH_MONI/DELE/RELE) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
     },
+    "MA-REVIEW-01": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "בינוני",
+        "check_type": "השלמת סקירת משתמשים",
+        "description": "סקירת המשתמשים טרם הושלמה במלואה בהתאם לכלל ההשלמה שהוגדר.",
+    },
 }
 
 PROFILE_AUDIT_CONTROLS: dict[str, list[str]] = {

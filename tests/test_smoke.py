@@ -674,9 +674,31 @@ class TestSmoke(unittest.TestCase):
             import_xlsx = base_dir / "review_import.xlsx"
             wb_out = Workbook()
             ws_out = wb_out.active
-            ws_out.append(["משתמש", "CLIENT", "בוצעה סקירה", "הערות סוקר גורם טכני"])  # formal names
-            ws_out.append(["USER_A", "100", "נבדק - תקין", "סוקר ואושר"])
-            ws_out.append(["USER_B", "100", "לבירור", ""])  # old value → should normalize to "טרם נבדק"
+            field_to_col_def = {col["field"]: col for col in ValidationDesktopApp.USER_PREVIEW_COLUMN_DEFINITIONS}
+            export_headers = [
+                str(field_to_col_def[field]["formal"])
+                for field in ValidationDesktopApp.EXPORT_REVIEW_FIELDS
+                if field in field_to_col_def
+            ]
+            ws_out.append(export_headers)
+
+            row_a = {field: "" for field in ValidationDesktopApp.EXPORT_REVIEW_FIELDS}
+            row_a.update({
+                "MANDT": "100",
+                "WORK_ENVIRONMENT": "FPP - PROD - סביבת ייצור",
+                "BNAME": "USER_A",
+                "REVIEW_STATUS": "נבדק - תקין",
+                "TECH_REVIEW_NOTES": "סוקר ואושר",
+            })
+            row_b = {field: "" for field in ValidationDesktopApp.EXPORT_REVIEW_FIELDS}
+            row_b.update({
+                "MANDT": "100",
+                "WORK_ENVIRONMENT": "FPP - PROD - סביבת ייצור",
+                "BNAME": "USER_B",
+                "REVIEW_STATUS": "לבירור",
+            })
+            ws_out.append([row_a.get(field, "") for field in ValidationDesktopApp.EXPORT_REVIEW_FIELDS])
+            ws_out.append([row_b.get(field, "") for field in ValidationDesktopApp.EXPORT_REVIEW_FIELDS])  # old value → should normalize to "טרם נבדק"
             wb_out.save(import_xlsx)
 
             get_qt_app()
@@ -723,6 +745,39 @@ class TestSmoke(unittest.TestCase):
                 self.assertEqual(state_data["100|USER_A"]["REVIEW_STATUS"], "נבדק - תקין")
                 self.assertEqual(state_data["100|USER_A"]["TECH_REVIEW_NOTES"], "סוקר ואושר")
                 self.assertEqual(state_data["100|USER_B"]["REVIEW_STATUS"], "טרם נבדק")
+            finally:
+                window.close()
+
+    def test_import_user_review_from_excel_rejects_outdated_template(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "100;USER_A;0;20260101;080000\n",
+                encoding="utf-8",
+            )
+
+            import_xlsx = base_dir / "review_import_old_template.xlsx"
+            wb_out = Workbook()
+            ws_out = wb_out.active
+            ws_out.append(["משתמש", "CLIENT", "בוצעה סקירה", "הערות סוקר גורם טכני"])
+            ws_out.append(["USER_A", "100", "נבדק - תקין", "הוזנה הערה"])
+            wb_out.save(import_xlsx)
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window.refresh_user_preview()
+
+                with patch("src.ui.desktop_app.QFileDialog.getOpenFileName", return_value=(str(import_xlsx), "")), patch(
+                    "src.ui.desktop_app.QMessageBox.warning"
+                ) as warning_mock, patch("src.ui.desktop_app.QMessageBox.information"):
+                    window.import_user_review_from_excel()
+
+                self.assertTrue(warning_mock.called)
+                self.assertEqual(window.user_review_reviewed_label.text(), window.format_ui_rtl_text("משתמשים שנבדקו: 0"))
             finally:
                 window.close()
 
@@ -780,9 +835,31 @@ class TestSmoke(unittest.TestCase):
             import_xlsx = base_dir / "review_import_progress.xlsx"
             wb_out = Workbook()
             ws_out = wb_out.active
-            ws_out.append(["משתמש", "CLIENT", "בוצעה סקירה", "הערות סוקר גורם טכני"])
-            ws_out.append(["USER_A", "100", "נבדק - תקין", "בוצעה סקירה מלאה"])
-            ws_out.append(["USER_B", "100", "טרם נבדק", ""])
+            field_to_col_def = {col["field"]: col for col in ValidationDesktopApp.USER_PREVIEW_COLUMN_DEFINITIONS}
+            export_headers = [
+                str(field_to_col_def[field]["formal"])
+                for field in ValidationDesktopApp.EXPORT_REVIEW_FIELDS
+                if field in field_to_col_def
+            ]
+            ws_out.append(export_headers)
+
+            row_a = {field: "" for field in ValidationDesktopApp.EXPORT_REVIEW_FIELDS}
+            row_a.update({
+                "MANDT": "100",
+                "WORK_ENVIRONMENT": "FPP - PROD - סביבת ייצור",
+                "BNAME": "USER_A",
+                "REVIEW_STATUS": "נבדק - תקין",
+                "TECH_REVIEW_NOTES": "בוצעה סקירה מלאה",
+            })
+            row_b = {field: "" for field in ValidationDesktopApp.EXPORT_REVIEW_FIELDS}
+            row_b.update({
+                "MANDT": "100",
+                "WORK_ENVIRONMENT": "FPP - PROD - סביבת ייצור",
+                "BNAME": "USER_B",
+                "REVIEW_STATUS": "טרם נבדק",
+            })
+            ws_out.append([row_a.get(field, "") for field in ValidationDesktopApp.EXPORT_REVIEW_FIELDS])
+            ws_out.append([row_b.get(field, "") for field in ValidationDesktopApp.EXPORT_REVIEW_FIELDS])
             wb_out.save(import_xlsx)
 
             get_qt_app()
@@ -802,6 +879,39 @@ class TestSmoke(unittest.TestCase):
                 self.assertEqual(window.user_review_unreviewed_label.text(), window.format_ui_rtl_text("משתמשים שטרם נבדקו: 1"))
                 self.assertEqual(window.user_review_progress_bar.value(), 1)
                 self.assertEqual(window.user_review_progress_bar.format(), "50%")
+            finally:
+                window.close()
+
+    def test_user_review_progress_requires_note_when_findings_exist(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_findings.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME;USTYP;PWDINITIAL;PWDCHGDATE;PWDSETDATE\n"
+                "100;USER_A;0;20250101;080000;A;X;20240901;20240901\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window.slot_widgets["USR02"]["extraction_date_edit"].setText("2025-05-01")
+                window._apply_user_preview_columns(["MANDT", "BNAME", "FINDINGS_DESCRIPTION", "REVIEW_STATUS", "TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES"])
+
+                review_key = window._user_reviewer_state_key("100", "USER_A")
+                window._update_reviewer_value(review_key, "REVIEW_STATUS", "נבדק - תקין")
+                window.refresh_user_preview()
+
+                self.assertNotEqual(window.user_preview_table.item(0, 2).text(), "")
+                self.assertEqual(window.user_review_reviewed_label.text(), window.format_ui_rtl_text("משתמשים שנבדקו: 0"))
+                self.assertEqual(window.user_review_progress_bar.format(), "0%")
+
+                window._update_reviewer_value(review_key, "BUS_REVIEW_NOTES", "בוצעה בחינה עסקית")
+                window.refresh_user_preview()
+
+                self.assertEqual(window.user_review_reviewed_label.text(), window.format_ui_rtl_text("משתמשים שנבדקו: 1"))
+                self.assertEqual(window.user_review_progress_bar.format(), "100%")
             finally:
                 window.close()
 
@@ -852,6 +962,43 @@ class TestSmoke(unittest.TestCase):
                 self.assertIsNotNone(bname_item)
                 unreviewed_color = QColor("#d6e8ff")
                 self.assertEqual(bname_item.background().color().name(), unreviewed_color.name())
+            finally:
+                window.close()
+
+    def test_incomplete_user_review_adds_audit_summary_finding(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "100;USER_A;0;20260101;080000\n"
+                "100;USER_B;0;20260201;090000\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+
+                review_key = window._user_reviewer_state_key("100", "USER_A")
+                window._update_reviewer_value(review_key, "REVIEW_STATUS", "נבדק - תקין")
+                window.refresh_user_preview()
+
+                summary_row = window.audit_summary_records.get("MA-REVIEW-01")
+                self.assertIsNotNone(summary_row)
+                assert summary_row is not None
+                self.assertEqual(summary_row["valid_records"], 1)
+                self.assertEqual(summary_row["finding_records"], 1)
+                self.assertEqual(summary_row["total_records"], 2)
+                self.assertIn("MA-REVIEW-01", window.audit_details_by_control)
+
+                review_key_b = window._user_reviewer_state_key("100", "USER_B")
+                window._update_reviewer_value(review_key_b, "REVIEW_STATUS", "נבדק - תקין")
+                window.refresh_user_preview()
+
+                self.assertNotIn("MA-REVIEW-01", window.audit_summary_records)
+                self.assertNotIn("MA-REVIEW-01", window.audit_details_by_control)
             finally:
                 window.close()
 
