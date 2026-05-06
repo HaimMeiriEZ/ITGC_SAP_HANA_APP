@@ -13,6 +13,21 @@ MULTI_FILE_SAMPLE_LIMIT = 12000
 AGR_1251_BATCH_SIZE = 20000
 
 
+def _is_intake_issue(issue: ValidationIssue) -> bool:
+    msg = str(issue.message or "")
+    if issue.row_number == 0:
+        return (
+            "עמודת חובה חסרה" in msg
+            or "אינו תואם למבנה" in msg
+            or "נדרשת לפחות" in msg
+        )
+    return issue.row_number > 0 and "ערך חובה חסר" in msg
+
+
+def _has_intake_issues(issues: list[ValidationIssue]) -> bool:
+    return any(_is_intake_issue(issue) for issue in issues)
+
+
 def process_file(
     file_path: str | Path | Iterable[str | Path] | None = None,
     required_columns: list[str] | None = None,
@@ -60,7 +75,7 @@ def process_file(
         result.total_rows_override = len(rows)
         result.data_map = {source_name: rows}
 
-    if output_dir is not None:
+    if output_dir is not None and _has_intake_issues(result.issues):
         report_writer = ExcelReportWriter()
         result.report_path = report_writer.write(result, paths[0], Path(output_dir))
 
@@ -109,7 +124,7 @@ def _process_source_map(
         result.total_rows_override = len(rows)
         result.data_map = data_map
 
-    if output_dir is not None:
+    if output_dir is not None and _has_intake_issues(result.issues):
         report_writer = ExcelReportWriter()
         result.report_path = report_writer.write(result, all_paths[0], Path(output_dir))
 

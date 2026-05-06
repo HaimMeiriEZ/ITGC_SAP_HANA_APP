@@ -69,6 +69,7 @@ class TestSmoke(unittest.TestCase):
 
             self.assertIsNotNone(result.report_path)
             self.assertTrue(result.report_path.exists())
+            self.assertRegex(result.report_path.name, r"users_שגיאות_קליטה_\d{8}_\d{6}\.xlsx")
 
             workbook = load_workbook(result.report_path)
             self.assertIn("סיכום", workbook.sheetnames)
@@ -78,10 +79,12 @@ class TestSmoke(unittest.TestCase):
             self.assertEqual(workbook["סיכום"]["B2"].value, 2)
             self.assertEqual(workbook["סיכום"]["A5"].value, "הקובץ תקין")
             self.assertEqual(workbook["סיכום"]["B5"].value, False)
-            self.assertEqual(workbook["סיכום"]["A9"].value, "תאריך הפקה")
-            self.assertRegex(str(workbook["סיכום"]["B9"].value), r"\d{4}-\d{2}-\d{2}")
-            self.assertEqual(workbook["סיכום"]["A10"].value, "שעת הפקה")
-            self.assertRegex(str(workbook["סיכום"]["B10"].value), r"\d{2}:\d{2}:\d{2}")
+            self.assertEqual(workbook["סיכום"]["A7"].value, "סיבת קליטה שגויה")
+            self.assertIn("ערך חובה חסר", str(workbook["סיכום"]["B7"].value))
+            self.assertEqual(workbook["סיכום"]["A10"].value, "תאריך הפקה")
+            self.assertRegex(str(workbook["סיכום"]["B10"].value), r"\d{4}-\d{2}-\d{2}")
+            self.assertEqual(workbook["סיכום"]["A11"].value, "שעת הפקה")
+            self.assertRegex(str(workbook["סיכום"]["B11"].value), r"\d{2}:\d{2}:\d{2}")
             self.assertEqual(workbook["שגיאות"]["A1"].value, "מספר שורה")
             self.assertEqual(workbook["שגיאות"]["A2"].value, 2)
             self.assertEqual(workbook["שגיאות"]["B2"].value, "email")
@@ -124,8 +127,7 @@ class TestSmoke(unittest.TestCase):
             )
 
             self.assertEqual(result.summary.total_rows, 1)
-            self.assertIsNotNone(result.report_path)
-            self.assertTrue(result.report_path.exists())
+            self.assertIsNone(result.report_path)
 
     def test_sap_e070_export_with_windows_encoding_is_parsed(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -222,12 +224,13 @@ class TestSmoke(unittest.TestCase):
             self.assertGreaterEqual(window.user_preview_table.columnCount(), 24)
             self.assertEqual(window.user_preview_table.verticalScrollBarPolicy(), Qt.ScrollBarAlwaysOn)
             self.assertEqual(window.user_preview_table.horizontalHeaderItem(0).text(), "CLIENT")
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(1).text(), "משתמש")
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(8).text(), "מספר כתובת")
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(9).text(), "מספר פרסונה")
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(12).text(), "סיסמה ראשונית")
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(13).text(), "תאריך שינוי סיסמה")
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(14).text(), "תאריך הגדרת סיסמה")
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(1).text(), "סביבת עבודה")
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(2).text(), "משתמש")
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(9).text(), "מספר כתובת")
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(10).text(), "מספר פרסונה")
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(13).text(), "סיסמה ראשונית")
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(14).text(), "תאריך שינוי סיסמה")
+            self.assertEqual(window.user_preview_table.horizontalHeaderItem(15).text(), "תאריך הגדרת סיסמה")
             self.assertIn("טרם נבחר קובץ", window.slot_widgets["USR02"]["path_label"].text())
             window.slot_widgets["USR02"]["selected_paths"] = ["C:/temp/usr02_100.txt"]
             window._update_slot_path_label("USR02")
@@ -407,8 +410,10 @@ class TestSmoke(unittest.TestCase):
                 window.user_preview_status_filter.setCurrentIndex(1)
                 window.refresh_user_preview()
 
+                bname_col_idx = window.user_preview_visible_columns.index("BNAME")
+
                 active_users = {
-                    window.user_preview_table.item(row, 1).text()
+                    window.user_preview_table.item(row, bname_col_idx).text()
                     for row in range(window.user_preview_table.rowCount())
                 }
                 self.assertEqual(window.user_preview_table.rowCount(), 2)
@@ -418,7 +423,7 @@ class TestSmoke(unittest.TestCase):
                 window.refresh_user_preview()
 
                 inactive_users = {
-                    window.user_preview_table.item(row, 1).text()
+                    window.user_preview_table.item(row, bname_col_idx).text()
                     for row in range(window.user_preview_table.rowCount())
                 }
                 self.assertEqual(window.user_preview_table.rowCount(), 2)
@@ -524,7 +529,7 @@ class TestSmoke(unittest.TestCase):
             window = ValidationDesktopApp(base_dir=base_dir)
             try:
                 window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
-                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "REVIEW_NOTES"])
+                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "TECH_REVIEW_NOTES"])
                 window.refresh_user_preview()
 
                 self.assertEqual(window.user_preview_table.rowCount(), 1)
@@ -534,7 +539,7 @@ class TestSmoke(unittest.TestCase):
 
                 review_key = window._user_reviewer_state_key("100", "USER_A")
                 window._update_reviewer_value(review_key, "REVIEW_STATUS", "נבדק - תקין")
-                window._update_reviewer_value(review_key, "REVIEW_NOTES", "נסקר ואושר")
+                window._update_reviewer_value(review_key, "TECH_REVIEW_NOTES", "נסקר ואושר")
                 window.refresh_user_preview()
 
                 self.assertEqual(window.user_preview_table.item(0, 2).text(), "נבדק - תקין")
@@ -545,7 +550,7 @@ class TestSmoke(unittest.TestCase):
                 state_data = json.loads(state_path.read_text(encoding="utf-8"))
                 self.assertIn("100|USER_A", state_data)
                 self.assertEqual(state_data["100|USER_A"]["REVIEW_STATUS"], "נבדק - תקין")
-                self.assertEqual(state_data["100|USER_A"]["REVIEW_NOTES"], "נסקר ואושר")
+                self.assertEqual(state_data["100|USER_A"]["TECH_REVIEW_NOTES"], "נסקר ואושר")
             finally:
                 window.close()
 
@@ -606,8 +611,8 @@ class TestSmoke(unittest.TestCase):
                 # Set reviewer values via state (simulating on-screen edits)
                 key_a = window._user_reviewer_state_key("100", "USER_A")
                 key_b = window._user_reviewer_state_key("100", "USER_B")
-                window.user_reviewer_state[key_a] = {"REVIEW_STATUS": "נבדק - לא תקין", "REVIEW_NOTES": "נדרשת בדיקה"}
-                window.user_reviewer_state[key_b] = {"REVIEW_STATUS": "נבדק - תקין", "REVIEW_NOTES": ""}
+                window.user_reviewer_state[key_a] = {"REVIEW_STATUS": "נבדק - לא תקין", "TECH_REVIEW_NOTES": "נדרשת בדיקה"}
+                window.user_reviewer_state[key_b] = {"REVIEW_STATUS": "נבדק - תקין", "TECH_REVIEW_NOTES": ""}
 
                 export_path = window.export_user_preview_to_excel()
 
@@ -636,7 +641,7 @@ class TestSmoke(unittest.TestCase):
 
                 # Reviewer values are present
                 status_col = next(i + 1 for i, h in enumerate(header_row) if h == "בוצעה סקירה")
-                notes_col = next(i + 1 for i, h in enumerate(header_row) if h == "הערות סוקר")
+                notes_col = next(i + 1 for i, h in enumerate(header_row) if h == "הערות סוקר גורם טכני")
                 status_values = {ws.cell(r, bname_col).value: ws.cell(r, status_col).value for r in range(2, ws.max_row + 1)}
                 notes_values = {ws.cell(r, bname_col).value: ws.cell(r, notes_col).value for r in range(2, ws.max_row + 1)}
                 self.assertEqual(status_values["USER_A"], "נבדק - לא תקין")
@@ -669,7 +674,7 @@ class TestSmoke(unittest.TestCase):
             import_xlsx = base_dir / "review_import.xlsx"
             wb_out = Workbook()
             ws_out = wb_out.active
-            ws_out.append(["משתמש", "CLIENT", "בוצעה סקירה", "הערות סוקר"])  # formal names
+            ws_out.append(["משתמש", "CLIENT", "בוצעה סקירה", "הערות סוקר גורם טכני"])  # formal names
             ws_out.append(["USER_A", "100", "נבדק - תקין", "סוקר ואושר"])
             ws_out.append(["USER_B", "100", "לבירור", ""])  # old value → should normalize to "טרם נבדק"
             wb_out.save(import_xlsx)
@@ -678,7 +683,7 @@ class TestSmoke(unittest.TestCase):
             window = ValidationDesktopApp(base_dir=base_dir)
             try:
                 window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
-                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "REVIEW_NOTES"])
+                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "TECH_REVIEW_NOTES"])
                 window.refresh_user_preview()
 
                 # Before import — both should be default
@@ -693,7 +698,7 @@ class TestSmoke(unittest.TestCase):
                 # After import — values must be overwritten from file
                 bname_col_idx = window.user_preview_visible_columns.index("BNAME")
                 status_col_idx = window.user_preview_visible_columns.index("REVIEW_STATUS")
-                notes_col_idx = window.user_preview_visible_columns.index("REVIEW_NOTES")
+                notes_col_idx = window.user_preview_visible_columns.index("TECH_REVIEW_NOTES")
 
                 rows_by_bname = {}
                 for row_idx in range(window.user_preview_table.rowCount()):
@@ -716,7 +721,7 @@ class TestSmoke(unittest.TestCase):
                 self.assertTrue(state_path.exists())
                 state_data = json.loads(state_path.read_text(encoding="utf-8"))
                 self.assertEqual(state_data["100|USER_A"]["REVIEW_STATUS"], "נבדק - תקין")
-                self.assertEqual(state_data["100|USER_A"]["REVIEW_NOTES"], "סוקר ואושר")
+                self.assertEqual(state_data["100|USER_A"]["TECH_REVIEW_NOTES"], "סוקר ואושר")
                 self.assertEqual(state_data["100|USER_B"]["REVIEW_STATUS"], "טרם נבדק")
             finally:
                 window.close()
@@ -736,7 +741,7 @@ class TestSmoke(unittest.TestCase):
             window = ValidationDesktopApp(base_dir=base_dir)
             try:
                 window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
-                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "REVIEW_NOTES"])
+                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "TECH_REVIEW_NOTES"])
                 window.refresh_user_preview()
 
                 # Initial state: both users are "טרם נבדק"
@@ -775,7 +780,7 @@ class TestSmoke(unittest.TestCase):
             import_xlsx = base_dir / "review_import_progress.xlsx"
             wb_out = Workbook()
             ws_out = wb_out.active
-            ws_out.append(["משתמש", "CLIENT", "בוצעה סקירה", "הערות סוקר"])
+            ws_out.append(["משתמש", "CLIENT", "בוצעה סקירה", "הערות סוקר גורם טכני"])
             ws_out.append(["USER_A", "100", "נבדק - תקין", "בוצעה סקירה מלאה"])
             ws_out.append(["USER_B", "100", "טרם נבדק", ""])
             wb_out.save(import_xlsx)
@@ -784,7 +789,7 @@ class TestSmoke(unittest.TestCase):
             window = ValidationDesktopApp(base_dir=base_dir)
             try:
                 window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
-                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "REVIEW_NOTES"])
+                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "TECH_REVIEW_NOTES"])
                 window.refresh_user_preview()
 
                 with patch("src.ui.desktop_app.QFileDialog.getOpenFileName", return_value=(str(import_xlsx), "")), patch(
@@ -814,11 +819,11 @@ class TestSmoke(unittest.TestCase):
             window = ValidationDesktopApp(base_dir=base_dir)
             try:
                 window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
-                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "REVIEW_NOTES"])
+                window._apply_user_preview_columns(["MANDT", "BNAME", "REVIEW_STATUS", "TECH_REVIEW_NOTES"])
                 window.refresh_user_preview()
 
                 status_col_idx = window.user_preview_visible_columns.index("REVIEW_STATUS")
-                notes_col_idx = window.user_preview_visible_columns.index("REVIEW_NOTES")
+                notes_col_idx = window.user_preview_visible_columns.index("TECH_REVIEW_NOTES")
 
                 # Set to "נבדק - לא תקין" with no notes → warning highlight expected
                 review_key = window._user_reviewer_state_key("100", "USER_A")
@@ -833,7 +838,7 @@ class TestSmoke(unittest.TestCase):
                 self.assertEqual(notes_item.background().color().name(), warning_color.name())
 
                 # Add notes → highlight should clear
-                window._update_reviewer_value(review_key, "REVIEW_NOTES", "נבדקה ונמצאה בעיה - טופלה")
+                window._update_reviewer_value(review_key, "TECH_REVIEW_NOTES", "נבדקה ונמצאה בעיה - טופלה")
                 window.refresh_user_preview()
                 notes_item2 = window.user_preview_table.item(0, notes_col_idx)
                 clear_color = QColor(0, 0, 0, 0)
@@ -1021,8 +1026,8 @@ class TestSmoke(unittest.TestCase):
 
             self.assertEqual(window.audit_summary_table.rowCount(), 1)
             self.assertEqual(window.audit_summary_table.item(0, 0).text(), "44")
-            self.assertEqual(window.audit_summary_table.item(0, 7).text(), "1")
-            self.assertEqual(window.audit_summary_table.item(0, 8).text(), "2")
+            self.assertEqual(window.audit_summary_table.item(0, 8).text(), "1")
+            self.assertEqual(window.audit_summary_table.item(0, 9).text(), "2")
             self.assertIn("44", window.audit_details_by_control)
             self.assertGreaterEqual(len(window.audit_details_by_control["44"]), 1)
 
@@ -1030,8 +1035,8 @@ class TestSmoke(unittest.TestCase):
             window.audit_summary_table.selectRow(0)
             window._refresh_selected_audit_detail()
             self.assertGreaterEqual(window.audit_detail_table.rowCount(), 1)
-            self.assertEqual(window.audit_detail_table.item(0, 2).text(), "MC - ניהול שינויים")
-            self.assertEqual(window.audit_detail_table.item(0, 8).text(), "עם ממצא")
+            self.assertEqual(window.audit_detail_table.item(0, 3).text(), "MC - ניהול שינויים")
+            self.assertEqual(window.audit_detail_table.item(0, 9).text(), "עם ממצא")
         finally:
             window.close()
 
@@ -1151,6 +1156,7 @@ class TestSmoke(unittest.TestCase):
             values = [
                 "rz10.txt",
                 "2026-04-29",
+                "FPP - PROD - סביבת ייצור",
                 "MA - ניהול גישה",
                 "גבוה",
                 "תיאור בדיקה",
@@ -1239,7 +1245,7 @@ class TestSmoke(unittest.TestCase):
 
                 self.assertGreaterEqual(window.run_log_table.rowCount(), 2)
                 self.assertEqual(window.tabs.currentIndex(), 0)
-                self.assertTrue(window.report_button.isEnabled())
+                self.assertFalse(window.report_button.isEnabled())
                 self.assertTrue(information_mock.called or warning_mock.called)
             finally:
                 window.close()
@@ -1506,8 +1512,10 @@ class TestSmoke(unittest.TestCase):
                 window.refresh_user_preview()
 
                 self.assertEqual(window.user_preview_table.rowCount(), 1)
-                self.assertEqual(window.user_preview_table.item(0, 1).text(), "UZIZ")
-                self.assertEqual(window.user_preview_table.item(0, 7).text(), "פעיל")
+                bname_col_idx = window.user_preview_visible_columns.index("BNAME")
+                status_col_idx = window.user_preview_visible_columns.index("STATUS")
+                self.assertEqual(window.user_preview_table.item(0, bname_col_idx).text(), "UZIZ")
+                self.assertEqual(window.user_preview_table.item(0, status_col_idx).text(), "פעיל")
             finally:
                 window.close()
 

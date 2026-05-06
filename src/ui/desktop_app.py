@@ -73,7 +73,7 @@ def get_qt_app() -> QApplication:
     if not isinstance(app, QApplication):
         app = QApplication(sys.argv)
         app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        app.setFont(QFont("Segoe UI", 10))
+        app.setFont(QFont("Segoe UI", 9))
     return app
 
 
@@ -160,6 +160,7 @@ class ValidationDesktopApp(QMainWindow):
 
     USER_PREVIEW_COLUMN_DEFINITIONS = [
         {"field": "MANDT", "formal": "CLIENT", "technical": "MANDT", "source": "USR02", "default": True, "width": 90},
+        {"field": "WORK_ENVIRONMENT", "formal": "סביבת עבודה", "technical": "WORK_ENVIRONMENT", "source": "הגדרות מערכת", "default": True, "width": 210},
         {"field": "BNAME", "formal": "משתמש", "technical": "BNAME", "source": "USR02", "default": True, "width": 130},
         {"field": "NAME_FIRST", "formal": "שם פרטי", "technical": "NAME_FIRST", "source": "USER_ADDR", "default": True, "width": 120},
         {"field": "NAME_LAST", "formal": "שם משפחה", "technical": "NAME_LAST", "source": "USER_ADDR", "default": True, "width": 120},
@@ -185,7 +186,8 @@ class ValidationDesktopApp(QMainWindow):
         {"field": "SECURITY_POLICY", "formal": "מדיניות אבטחה", "technical": "SECURITY_POLICY", "source": "USR02", "default": True, "width": 160},
         {"field": "REVIEW_STATUS", "formal": "בוצעה סקירה", "technical": "REVIEW_STATUS", "source": "סוקר", "default": True, "width": 165},
         {"field": "FINDINGS_DESCRIPTION", "formal": "תיאור ממצאים", "technical": "FINDINGS_DESCRIPTION", "source": "מערכת", "default": True, "width": 280},
-        {"field": "REVIEW_NOTES", "formal": "הערות סוקר", "technical": "REVIEW_NOTES", "source": "סוקר", "default": True, "width": 220},
+        {"field": "TECH_REVIEW_NOTES", "formal": "הערות סוקר גורם טכני", "technical": "TECH_REVIEW_NOTES", "source": "סוקר טכני", "default": True, "width": 240},
+        {"field": "BUS_REVIEW_NOTES", "formal": "הערות סוקר גורם עסקי", "technical": "BUS_REVIEW_NOTES", "source": "סוקר עסקי", "default": True, "width": 240},
         {"field": "UFLAG", "formal": "קוד נעילה", "technical": "UFLAG", "source": "USR02", "default": False, "width": 100},
     ]
     DEFAULT_USER_PREVIEW_COLUMNS = [
@@ -193,12 +195,14 @@ class ValidationDesktopApp(QMainWindow):
         for column in USER_PREVIEW_COLUMN_DEFINITIONS
         if bool(column.get("default"))
     ]
-    CURRENT_USER_PREVIEW_SETTINGS_VERSION = 5
+    CURRENT_USER_PREVIEW_SETTINGS_VERSION = 7
     USER_PREVIEW_SETTINGS_MIGRATIONS = {
         2: ["PWDINITIAL", "PWDCHGDATE", "PWDSETDATE"],
         3: ["DEPARTMENT", "GLTGV", "GLTGB", "USTYP", "LOCNT", "OCOD1", "PASSCODE", "PWDSALTEDHASH", "SECURITY_POLICY"],
         4: ["REVIEW_STATUS", "REVIEW_NOTES"],
         5: ["FINDINGS_DESCRIPTION"],
+        6: ["TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES"],
+        7: ["WORK_ENVIRONMENT"],
     }
     USER_PREVIEW_FILTER_OPTIONS = [
         ("all", "כלל האוכלוסייה"),
@@ -217,9 +221,15 @@ class ValidationDesktopApp(QMainWindow):
     }
     USER_PREVIEW_DATE_FIELDS = {"TRDAT", "PWDCHGDATE", "PWDSETDATE", "GLTGV", "GLTGB"}
     EXPORT_REVIEW_FIELDS = [
-        "MANDT", "BNAME", "NAME_TEXTC", "SMTP_ADDR", "STATUS", "USTYP",
+        "MANDT", "WORK_ENVIRONMENT", "BNAME", "NAME_TEXTC", "SMTP_ADDR", "STATUS", "USTYP",
         "GLTGV", "GLTGB", "TRDAT", "PWDSETDATE", "PWDCHGDATE",
-        "FINDINGS_DESCRIPTION", "REVIEW_STATUS", "REVIEW_NOTES",
+        "FINDINGS_DESCRIPTION", "REVIEW_STATUS", "TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES",
+    ]
+    WORK_ENVIRONMENT_OPTIONS = [
+        ("FPD", "FPD - DEV - סביבת מפתחים"),
+        ("PFT", "PFT - PRE PROD - סביבת קדם ייצור"),
+        ("FPP", "FPP - PROD - סביבת ייצור"),
+        ("FPQ", "FPQ - QA - סביבת בדיקות"),
     ]
 
     SLOT_DEFINITIONS = {
@@ -252,6 +262,13 @@ class ValidationDesktopApp(QMainWindow):
             "expected_file": "agr_1251_100.txt",
             "required": True,
         },
+        "UST04": {
+            "domain": "MA - ניהול גישה",
+            "sub_category": "1.2 - סקר הרשאות תקופתי",
+            "description": "פרופילים-משתמשים - שיוך פרופילים ישיר למשתמשים.",
+            "expected_file": "ust04.txt",
+            "required": True,
+        },
         "AGR_1252": {
             "domain": "MA - ניהול גישה",
             "sub_category": "1.2 - סקר הרשאות תקופתי",
@@ -264,13 +281,6 @@ class ValidationDesktopApp(QMainWindow):
             "sub_category": "1.2 - סקר הרשאות תקופתי",
             "description": "רולים מורחב - מידע כללי על הגדרת הרול.",
             "expected_file": "agr_define.txt",
-            "required": False,
-        },
-        "UST04": {
-            "domain": "MA - ניהול גישה",
-            "sub_category": "1.2 - סקר הרשאות תקופתי",
-            "description": "פרופילים-משתמשים - שיוך פרופילים ישיר למשתמשים.",
-            "expected_file": "ust04.txt",
             "required": False,
         },
         "RSPARAM": {
@@ -466,7 +476,7 @@ class ValidationDesktopApp(QMainWindow):
         _title_row.setContentsMargins(0, 0, 0, 0)
         _title_row.setSpacing(0)
         self.app_title_label = QLabel("כלי להערכת בקרות ITGC בסביבת SAP HANA APP")
-        self.app_title_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #16325c;")
+        self.app_title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #16325c;")
         _title_row.addStretch(1)
         _title_row.addWidget(self.app_title_label)
         main_layout.addWidget(_title_container)
@@ -477,7 +487,7 @@ class ValidationDesktopApp(QMainWindow):
         _header_row.setContentsMargins(0, 0, 0, 0)
         _header_row.setSpacing(0)
         self.header_label = QLabel("מסך בדיקת קלטי SAP HANA APP")
-        self.header_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #16325c;")
+        self.header_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #16325c;")
         _header_row.addStretch(1)
         _header_row.addWidget(self.header_label)
 
@@ -488,11 +498,31 @@ class ValidationDesktopApp(QMainWindow):
             "בחר קבצים לפי המשבצת המתאימה. כוכבית מציינת משבצת חובה. חובה לציין את תאריך ההפקה של הקבצים. ניתן להריץ בדיקה נפרדת לכל קבוצת קבצים בלי להמתין לטעינת כל הדוחות."
             "</p>"
         )
-        self.hint_label.setFixedHeight(46)
+        self.hint_label.setFixedHeight(38)
         self.hint_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.hint_label.setStyleSheet(
             "background: transparent; border: none; padding: 0;"
         )
+
+        self.work_environment_row = QWidget()
+        self.work_environment_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        work_environment_layout = QHBoxLayout(self.work_environment_row)
+        work_environment_layout.setContentsMargins(0, 0, 0, 0)
+        work_environment_layout.setSpacing(8)
+        work_environment_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self.work_environment_label = QLabel(self.format_ui_rtl_text("סביבת עבודה:"))
+        self.work_environment_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.work_environment_combo = QComboBox()
+        self.work_environment_combo.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.work_environment_combo.setMinimumWidth(260)
+        for env_code, env_label in self.WORK_ENVIRONMENT_OPTIONS:
+            self.work_environment_combo.addItem(self.format_rtl_text(env_label), env_code)
+        self.work_environment_combo.currentIndexChanged.connect(self._persist_work_environment_selection)
+
+        work_environment_layout.addWidget(self.work_environment_label)
+        work_environment_layout.addWidget(self.work_environment_combo)
+        work_environment_layout.addStretch(1)
 
         self.actions_row = QWidget()
         self.actions_row.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
@@ -536,7 +566,7 @@ class ValidationDesktopApp(QMainWindow):
                 color: #16325c;
                 border: 1px solid #b7c4d8;
                 border-bottom: none;
-                padding: 10px 18px;
+                padding: 6px 12px;
                 margin-left: 2px;
                 min-width: 150px;
                 font-weight: bold;
@@ -560,6 +590,7 @@ class ValidationDesktopApp(QMainWindow):
         self.intake_layout.setSpacing(10)
         self.intake_layout.addWidget(_header_container)
         self.intake_layout.addWidget(self.hint_label)
+        self.intake_layout.addWidget(self.work_environment_row)
         self.intake_layout.addWidget(self.actions_row)
 
         self.analysis_tab = QWidget()
@@ -609,13 +640,14 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_summary_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         audit_summary_layout = QVBoxLayout(self.audit_summary_group)
         audit_summary_layout.setContentsMargins(8, 14, 8, 8)
-        self.audit_summary_table = QTableWidget(0, 9)
+        self.audit_summary_table = QTableWidget(0, 10)
         self.audit_summary_table.setItemDelegate(_RightAlignDelegate(self.audit_summary_table))
         self.audit_summary_table.setHorizontalHeaderLabels([
             self.format_rtl_text("מזהה בקרה"),
             self.format_rtl_text("סוג בדיקה"),
             self.format_rtl_text("קובץ מקור"),
             self.format_rtl_text("תאריך הפקה"),
+            self.format_rtl_text("סביבת עבודה"),
             self.format_rtl_text("רמת סיכון"),
             self.format_rtl_text("תיאור הבדיקה"),
             self.format_rtl_text("רשומות תקינות"),
@@ -626,7 +658,7 @@ class ValidationDesktopApp(QMainWindow):
         _audit_summary_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _audit_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _audit_summary_hdr.setStretchLastSection(False)
-        self.audit_summary_table.setColumnWidth(5, 220)  # תיאור הבדיקה
+        self.audit_summary_table.setColumnWidth(6, 220)  # תיאור הבדיקה
         self.audit_summary_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.audit_summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.audit_summary_table.setAlternatingRowColors(True)
@@ -640,11 +672,12 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_detail_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         audit_detail_layout = QVBoxLayout(self.audit_detail_group)
         audit_detail_layout.setContentsMargins(8, 14, 8, 8)
-        self.audit_detail_table = QTableWidget(0, 10)
+        self.audit_detail_table = QTableWidget(0, 11)
         self.audit_detail_table.setItemDelegate(_RightAlignDelegate(self.audit_detail_table))
         self.audit_detail_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קובץ מקור"),
             self.format_rtl_text("תאריך הפקה"),
+            self.format_rtl_text("סביבת עבודה"),
             self.format_rtl_text("קטגוריה"),
             self.format_rtl_text("רמת סיכון"),
             self.format_rtl_text("תיאור"),
@@ -851,8 +884,8 @@ class ValidationDesktopApp(QMainWindow):
                     font-weight: bold;
                     border: 2px solid {palette['border']};
                     border-radius: 10px;
-                    margin-top: 14px;
-                    padding-top: 18px;
+                    margin-top: 12px;
+                    padding-top: 14px;
                     background-color: #ffffff;
                 }}
                 QGroupBox::title {{
@@ -888,8 +921,8 @@ class ValidationDesktopApp(QMainWindow):
                     font-weight: bold;
                     border: 1px solid {palette['border']};
                     border-radius: 7px;
-                    margin-top: 10px;
-                    padding-top: 14px;
+                    margin-top: 8px;
+                    padding-top: 10px;
                     background-color: #f9fafb;
                 }}
                 QGroupBox::title {{
@@ -1156,6 +1189,16 @@ class ValidationDesktopApp(QMainWindow):
         self.user_preview_import_button.clicked.connect(self.import_user_review_from_excel)
         user_preview_actions_layout.addWidget(self.user_preview_import_button, 0, Qt.AlignmentFlag.AlignRight)
 
+        self.user_preview_send_business_button = QPushButton("שליחת הדוח לגורם עסקי")
+        self.user_preview_send_business_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.user_preview_send_business_button.clicked.connect(self.draft_user_review_email_to_business)
+        user_preview_actions_layout.addWidget(self.user_preview_send_business_button, 0, Qt.AlignmentFlag.AlignRight)
+
+        self.user_preview_send_technical_button = QPushButton("שליחת הדוח לגורם טכני")
+        self.user_preview_send_technical_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.user_preview_send_technical_button.clicked.connect(self.draft_user_review_email_to_technical)
+        user_preview_actions_layout.addWidget(self.user_preview_send_technical_button, 0, Qt.AlignmentFlag.AlignRight)
+
         self.user_preview_columns_button = QPushButton("הוסף / מחק עמודות")
         self.user_preview_columns_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.user_preview_columns_button.clicked.connect(self.show_user_preview_column_dialog)
@@ -1320,7 +1363,7 @@ class ValidationDesktopApp(QMainWindow):
             QWidget {
                 background-color: #f5f7fb;
                 font-family: 'Segoe UI';
-                font-size: 11pt;
+                font-size: 9.5pt;
             }
             QLabel {
                 qproperty-alignment: 'AlignRight|AlignVCenter';
@@ -1329,8 +1372,8 @@ class ValidationDesktopApp(QMainWindow):
                 font-weight: bold;
                 border: 1px solid #c7cfda;
                 border-radius: 8px;
-                margin-top: 16px;
-                padding-top: 16px;
+                margin-top: 12px;
+                padding-top: 12px;
                 background-color: #f9fbfe;
             }
             QGroupBox::title {
@@ -1343,9 +1386,9 @@ class ValidationDesktopApp(QMainWindow):
                 background-color: #e9eef7;
                 border: 1px solid #b7c4d8;
                 border-radius: 6px;
-                padding: 8px 14px;
+                padding: 4px 10px;
                 font-weight: bold;
-                min-width: 120px;
+                min-width: 100px;
             }
             QPushButton:hover {
                 background-color: #dbe7f8;
@@ -1353,7 +1396,7 @@ class ValidationDesktopApp(QMainWindow):
             QLineEdit {
                 background-color: white;
                 border: 1px solid #cfd6e4;
-                padding: 6px;
+                padding: 4px;
             }
             QTableWidget {
                 background-color: white;
@@ -1529,6 +1572,33 @@ class ValidationDesktopApp(QMainWindow):
         self.system_settings_sections["inactive_days_threshold"] = threshold_group
         self.system_settings_unavailable_labels["inactive_days_threshold"] = threshold_unavailable_label
 
+        email_group, email_layout, email_unavailable_label = self._build_settings_group(
+            "הגדרות תפוצת מייל",
+            "הגדר כתובות מייל של גורם עסקי וגורם טכני עבור יצירת טיוטות שליחת דוח סקירת משתמשים.",
+        )
+        email_form = QFormLayout()
+        email_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        email_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+        business_email_widget = QLineEdit()
+        business_email_widget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        business_email_widget.setPlaceholderText("business.reviewer@company.com")
+        technical_email_widget = QLineEdit()
+        technical_email_widget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        technical_email_widget.setPlaceholderText("technical.reviewer@company.com")
+
+        self.system_settings_widgets["business_reviewer_email"] = business_email_widget
+        self.system_settings_widgets["technical_reviewer_email"] = technical_email_widget
+
+        email_form.addRow("כתובת מייל גורם עסקי", business_email_widget)
+        email_form.addRow("כתובת מייל גורם טכני", technical_email_widget)
+        email_layout.addLayout(email_form)
+        self.settings_layout.addWidget(email_group)
+        self.system_settings_sections["business_reviewer_email"] = email_group
+        self.system_settings_sections["technical_reviewer_email"] = email_group
+        self.system_settings_unavailable_labels["business_reviewer_email"] = email_unavailable_label
+        self.system_settings_unavailable_labels["technical_reviewer_email"] = email_unavailable_label
+
     def _build_settings_group(self, title: str, description: str | None = None) -> tuple[QGroupBox, QVBoxLayout, QLabel]:
         group = QGroupBox(self.format_ui_rtl_text(title))
         group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -1624,6 +1694,9 @@ class ValidationDesktopApp(QMainWindow):
 
     def _default_system_settings(self) -> dict[str, Any]:
         return {
+            "work_environment": "FPP",
+            "business_reviewer_email": "",
+            "technical_reviewer_email": "",
             "generic_users": ["SAP", "DDIC", "TMSADM", "SAPCPIC"],
             "authorized_stms_users": [],
             "super_users": [],
@@ -1696,6 +1769,13 @@ class ValidationDesktopApp(QMainWindow):
     def _load_system_settings_into_form(self, settings: dict[str, Any], load_review_period: bool = True) -> None:
         settings = settings or self._default_system_settings()
 
+        selected_environment = self._normalize_work_environment_code(settings.get("work_environment", "FPP"))
+        if hasattr(self, "work_environment_combo") and isinstance(self.work_environment_combo, QComboBox):
+            for index in range(self.work_environment_combo.count()):
+                if str(self.work_environment_combo.itemData(index) or "").strip().upper() == selected_environment:
+                    self.work_environment_combo.setCurrentIndex(index)
+                    break
+
         def _fill_lines(key: str) -> None:
             editor = self.system_settings_widgets.get(key)
             values = settings.get(key, [])
@@ -1747,6 +1827,13 @@ class ValidationDesktopApp(QMainWindow):
         if isinstance(threshold_widget, QLineEdit):
             threshold_widget.setText(str(settings.get("inactive_days_threshold", 90)))
 
+        business_email_widget = self.system_settings_widgets.get("business_reviewer_email")
+        if isinstance(business_email_widget, QLineEdit):
+            business_email_widget.setText(str(settings.get("business_reviewer_email", "")).strip())
+        technical_email_widget = self.system_settings_widgets.get("technical_reviewer_email")
+        if isinstance(technical_email_widget, QLineEdit):
+            technical_email_widget.setText(str(settings.get("technical_reviewer_email", "")).strip())
+
         password_defaults = settings.get("password_policy_defaults", {}) if isinstance(settings, dict) else {}
         if isinstance(password_defaults, dict):
             for key, value in password_defaults.items():
@@ -1764,6 +1851,7 @@ class ValidationDesktopApp(QMainWindow):
 
         settings = copy.deepcopy(self._current_system_settings())
         default_settings = self._default_system_settings()
+        settings["work_environment"] = self._current_work_environment_code()
 
         generic_users_editor = self.system_settings_widgets.get("generic_users")
         if isinstance(generic_users_editor, QPlainTextEdit):
@@ -1812,6 +1900,13 @@ class ValidationDesktopApp(QMainWindow):
         if isinstance(threshold_widget, QLineEdit):
             settings["inactive_days_threshold"] = self._safe_int(threshold_widget.text(), 90)
 
+        business_email_widget = self.system_settings_widgets.get("business_reviewer_email")
+        if isinstance(business_email_widget, QLineEdit):
+            settings["business_reviewer_email"] = business_email_widget.text().strip()
+        technical_email_widget = self.system_settings_widgets.get("technical_reviewer_email")
+        if isinstance(technical_email_widget, QLineEdit):
+            settings["technical_reviewer_email"] = technical_email_widget.text().strip()
+
         password_defaults = {}
         for field_name in [
             "minimal_password_length",
@@ -1838,6 +1933,36 @@ class ValidationDesktopApp(QMainWindow):
         settings["password_policy_defaults"] = password_defaults
 
         return settings
+
+    def _normalize_work_environment_code(self, value: object) -> str:
+        normalized = str(value or "").strip().upper()
+        valid_codes = {code for code, _label in self.WORK_ENVIRONMENT_OPTIONS}
+        return normalized if normalized in valid_codes else "FPP"
+
+    def _current_work_environment_code(self) -> str:
+        if hasattr(self, "work_environment_combo") and isinstance(self.work_environment_combo, QComboBox):
+            selected_data = self.work_environment_combo.currentData()
+            return self._normalize_work_environment_code(selected_data)
+        settings = self._current_system_settings()
+        return self._normalize_work_environment_code(settings.get("work_environment", "FPP"))
+
+    def _current_work_environment_label(self) -> str:
+        selected_code = self._current_work_environment_code()
+        for env_code, env_label in self.WORK_ENVIRONMENT_OPTIONS:
+            if env_code == selected_code:
+                return env_label
+        return selected_code
+
+    def _persist_work_environment_selection(self, _index: int) -> None:
+        try:
+            settings = self._current_system_settings()
+            settings["work_environment"] = self._current_work_environment_code()
+            settings_path = self._system_settings_path()
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            settings_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            # Avoid interrupting the user flow if persistence fails.
+            pass
 
     def _save_system_settings(self) -> None:
         try:
@@ -2093,12 +2218,12 @@ class ValidationDesktopApp(QMainWindow):
 
     def _update_review_row_highlight(self, row_index: int) -> None:
         review_status_col: int | None = None
-        notes_col: int | None = None
+        technical_notes_col: int | None = None
         for col_idx, field_name in enumerate(self.user_preview_visible_columns):
             if field_name == "REVIEW_STATUS":
                 review_status_col = col_idx
-            elif field_name == "REVIEW_NOTES":
-                notes_col = col_idx
+            elif field_name in {"TECH_REVIEW_NOTES", "REVIEW_NOTES"}:
+                technical_notes_col = col_idx
 
         review_status_text = ""
         if review_status_col is not None:
@@ -2111,8 +2236,8 @@ class ValidationDesktopApp(QMainWindow):
                     review_status_text = status_item.text().strip()
 
         notes_text = ""
-        if notes_col is not None:
-            notes_item = self.user_preview_table.item(row_index, notes_col)
+        if technical_notes_col is not None:
+            notes_item = self.user_preview_table.item(row_index, technical_notes_col)
             if notes_item is not None:
                 notes_text = notes_item.text().strip()
 
@@ -2135,7 +2260,7 @@ class ValidationDesktopApp(QMainWindow):
                     item.setBackground(unreviewed_color)
                 continue
 
-            if needs_warning and field_name in {"REVIEW_STATUS", "REVIEW_NOTES"}:
+            if needs_warning and field_name in {"REVIEW_STATUS", "TECH_REVIEW_NOTES", "REVIEW_NOTES"}:
                 if isinstance(combo, QComboBox):
                     combo.setStyleSheet("background-color: #fff0c2;")
                 elif item is not None:
@@ -2446,7 +2571,8 @@ class ValidationDesktopApp(QMainWindow):
     def _default_reviewer_values(cls) -> dict[str, str]:
         return {
             "REVIEW_STATUS": cls.DEFAULT_REVIEW_STATUS,
-            "REVIEW_NOTES": "",
+            "TECH_REVIEW_NOTES": "",
+            "BUS_REVIEW_NOTES": "",
         }
 
     def _load_user_reviewer_state(self) -> dict[str, dict[str, str]]:
@@ -2469,9 +2595,11 @@ class ValidationDesktopApp(QMainWindow):
         for review_key, review_values in raw_data.items():
             if not isinstance(review_values, dict):
                 continue
+            legacy_notes = str(review_values.get("REVIEW_NOTES", "")).strip()
             normalized_state[str(review_key)] = {
                 "REVIEW_STATUS": self._normalize_reviewer_status(review_values.get("REVIEW_STATUS")),
-                "REVIEW_NOTES": str(review_values.get("REVIEW_NOTES", "")).strip(),
+                "TECH_REVIEW_NOTES": str(review_values.get("TECH_REVIEW_NOTES", "")).strip() or legacy_notes,
+                "BUS_REVIEW_NOTES": str(review_values.get("BUS_REVIEW_NOTES", "")).strip(),
             }
         return normalized_state
 
@@ -2490,20 +2618,23 @@ class ValidationDesktopApp(QMainWindow):
         stored_values = self.user_reviewer_state.get(review_key)
         if not isinstance(stored_values, dict):
             return self._default_reviewer_values().copy()
+        legacy_notes = str(stored_values.get("REVIEW_NOTES", "")).strip()
         return {
             "REVIEW_STATUS": self._normalize_reviewer_status(stored_values.get("REVIEW_STATUS")),
-            "REVIEW_NOTES": str(stored_values.get("REVIEW_NOTES", "")).strip(),
+            "TECH_REVIEW_NOTES": str(stored_values.get("TECH_REVIEW_NOTES", "")).strip() or legacy_notes,
+            "BUS_REVIEW_NOTES": str(stored_values.get("BUS_REVIEW_NOTES", "")).strip(),
         }
 
     def _update_reviewer_value(self, review_key: str, field_name: str, value: object) -> None:
-        if not review_key or field_name not in {"REVIEW_STATUS", "REVIEW_NOTES"}:
+        normalized_field = "TECH_REVIEW_NOTES" if field_name == "REVIEW_NOTES" else field_name
+        if not review_key or normalized_field not in {"REVIEW_STATUS", "TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES"}:
             return
 
         current_values = self.user_reviewer_state.setdefault(review_key, self._default_reviewer_values().copy())
-        if field_name == "REVIEW_STATUS":
-            current_values[field_name] = self._normalize_reviewer_status(value)
+        if normalized_field == "REVIEW_STATUS":
+            current_values[normalized_field] = self._normalize_reviewer_status(value)
         else:
-            current_values[field_name] = "" if value is None else str(value).strip()
+            current_values[normalized_field] = "" if value is None else str(value).strip()
         self._save_user_reviewer_state()
 
     def _normalize_user_preview_columns(self, selected_columns: list[str] | None) -> list[str]:
@@ -2511,7 +2642,8 @@ class ValidationDesktopApp(QMainWindow):
         if not selected_columns:
             return list(self.DEFAULT_USER_PREVIEW_COLUMNS)
 
-        normalized = [field for field in allowed_fields if field in selected_columns]
+        normalized_input = ["TECH_REVIEW_NOTES" if field == "REVIEW_NOTES" else field for field in selected_columns]
+        normalized = [field for field in allowed_fields if field in normalized_input]
         return normalized or list(self.DEFAULT_USER_PREVIEW_COLUMNS)
 
     def _load_user_preview_column_selection(self) -> list[str]:
@@ -2560,12 +2692,12 @@ class ValidationDesktopApp(QMainWindow):
 
         field_name = item.data(Qt.ItemDataRole.UserRole + 1)
         review_key = item.data(Qt.ItemDataRole.UserRole)
-        if field_name != "REVIEW_NOTES" or not review_key:
+        if field_name not in {"TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES", "REVIEW_NOTES"} or not review_key:
             return
 
         normalized_text = self.format_rtl_text(item.text())
         item.setToolTip(normalized_text)
-        self._update_reviewer_value(str(review_key), "REVIEW_NOTES", normalized_text)
+        self._update_reviewer_value(str(review_key), str(field_name), normalized_text)
         self._update_review_row_highlight(item.row())
 
     def _get_user_preview_cell_text(self, row_index: int, column_index: int) -> str:
@@ -2904,6 +3036,7 @@ class ValidationDesktopApp(QMainWindow):
 
         preview_rows: list[dict[str, str]] = []
         extraction_date_text = self._get_slot_extraction_date("USR02")
+        work_environment_label = self._current_work_environment_label()
 
         for key in ordered_keys:
             usr_entry = usr02_map.get(key, {})
@@ -2920,6 +3053,7 @@ class ValidationDesktopApp(QMainWindow):
             preview_rows.append(
                 {
                     "MANDT": merged_mandt,
+                    "WORK_ENVIRONMENT": work_environment_label,
                     "BNAME": merged_bname,
                     "NAME_FIRST": addr_entry.get("NAME_FIRST", ""),
                     "NAME_LAST": addr_entry.get("NAME_LAST", ""),
@@ -2946,7 +3080,8 @@ class ValidationDesktopApp(QMainWindow):
                     "SECURITY_POLICY": usr_entry.get("SECURITY_POLICY", ""),
                     "REVIEW_STATUS": review_values.get("REVIEW_STATUS", self.DEFAULT_REVIEW_STATUS),
                     "FINDINGS_DESCRIPTION": findings_description,
-                    "REVIEW_NOTES": review_values.get("REVIEW_NOTES", ""),
+                    "TECH_REVIEW_NOTES": review_values.get("TECH_REVIEW_NOTES", ""),
+                    "BUS_REVIEW_NOTES": review_values.get("BUS_REVIEW_NOTES", ""),
                 }
             )
 
@@ -3030,7 +3165,7 @@ class ValidationDesktopApp(QMainWindow):
                     item.setToolTip(self.format_rtl_text(display_value))
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
-                    if field_name == "REVIEW_NOTES":
+                    if field_name in {"TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES", "REVIEW_NOTES"}:
                         pass  # read-only for audit tool users
 
                     self.user_preview_table.setItem(row_index, column, item)
@@ -3472,6 +3607,9 @@ class ValidationDesktopApp(QMainWindow):
             self._compute_transport_permissions()
             self._compute_debug_permissions()
             self._compute_job_mgmt_permissions()
+
+        self._sync_permissions_findings_into_analysis_summary()
+        self._refresh_audit_summary_table()
 
         self._append_run_log_entries(slot_key, file_paths, result)
         if result.report_path is not None:
@@ -3916,6 +4054,206 @@ class ValidationDesktopApp(QMainWindow):
                 }
                 for user_name, profiles in sorted(client_users.items())
             ]
+
+    @staticmethod
+    def _extract_control_id_from_record_key(record_key: object, fallback_control_id: str) -> str:
+        key_text = str(record_key or "").strip()
+        if "|" in key_text:
+            parsed_control_id = key_text.split("|", 1)[0].strip()
+            if parsed_control_id:
+                return parsed_control_id
+        return fallback_control_id
+
+    @staticmethod
+    def _to_int(value: object) -> int:
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return 0
+
+    def _permission_control_slots(self, control_id: str) -> list[str]:
+        control_slots: dict[str, list[str]] = {
+            "MA-PERM-01": ["UST04"],
+            "MA-USRMGMT-01": ["AGR_1251", "AGR_USERS"],
+            "MA-AUTHMGMT-01": ["AGR_1251", "AGR_USERS"],
+            "MA-RSCDOK99-01": ["AGR_1251", "AGR_USERS"],
+            "MA-DATAMGMT-01": ["AGR_1251", "AGR_USERS"],
+            "MA-TRANSPORT-01": ["AGR_1251", "AGR_USERS"],
+            "MA-DEBUG-01": ["AGR_1251", "AGR_USERS"],
+            "MA-JOBMGMT-01": ["AGR_1251", "AGR_USERS"],
+        }
+        return control_slots.get(control_id, ["AGR_1251", "AGR_USERS"])
+
+    def _permission_source_file_label(self, control_id: str) -> str:
+        labels: list[str] = []
+        for slot_key in self._permission_control_slots(control_id):
+            label = self._get_slot_display_name(slot_key)
+            if label not in labels:
+                labels.append(label)
+        return ", ".join(labels) if labels else "-"
+
+    def _permission_extraction_date_label(self, control_id: str) -> str:
+        extraction_dates: list[str] = []
+        for slot_key in self._permission_control_slots(control_id):
+            extraction_date = self._get_slot_extraction_date(slot_key)
+            if extraction_date and extraction_date not in extraction_dates:
+                extraction_dates.append(extraction_date)
+        return ", ".join(extraction_dates) if extraction_dates else "-"
+
+    def _permission_summary_sources(self) -> list[tuple[str, dict[str, dict[str, Any]]]]:
+        return [
+            ("MA-PERM-01", self.permissions_summary_records),
+            ("MA-USRMGMT-01", self.user_mgmt_summary_records),
+            ("MA-AUTHMGMT-01", self.auth_mgmt_summary_records),
+            ("MA-RSCDOK99-01", self.rscdok99_summary_records),
+            ("MA-DATAMGMT-01", self.data_mgmt_summary_records),
+            ("MA-TRANSPORT-01", self.transport_summary_records),
+            ("MA-DEBUG-01", self.debug_summary_records),
+            ("MA-JOBMGMT-01", self.job_mgmt_summary_records),
+        ]
+
+    def _permission_user_sources(self) -> dict[str, dict[str, list[dict[str, Any]]]]:
+        return {
+            "MA-PERM-01": self.permissions_users_by_control,
+            "MA-USRMGMT-01": self.user_mgmt_users_by_control,
+            "MA-AUTHMGMT-01": self.auth_mgmt_users_by_control,
+            "MA-RSCDOK99-01": self.rscdok99_users_by_control,
+            "MA-DATAMGMT-01": self.data_mgmt_users_by_control,
+            "MA-TRANSPORT-01": self.transport_users_by_control,
+            "MA-DEBUG-01": self.debug_users_by_control,
+            "MA-JOBMGMT-01": self.job_mgmt_users_by_control,
+        }
+
+    def _sync_permissions_findings_into_analysis_summary(self) -> None:
+        permission_user_sources = self._permission_user_sources()
+        permission_control_ids = [
+            control_id
+            for control_id, _records_map in self._permission_summary_sources()
+        ]
+
+        for control_id in permission_control_ids:
+            self.audit_summary_records.pop(control_id, None)
+            self.audit_details_by_control.pop(control_id, None)
+
+        for fallback_control_id, records_map in self._permission_summary_sources():
+            grouped_records: dict[str, list[dict[str, Any]]] = {}
+            for row_data in records_map.values():
+                control_id = str(row_data.get("control_id", "")).strip()
+                if not control_id:
+                    control_id = self._extract_control_id_from_record_key(
+                        row_data.get("record_key", ""),
+                        fallback_control_id,
+                    )
+                grouped_records.setdefault(control_id, []).append(row_data)
+
+            for control_id, rows in grouped_records.items():
+                if not rows:
+                    continue
+
+                control_meta = get_audit_control_definition(control_id)
+                sorted_rows = sorted(rows, key=lambda item: str(item.get("client", "-")))
+                user_map = permission_user_sources.get(control_id, {})
+                all_users: set[tuple[str, str]] = set()
+                finding_users: set[tuple[str, str]] = set()
+
+                for row in sorted_rows:
+                    record_key = str(row.get("record_key", "") or "")
+                    users = user_map.get(record_key, [])
+                    row_has_finding = (
+                        self._to_int(row.get("users_count", 0)) > 0
+                        or str(row.get("status", "")).strip() == "עם ממצא"
+                    )
+                    for user_data in users:
+                        client_name = str(user_data.get("client", "-") or "-")
+                        user_name = str(user_data.get("user_name", "-") or "-").strip()
+                        if not user_name or user_name == "-":
+                            continue
+                        user_key = (client_name, user_name.upper())
+                        all_users.add(user_key)
+                        if row_has_finding:
+                            finding_users.add(user_key)
+
+                if all_users:
+                    total_records = len(all_users)
+                    finding_records = len(finding_users)
+                else:
+                    total_records = sum(max(self._to_int(row.get("users_count", 0)), 0) for row in sorted_rows)
+                    finding_records = sum(
+                        max(self._to_int(row.get("users_count", 0)), 0)
+                        for row in sorted_rows
+                        if str(row.get("status", "")).strip() == "עם ממצא"
+                        or self._to_int(row.get("users_count", 0)) > 0
+                    )
+                valid_records = max(total_records - finding_records, 0)
+
+                self.audit_summary_records[control_id] = {
+                    "control_id": control_id,
+                    "check_type": control_meta.get("check_type", "סקירת הרשאות"),
+                    "source_file": self._permission_source_file_label(control_id),
+                    "extraction_date": self._permission_extraction_date_label(control_id),
+                    "work_environment": self._current_work_environment_label(),
+                    "risk_level": control_meta.get("risk_level", "-"),
+                    "description": control_meta.get("description", "-"),
+                    "valid_records": valid_records,
+                    "finding_records": finding_records,
+                    "total_records": total_records,
+                }
+                source_file_label = self._permission_source_file_label(control_id)
+                extraction_date_label = self._permission_extraction_date_label(control_id)
+                detail_rows: list[dict[str, Any]] = []
+
+                for row in sorted_rows:
+                    record_key = str(row.get("record_key", "") or "")
+                    users = user_map.get(record_key, [])
+                    sorted_users = sorted(
+                        users,
+                        key=lambda item: (
+                            str(item.get("client", "-")),
+                            str(item.get("user_name", "-")),
+                        ),
+                    )
+                    for user_data in sorted_users:
+                        client_name = str(user_data.get("client", "-") or "-")
+                        user_name = str(user_data.get("user_name", "-") or "-")
+                        detail_rows.append(
+                            {
+                                "control_id": control_id,
+                                "source_file": source_file_label,
+                                "extraction_date": extraction_date_label,
+                                "work_environment": self._current_work_environment_label(),
+                                "category": control_meta.get("category", "-"),
+                                "risk_level": row.get("risk_level", control_meta.get("risk_level", "-")),
+                                "description": control_meta.get("description", "-"),
+                                "check_type": control_meta.get("check_type", "סקירת הרשאות"),
+                                "actual_value": user_name,
+                                "expected_value": "לא נמצאו משתמשים",
+                                "status": "עם ממצא",
+                                "full_description": (
+                                    f"משתמש: {user_name}. קליינט: {client_name}. "
+                                    f"{row.get('finding_text', '-')}."
+                                ),
+                            }
+                        )
+
+                if not detail_rows:
+                    detail_rows = [
+                        {
+                            "control_id": control_id,
+                            "source_file": source_file_label,
+                            "extraction_date": extraction_date_label,
+                            "work_environment": self._current_work_environment_label(),
+                            "category": control_meta.get("category", "-"),
+                            "risk_level": control_meta.get("risk_level", "-"),
+                            "description": control_meta.get("description", "-"),
+                            "check_type": control_meta.get("check_type", "סקירת הרשאות"),
+                            "actual_value": "-",
+                            "expected_value": "לא נמצאו משתמשים",
+                            "status": "תקין",
+                            "full_description": "לא נמצאו משתמשים עם ממצא עבור בקרה זו.",
+                        }
+                    ]
+
+                self.audit_details_by_control[control_id] = detail_rows
 
     def _refresh_permissions_summary_table(self) -> None:
         self.permissions_summary_table.setRowCount(0)
@@ -6297,6 +6635,7 @@ class ValidationDesktopApp(QMainWindow):
                 "control_id": control_id,
                 "source_file": source_file,
                 "extraction_date": extraction_date,
+                "work_environment": self._current_work_environment_label(),
                 "category": control_meta.get("category", "-"),
                 "risk_level": control_meta.get("risk_level", "-"),
                 "description": control_meta.get("description", "-"),
@@ -6311,6 +6650,7 @@ class ValidationDesktopApp(QMainWindow):
             "control_id": control_id,
             "source_file": issue.source_file or source_file,
             "extraction_date": extraction_date,
+            "work_environment": self._current_work_environment_label(),
             "category": issue.category or control_meta.get("category", "-"),
             "risk_level": issue.risk_level or control_meta.get("risk_level", "-"),
             "description": issue.description or control_meta.get("description", "-"),
@@ -6356,6 +6696,7 @@ class ValidationDesktopApp(QMainWindow):
                 "check_type": control_meta.get("check_type", "-"),
                 "source_file": source_file_label,
                 "extraction_date": extraction_date,
+                "work_environment": self._current_work_environment_label(),
                 "risk_level": control_meta.get("risk_level", "-"),
                 "description": control_meta.get("description", "-"),
                 "valid_records": valid_records,
@@ -6385,7 +6726,7 @@ class ValidationDesktopApp(QMainWindow):
         if not self.audit_summary_records:
             self.audit_detail_table.setRowCount(0)
             self.audit_detail_table.insertRow(0)
-            for column, value in enumerate(["-", "-", "-", "-", "-", "-", "-", "-", "-", "אין ממצאים להצגה"]):
+            for column, value in enumerate(["-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "אין ממצאים להצגה"]):
                 item = QTableWidgetItem(self.format_rtl_text(value))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.audit_detail_table.setItem(0, column, item)
@@ -6399,6 +6740,7 @@ class ValidationDesktopApp(QMainWindow):
                 str(row_data.get("check_type", "-")),
                 str(row_data.get("source_file", "-")),
                 str(row_data.get("extraction_date", "-")),
+                str(row_data.get("work_environment", "-")),
                 str(row_data.get("risk_level", "-")),
                 str(row_data.get("description", "-")),
                 str(row_data.get("valid_records", 0)),
@@ -6437,6 +6779,7 @@ class ValidationDesktopApp(QMainWindow):
             values = [
                 str(detail.get("source_file", "-")),
                 str(detail.get("extraction_date", "-")),
+                str(detail.get("work_environment", "-")),
                 str(detail.get("category", "-")),
                 str(detail.get("risk_level", "-")),
                 str(detail.get("description", "-")),
@@ -6478,6 +6821,7 @@ class ValidationDesktopApp(QMainWindow):
         field_labels = [
             "קובץ מקור",
             "תאריך הפקה",
+            "סביבת עבודה",
             "קטגוריה",
             "רמת סיכון",
             "תיאור",
@@ -6683,12 +7027,12 @@ class ValidationDesktopApp(QMainWindow):
         sheet.append(export_formal_names)
 
         review_status_col_index: int | None = None
-        review_notes_col_index: int | None = None
+        technical_notes_col_index: int | None = None
         for idx, field in enumerate(export_field_names):
             if field == "REVIEW_STATUS":
                 review_status_col_index = idx + 1  # 1-based Excel column
-            elif field == "REVIEW_NOTES":
-                review_notes_col_index = idx + 1  # 1-based Excel column
+            elif field in {"TECH_REVIEW_NOTES", "REVIEW_NOTES"}:
+                technical_notes_col_index = idx + 1  # 1-based Excel column
 
         total_data_rows = len(sorted_rows)
         for preview_row in sorted_rows:
@@ -6710,17 +7054,17 @@ class ValidationDesktopApp(QMainWindow):
             dv.sqref = f"{col_letter}2:{col_letter}{total_data_rows + 1}"
             sheet.add_data_validation(dv)
 
-        if total_data_rows > 0 and (review_status_col_index is not None or review_notes_col_index is not None):
+        if total_data_rows > 0 and (review_status_col_index is not None or technical_notes_col_index is not None):
             from openpyxl.utils import get_column_letter  # noqa: F811
             warning_fill = PatternFill("solid", fgColor="FFF0C2")
             for excel_row_idx, preview_row in enumerate(sorted_rows, start=2):
                 is_not_ok = preview_row.get("REVIEW_STATUS", "") == "נבדק - לא תקין"
-                has_notes = bool((preview_row.get("REVIEW_NOTES", "") or "").strip())
+                has_notes = bool((preview_row.get("TECH_REVIEW_NOTES", "") or "").strip())
                 if is_not_ok and not has_notes:
                     if review_status_col_index is not None:
                         sheet.cell(row=excel_row_idx, column=review_status_col_index).fill = warning_fill
-                    if review_notes_col_index is not None:
-                        sheet.cell(row=excel_row_idx, column=review_notes_col_index).fill = warning_fill
+                    if technical_notes_col_index is not None:
+                        sheet.cell(row=excel_row_idx, column=technical_notes_col_index).fill = warning_fill
 
         export_path = self.config.output_dir / f"users_review_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         workbook.save(export_path)
@@ -6795,7 +7139,10 @@ class ValidationDesktopApp(QMainWindow):
         mandt_col = col_map.get("MANDT")
         bname_col = col_map["BNAME"]
         status_col = col_map["REVIEW_STATUS"]
-        notes_col = col_map.get("REVIEW_NOTES")
+        tech_notes_col = col_map.get("TECH_REVIEW_NOTES")
+        if tech_notes_col is None:
+            tech_notes_col = col_map.get("REVIEW_NOTES")
+        business_notes_col = col_map.get("BUS_REVIEW_NOTES")
 
         imported_count = 0
         for row_values in rows_iter:
@@ -6808,12 +7155,15 @@ class ValidationDesktopApp(QMainWindow):
             raw_status = row_values[status_col] if status_col < len(row_values) else None
             status_value = self._normalize_reviewer_status(str(raw_status).strip() if raw_status is not None else "")
 
-            raw_notes = row_values[notes_col] if notes_col is not None and notes_col < len(row_values) else None
-            notes_value = str(raw_notes).strip() if raw_notes is not None else ""
+            raw_tech_notes = row_values[tech_notes_col] if tech_notes_col is not None and tech_notes_col < len(row_values) else None
+            tech_notes_value = str(raw_tech_notes).strip() if raw_tech_notes is not None else ""
+            raw_business_notes = row_values[business_notes_col] if business_notes_col is not None and business_notes_col < len(row_values) else None
+            business_notes_value = str(raw_business_notes).strip() if raw_business_notes is not None else ""
 
             current = self.user_reviewer_state.setdefault(review_key, self._default_reviewer_values().copy())
             current["REVIEW_STATUS"] = status_value
-            current["REVIEW_NOTES"] = notes_value
+            current["TECH_REVIEW_NOTES"] = tech_notes_value
+            current["BUS_REVIEW_NOTES"] = business_notes_value
             imported_count += 1
 
         workbook.close()
@@ -6824,6 +7174,80 @@ class ValidationDesktopApp(QMainWindow):
             self,
             "הייבוא הושלם",
             f"יובאו בהצלחה {imported_count} שורות מקובץ הסקירה.",
+        )
+
+    def _email_from_settings(self, settings_key: str) -> str:
+        settings = self._current_system_settings()
+        return str(settings.get(settings_key, "")).strip()
+
+    @staticmethod
+    def _validate_email_address(email_value: str) -> bool:
+        normalized = email_value.strip()
+        return bool(normalized and "@" in normalized and "." in normalized.split("@")[-1])
+
+    def _create_outlook_review_draft(self, recipient_email: str, role_label: str) -> None:
+        if not self._validate_email_address(recipient_email):
+            QMessageBox.warning(self, "מייל לא מוגדר", f"לא הוגדרה כתובת מייל תקינה עבור {role_label} במסך ההגדרות.")
+            return
+
+        export_path = self.export_user_preview_to_excel(open_after_export=False)
+        if export_path is None:
+            return
+
+        if not sys.platform.startswith("win"):
+            QMessageBox.warning(self, "מערכת לא נתמכת", "יצירת טיוטת מייל נתמכת כרגע ב-Windows בלבד.")
+            return
+
+        try:
+            import win32com.client  # type: ignore[import-not-found]
+        except ModuleNotFoundError:
+            install_command = f'"{sys.executable}" -m pip install pywin32'
+            QMessageBox.warning(
+                self,
+                "רכיב חסר ל-Outlook",
+                "לא ניתן ליצור טיוטת Outlook כי חסרה חבילת pywin32.\n\n"
+                f"יש להריץ פעם אחת בסביבת העבודה:\n{install_command}",
+            )
+            return
+        except Exception as error:
+            QMessageBox.warning(self, "Outlook לא זמין", f"לא ניתן לטעון Outlook COM ליצירת טיוטה:\n{error}")
+            return
+
+        try:
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            mail_item = outlook.CreateItem(0)
+            mail_item.To = recipient_email
+            mail_item.Subject = self.format_rtl_text(f"סקירת דוח משתמשים - {datetime.now().strftime('%Y-%m-%d')}")
+            mail_item.HTMLBody = (
+                "<div dir='rtl' style='text-align:right; font-family:Arial, sans-serif; font-size:12pt;'>"
+                "<p>שלום,</p>"
+                "<p>מצורף דוח סקירת משתמשים עדכני מתוך המערכת.</p>"
+                "<p>נא לעבור על הממצאים ולעדכן סטטוס/הערות בהתאם.</p>"
+                "<p>בברכה,<br>מערכת בקרות ITGC</p>"
+                "</div>"
+            )
+            mail_item.Attachments.Add(str(export_path))
+            mail_item.Display(False)
+        except Exception as error:
+            QMessageBox.warning(self, "שגיאת מייל", f"יצירת טיוטת מייל נכשלה:\n{error}")
+            return
+
+        QMessageBox.information(
+            self,
+            "טיוטת מייל נוצרה",
+            f"נוצרה טיוטה ל-{role_label} עם קובץ מצורף:\n{export_path}",
+        )
+
+    def draft_user_review_email_to_business(self) -> None:
+        self._create_outlook_review_draft(
+            recipient_email=self._email_from_settings("business_reviewer_email"),
+            role_label="גורם עסקי",
+        )
+
+    def draft_user_review_email_to_technical(self) -> None:
+        self._create_outlook_review_draft(
+            recipient_email=self._email_from_settings("technical_reviewer_email"),
+            role_label="גורם טכני",
         )
 
     def open_output_folder(self) -> None:
