@@ -71,3 +71,11 @@ Icon?
 /output/
 /data/input/20*.txt
 
+# Excel temp / lock files
+~$*.xlsx
+~$*.xlsm
+
+# Local runtime artifacts
+*.tmp
+*.bak
+

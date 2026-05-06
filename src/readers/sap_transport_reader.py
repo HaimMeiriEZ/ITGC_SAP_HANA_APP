@@ -117,6 +117,8 @@ class SapTransportReader:
             return None
 
         # Derive surrounding fields relative to the transport number position
+        # בפורמט STMS הייצוא אינו תמיד עם כותרות, לכן אנחנו "מעגנים" את הפענוח סביב TRKORR
+        # ומחשבים אינדקסים יחסיים קדימה/אחורה לפי המבנה השכיח.
         date_index = trkorr_index - 2 if trkorr_index >= 2 else None
         time_index = trkorr_index - 1 if trkorr_index >= 1 else None
         client_index = trkorr_index + 1 if trkorr_index + 1 < len(parts) else None
@@ -137,6 +139,7 @@ class SapTransportReader:
         description_parts = tail_parts
         if tail_parts:
             last_token = tail_parts[-1]
+            # כאשר הטוקן האחרון מספרי בלבד, נחשב אותו כ-RC ונשאיר את התיאור נקי ממנו.
             if re.fullmatch(r"\d+", last_token):
                 rc = last_token
                 description_parts = tail_parts[:-1]

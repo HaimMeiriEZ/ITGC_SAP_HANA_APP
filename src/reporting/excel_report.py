@@ -5,6 +5,7 @@ from typing import Any, Iterable
 from openpyxl import Workbook
 
 from src.models.validation_result import ValidationIssue, ValidationResult
+from src.validators.intake_rules import intake_failure_reasons
 
 
 class ExcelReportWriter:
@@ -49,35 +50,11 @@ class ExcelReportWriter:
         else:
             source_label = source_file.name
         sheet.append(["קובץ מקור", source_label])
-        sheet.append(["סיבת קליטה שגויה", ExcelReportWriter._intake_failure_reason_text(result.issues)])
+        sheet.append(["סיבת קליטה שגויה", intake_failure_reasons(result.issues)])
         sheet.append(["פרופיל בדיקה", result.detected_profile or "GENERIC"])
         sheet.append(["מספר קבצים שנבחרו", max(len(result.source_files), 1)])
         sheet.append(["תאריך הפקה", generated_at.strftime("%Y-%m-%d")])
         sheet.append(["שעת הפקה", generated_at.strftime("%H:%M:%S")])
-
-    @staticmethod
-    def _is_intake_issue(issue: ValidationIssue) -> bool:
-        msg = str(issue.message or "")
-        if issue.row_number == 0:
-            return (
-                "עמודת חובה חסרה" in msg
-                or "אינו תואם למבנה" in msg
-                or "נדרשת לפחות" in msg
-            )
-        return issue.row_number > 0 and "ערך חובה חסר" in msg
-
-    @staticmethod
-    def _intake_failure_reason_text(issues: Iterable[ValidationIssue]) -> str:
-        reasons: list[str] = []
-        for issue in issues:
-            if not ExcelReportWriter._is_intake_issue(issue):
-                continue
-            text = str(issue.message or "").strip()
-            if text and text not in reasons:
-                reasons.append(text)
-        if not reasons:
-            return "-"
-        return " | ".join(reasons)
 
     @staticmethod
     def _write_issues(sheet, issues: Iterable[ValidationIssue]) -> None:

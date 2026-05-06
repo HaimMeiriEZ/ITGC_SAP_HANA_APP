@@ -47,9 +47,34 @@ from PySide6.QtWidgets import (
 from src.config import AppConfig
 from src.models.validation_result import ValidationIssue
 from src.pipeline import process_file
+from src.persistence.ui_state_repository import UiStateRepository
 from src.readers.excel_reader import ExcelFileReader
 from src.readers.text_reader import TextFileReader
 from src.reporting.excel_report import ExcelReportWriter
+from src.services.audit_service import (
+    build_audit_detail_row,
+    build_audit_detail_values,
+    build_audit_summary_values,
+    sorted_audit_summary_rows,
+    sync_user_review_completion_finding,
+    upsert_audit_control_data,
+)
+from src.services.user_preview_service import (
+    build_user_preview_rows,
+    filter_user_preview_rows,
+    format_user_preview_value_for_display,
+    get_user_preview_sort_value,
+    parse_user_preview_date,
+)
+from src.services.user_review_service import (
+    build_user_review_incomplete_reason,
+    default_reviewer_values,
+    has_review_note,
+    is_user_review_complete,
+    normalize_review_field,
+    normalize_reviewer_status,
+    reviewer_state_key,
+)
 from src.validators.spec_rules import (
     AUTH_MGMT_PERMISSION_CRITERIA,
     DATA_MGMT_PERMISSION_CRITERIA,
@@ -391,6 +416,7 @@ class ValidationDesktopApp(QMainWindow):
     def __init__(self, base_dir: Path | None = None) -> None:
         super().__init__()
         self.config = AppConfig.default(base_dir or Path.cwd())
+        self.ui_state_repository = UiStateRepository(self.config.output_dir, self.config.input_dir)
         self.config.input_dir.mkdir(parents=True, exist_ok=True)
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         self.report_path: Path | None = None
@@ -1691,7 +1717,7 @@ class ValidationDesktopApp(QMainWindow):
             return fallback
 
     def _system_settings_path(self) -> Path:
-        return self.config.output_dir / "system_settings.json"
+        return self.ui_state_repository.system_settings_path()
 
     def _default_system_settings(self) -> dict[str, Any]:
         return {
@@ -1734,29 +1760,7 @@ class ValidationDesktopApp(QMainWindow):
         }
 
     def _current_system_settings(self) -> dict[str, Any]:
-        defaults = self._default_system_settings()
-        settings_path = self._system_settings_path()
-        if not settings_path.exists():
-            return defaults
-        try:
-            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
-        except Exception:
-            return defaults
-        if not isinstance(loaded, dict):
-            return defaults
-        if "generic_users" not in loaded and "critical_users" in loaded:
-            loaded["generic_users"] = loaded.get("critical_users", [])
-        if "authorized_stms_users" not in loaded and "super_users" in loaded:
-            loaded["authorized_stms_users"] = loaded.get("super_users", [])
-        if "super_users" not in loaded and "authorized_stms_users" in loaded:
-            loaded["super_users"] = loaded.get("authorized_stms_users", [])
-        merged = copy.deepcopy(defaults)
-        for key, value in loaded.items():
-            if isinstance(value, dict) and isinstance(merged.get(key), dict):
-                merged[key].update(value)
-            else:
-                merged[key] = value
-        return merged
+        return self.ui_state_repository.load_system_settings(self._default_system_settings())
 
     def _sync_review_filters_from_settings(self, settings: dict[str, Any]) -> None:
         period_cfg = settings.get("user_review_period", {}) if isinstance(settings, dict) else {}
@@ -1958,9 +1962,7 @@ class ValidationDesktopApp(QMainWindow):
         try:
             settings = self._current_system_settings()
             settings["work_environment"] = self._current_work_environment_code()
-            settings_path = self._system_settings_path()
-            settings_path.parent.mkdir(parents=True, exist_ok=True)
-            settings_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.ui_state_repository.save_system_settings(settings)
         except Exception:
             # Avoid interrupting the user flow if persistence fails.
             pass
@@ -1968,9 +1970,7 @@ class ValidationDesktopApp(QMainWindow):
     def _save_system_settings(self) -> None:
         try:
             settings = self._collect_system_settings_from_form()
-            settings_path = self._system_settings_path()
-            settings_path.parent.mkdir(parents=True, exist_ok=True)
-            settings_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.ui_state_repository.save_system_settings(settings)
             self._sync_review_filters_from_settings(settings)
             self.refresh_user_preview()
             QMessageBox.information(self, "הצלחה", "הגדרות המערכת נשמרו בהצלחה.")
@@ -2219,7 +2219,7 @@ class ValidationDesktopApp(QMainWindow):
 
     @staticmethod
     def _has_review_note(technical_note: object, business_note: object) -> bool:
-        return bool(str(technical_note or "").strip() or str(business_note or "").strip())
+        return has_review_note(technical_note, business_note)
 
     def _is_user_review_complete(
         self,
@@ -2228,17 +2228,15 @@ class ValidationDesktopApp(QMainWindow):
         technical_note: object,
         business_note: object,
     ) -> bool:
-        normalized_status = self._normalize_reviewer_status(review_status)
-        if normalized_status not in self.REVIEWED_STATUSES:
-            return False
-
-        if normalized_status == "נבדק - לא תקין":
-            return self._has_review_note(technical_note, business_note)
-
-        if str(findings_description or "").strip():
-            return self._has_review_note(technical_note, business_note)
-
-        return True
+        return is_user_review_complete(
+            review_status,
+            findings_description,
+            technical_note,
+            business_note,
+            self.REVIEWED_STATUSES,
+            self.REVIEW_STATUS_OPTIONS,
+            self.DEFAULT_REVIEW_STATUS,
+        )
 
     def _load_all_user_preview_rows(self) -> list[dict[str, str]]:
         usr02_rows = self._load_preview_rows("USR02")
@@ -2262,15 +2260,13 @@ class ValidationDesktopApp(QMainWindow):
         return preview_rows, reviewed_rows, incomplete_rows
 
     def _build_user_review_incomplete_reason(self, preview_row: dict[str, str]) -> str:
-        review_status = self._normalize_reviewer_status(preview_row.get("REVIEW_STATUS", ""))
-        findings_description = str(preview_row.get("FINDINGS_DESCRIPTION", "")).strip()
-        if review_status not in self.REVIEWED_STATUSES:
-            return "סטטוס הסקירה עדיין אינו מסומן כמשתמש שנבדק."
-        if review_status == "נבדק - לא תקין":
-            return "המשתמש סומן כלא תקין אך לא הוזנה הערה טכנית או עסקית."
-        if findings_description:
-            return "המשתמש סומן כתקין למרות שקיים ממצא, אך לא הוזנה הערה טכנית או עסקית."
-        return "הסקירה טרם הושלמה בהתאם לכלל ההשלמה שהוגדר."
+        return build_user_review_incomplete_reason(
+            preview_row.get("REVIEW_STATUS", ""),
+            preview_row.get("FINDINGS_DESCRIPTION", ""),
+            self.REVIEWED_STATUSES,
+            self.REVIEW_STATUS_OPTIONS,
+            self.DEFAULT_REVIEW_STATUS,
+        )
 
     def _update_review_row_highlight(self, row_index: int, preview_row: dict[str, str] | None = None) -> None:
         review_status_col: int | None = None
@@ -2582,48 +2578,18 @@ class ValidationDesktopApp(QMainWindow):
         return suggestions.get(slot_key, "")
 
     def _file_dialog_state_path(self) -> Path:
-        return self.config.output_dir / "file_dialog_state.json"
+        return self.ui_state_repository.file_dialog_state_path()
 
     def _load_last_file_dialog_directory(self) -> Path:
-        default_directory = self.config.input_dir
-        if not self._allow_user_preview_persistence:
-            return default_directory
-
-        state_path = self._file_dialog_state_path()
-        if not state_path.exists():
-            return default_directory
-
-        try:
-            raw_data = json.loads(state_path.read_text(encoding="utf-8"))
-        except Exception:
-            return default_directory
-
-        saved_directory = ""
-        if isinstance(raw_data, dict):
-            saved_directory = str(raw_data.get("last_directory", "")).strip()
-
-        candidate_directory = Path(saved_directory).expanduser() if saved_directory else default_directory
-        if candidate_directory.exists() and candidate_directory.is_dir():
-            return candidate_directory
-        return default_directory
+        return self.ui_state_repository.load_last_file_dialog_directory(self._allow_user_preview_persistence)
 
     def _save_last_file_dialog_directory(self, directory_path: object) -> None:
-        if directory_path is None:
-            return
-
-        candidate_directory = Path(str(directory_path)).expanduser()
-        if candidate_directory.is_file():
-            candidate_directory = candidate_directory.parent
-        if not candidate_directory.exists() or not candidate_directory.is_dir():
-            return
-
-        self.last_file_dialog_directory = candidate_directory
-        if not self._allow_user_preview_persistence:
-            return
-
-        state_path = self._file_dialog_state_path()
-        payload = {"last_directory": str(candidate_directory)}
-        state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        saved_directory = self.ui_state_repository.save_last_file_dialog_directory(
+            directory_path,
+            self._allow_user_preview_persistence,
+        )
+        if saved_directory is not None:
+            self.last_file_dialog_directory = saved_directory
 
     def _get_last_file_dialog_directory(self) -> str:
         candidate_directory = getattr(self, "last_file_dialog_directory", self.config.input_dir)
@@ -2632,68 +2598,33 @@ class ValidationDesktopApp(QMainWindow):
         return str(candidate_directory)
 
     def _user_preview_settings_path(self) -> Path:
-        return self.config.output_dir / "user_preview_columns.json"
+        return self.ui_state_repository.user_preview_settings_path()
 
     def _user_reviewer_state_path(self) -> Path:
-        return self.config.output_dir / "user_preview_reviewer_state.json"
+        return self.ui_state_repository.user_reviewer_state_path()
 
     @staticmethod
     def _user_reviewer_state_key(mandt: object, bname: object) -> str:
-        mandt_value = "" if mandt is None else str(mandt).strip()
-        bname_value = "" if bname is None else str(bname).strip()
-        return f"{mandt_value}|{bname_value}"
+        return reviewer_state_key(mandt, bname)
 
     @classmethod
     def _normalize_reviewer_status(cls, value: object) -> str:
-        normalized_value = "" if value is None else str(value).strip()
-        if normalized_value in cls.REVIEW_STATUS_OPTIONS:
-            return normalized_value
-        return cls.DEFAULT_REVIEW_STATUS
+        return normalize_reviewer_status(value, cls.REVIEW_STATUS_OPTIONS, cls.DEFAULT_REVIEW_STATUS)
 
     @classmethod
     def _default_reviewer_values(cls) -> dict[str, str]:
-        return {
-            "REVIEW_STATUS": cls.DEFAULT_REVIEW_STATUS,
-            "TECH_REVIEW_NOTES": "",
-            "BUS_REVIEW_NOTES": "",
-        }
+        return default_reviewer_values(cls.DEFAULT_REVIEW_STATUS)
 
     def _load_user_reviewer_state(self) -> dict[str, dict[str, str]]:
-        if not self._allow_user_preview_persistence:
-            return {}
-
-        state_path = self._user_reviewer_state_path()
-        if not state_path.exists():
-            return {}
-
-        try:
-            raw_data = json.loads(state_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-
-        if not isinstance(raw_data, dict):
-            return {}
-
-        normalized_state: dict[str, dict[str, str]] = {}
-        for review_key, review_values in raw_data.items():
-            if not isinstance(review_values, dict):
-                continue
-            legacy_notes = str(review_values.get("REVIEW_NOTES", "")).strip()
-            normalized_state[str(review_key)] = {
-                "REVIEW_STATUS": self._normalize_reviewer_status(review_values.get("REVIEW_STATUS")),
-                "TECH_REVIEW_NOTES": str(review_values.get("TECH_REVIEW_NOTES", "")).strip() or legacy_notes,
-                "BUS_REVIEW_NOTES": str(review_values.get("BUS_REVIEW_NOTES", "")).strip(),
-            }
-        return normalized_state
+        return self.ui_state_repository.load_user_reviewer_state(
+            self._allow_user_preview_persistence,
+            self._normalize_reviewer_status,
+        )
 
     def _save_user_reviewer_state(self) -> None:
-        if not self._allow_user_preview_persistence:
-            return
-
-        state_path = self._user_reviewer_state_path()
-        state_path.write_text(
-            json.dumps(self.user_reviewer_state, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        self.ui_state_repository.save_user_reviewer_state(
+            self._allow_user_preview_persistence,
+            self.user_reviewer_state,
         )
 
     def _get_reviewer_values(self, mandt: object, bname: object) -> dict[str, str]:
@@ -2709,7 +2640,7 @@ class ValidationDesktopApp(QMainWindow):
         }
 
     def _update_reviewer_value(self, review_key: str, field_name: str, value: object) -> None:
-        normalized_field = "TECH_REVIEW_NOTES" if field_name == "REVIEW_NOTES" else field_name
+        normalized_field = normalize_review_field(field_name)
         if not review_key or normalized_field not in {"REVIEW_STATUS", "TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES"}:
             return
 
@@ -2730,38 +2661,20 @@ class ValidationDesktopApp(QMainWindow):
         return normalized or list(self.DEFAULT_USER_PREVIEW_COLUMNS)
 
     def _load_user_preview_column_selection(self) -> list[str]:
-        if not self._allow_user_preview_persistence:
-            return list(self.DEFAULT_USER_PREVIEW_COLUMNS)
-
-        settings_path = self._user_preview_settings_path()
-        if not settings_path.exists():
-            return list(self.DEFAULT_USER_PREVIEW_COLUMNS)
-
-        try:
-            raw_data = json.loads(settings_path.read_text(encoding="utf-8"))
-        except Exception:
-            return list(self.DEFAULT_USER_PREVIEW_COLUMNS)
-
-        loaded_columns = list(raw_data.get("visible_columns", [])) if isinstance(raw_data, dict) else []
-        settings_version = int(raw_data.get("version", 0)) if isinstance(raw_data, dict) else 0
-
-        for version in range(settings_version + 1, self.CURRENT_USER_PREVIEW_SETTINGS_VERSION + 1):
-            for field_name in self.USER_PREVIEW_SETTINGS_MIGRATIONS.get(version, []):
-                if field_name not in loaded_columns:
-                    loaded_columns.append(field_name)
-
-        return self._normalize_user_preview_columns(loaded_columns)
+        return self.ui_state_repository.load_user_preview_column_selection(
+            self._allow_user_preview_persistence,
+            list(self.DEFAULT_USER_PREVIEW_COLUMNS),
+            self.CURRENT_USER_PREVIEW_SETTINGS_VERSION,
+            self.USER_PREVIEW_SETTINGS_MIGRATIONS,
+            self._normalize_user_preview_columns,
+        )
 
     def _save_user_preview_column_selection(self) -> None:
-        if not self._allow_user_preview_persistence:
-            return
-
-        settings_path = self._user_preview_settings_path()
-        payload = {
-            "version": self.CURRENT_USER_PREVIEW_SETTINGS_VERSION,
-            "visible_columns": self.user_preview_visible_columns,
-        }
-        settings_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.ui_state_repository.save_user_preview_column_selection(
+            self._allow_user_preview_persistence,
+            self.CURRENT_USER_PREVIEW_SETTINGS_VERSION,
+            self.user_preview_visible_columns,
+        )
 
     def _get_user_preview_column_definition(self, field_name: str) -> dict[str, Any]:
         for column in self.USER_PREVIEW_COLUMN_DEFINITIONS:
@@ -2966,37 +2879,16 @@ class ValidationDesktopApp(QMainWindow):
 
     @staticmethod
     def _parse_user_preview_date(raw_value: object) -> datetime | None:
-        normalized_value = "" if raw_value is None else str(raw_value).strip()
-        if not normalized_value:
-            return None
-
-        supported_patterns = [
-            "%Y-%m-%d",
-            "%Y%m%d",
-            "%d.%m.%Y",
-            "%d/%m/%Y",
-            "%d.%m.%y",
-            "%d/%m/%y",
-        ]
-        for pattern in supported_patterns:
-            try:
-                return datetime.strptime(normalized_value, pattern)
-            except ValueError:
-                continue
-        return None
+        return parse_user_preview_date(raw_value)
 
     @classmethod
     def _format_user_preview_value_for_display(cls, field_name: str, value: object) -> str:
-        _ = field_name
-        return "" if value is None else str(value).strip()
+        _ = cls
+        return format_user_preview_value_for_display(field_name, value)
 
     @classmethod
     def _get_user_preview_sort_value(cls, field_name: str, value: object) -> str:
-        normalized_value = "" if value is None else str(value).strip()
-        if field_name in cls.USER_PREVIEW_DATE_FIELDS:
-            parsed_date = cls._parse_user_preview_date(normalized_value)
-            return parsed_date.strftime("%Y%m%d") if parsed_date is not None else ""
-        return normalized_value.casefold()
+        return get_user_preview_sort_value(field_name, value, cls.USER_PREVIEW_DATE_FIELDS)
 
     def _get_user_preview_filter_mode(self) -> str:
         filter_widget = getattr(self, "user_preview_status_filter", None)
@@ -3008,167 +2900,26 @@ class ValidationDesktopApp(QMainWindow):
 
     def _filter_user_preview_rows(self, preview_rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], str]:
         filter_mode = self._get_user_preview_filter_mode()
-        if filter_mode == "all":
-            return preview_rows, ""
-
         start_text = self.audit_period_from_edit.text().strip() if hasattr(self, "audit_period_from_edit") else ""
         end_text = self.audit_period_to_edit.text().strip() if hasattr(self, "audit_period_to_edit") else ""
-        if not start_text or not end_text:
-            return preview_rows, "כדי לסנן לפי פעילות בתקופה יש להזין תאריך התחלה ותאריך סיום."
-        if not start_text:
-            start_text = self._default_extraction_date()
-        if not end_text:
-            end_text = self._default_extraction_date()
-
-        start_date = self._parse_user_preview_date(start_text)
-        end_date = self._parse_user_preview_date(end_text)
-        if start_date is None or end_date is None:
-            return preview_rows, "יש להזין את טווח התאריכים בפורמט YYYY-MM-DD."
-        if start_date > end_date:
-            return preview_rows, "תאריך ההתחלה חייב להיות מוקדם או שווה לתאריך הסיום."
-
-        filtered_rows: list[dict[str, str]] = []
-        for preview_row in preview_rows:
-            last_login_date = self._parse_user_preview_date(preview_row.get("TRDAT", ""))
-            was_active_in_period = last_login_date is not None and start_date <= last_login_date <= end_date
-            if filter_mode == "active" and was_active_in_period:
-                filtered_rows.append(preview_row)
-            elif filter_mode == "inactive" and not was_active_in_period:
-                filtered_rows.append(preview_row)
-
-        return filtered_rows, ""
+        return filter_user_preview_rows(preview_rows, filter_mode, start_text, end_text)
 
     def _build_user_preview_rows(
         self,
         usr02_rows: list[dict[str, Any]],
         combined_rows: list[dict[str, Any]],
     ) -> list[dict[str, str]]:
-        usr02_map: dict[tuple[str, str], dict[str, str]] = {}
-        addr_users_map: dict[tuple[str, str], dict[str, str]] = {}
-        email_by_addr: dict[str, str] = {}
-        email_by_pers: dict[str, str] = {}
-
-        for row in usr02_rows:
-            mandt = self._get_row_value(row, "MANDT")
-            bname = self._get_row_value(row, "BNAME")
-            if not bname:
-                continue
-            raw_uflag = self._get_row_value(row, "UFLAG")
-            usr02_map[(mandt, bname)] = {
-                "MANDT": mandt,
-                "BNAME": bname,
-                "UFLAG": raw_uflag,
-                "STATUS": self._format_user_status(raw_uflag),
-                "TRDAT": self._get_row_value(row, "TRDAT"),
-                "LTIME": self._get_row_value(row, "LTIME"),
-                "GLTGV": self._get_row_value(row, "GLTGV"),
-                "GLTGB": self._get_row_value(row, "GLTGB"),
-                "USTYP": self._get_row_value(row, "USTYP"),
-                "LOCNT": self._get_row_value(row, "LOCNT"),
-                "PWDINITIAL": self._get_row_value(row, "PWDINITIAL"),
-                "PWDCHGDATE": self._get_row_value(row, "PWDCHGDATE"),
-                "PWDSETDATE": self._get_row_value(row, "PWDSETDATE"),
-                "OCOD1": self._get_row_value(row, "OCOD1"),
-                "PASSCODE": self._get_row_value(row, "PASSCODE"),
-                "PWDSALTEDHASH": self._get_row_value(row, "PWDSALTEDHASH"),
-                "SECURITY_POLICY": self._get_row_value(row, "SECURITY_POLICY"),
-            }
-
-        for row in combined_rows:
-            addrnumber = self._get_row_value(row, "ADDRNUMBER")
-            persnumber = self._get_row_value(row, "PERSNUMBER")
-            smtp_addr = self._get_row_value(row, "SMTP_ADDR")
-
-            if smtp_addr:
-                if addrnumber:
-                    email_by_addr[addrnumber] = smtp_addr
-                if persnumber:
-                    email_by_pers[persnumber] = smtp_addr
-
-            bname = self._get_row_value(row, "BNAME")
-            if not bname:
-                continue
-
-            mandt = self._get_row_value(row, "MANDT")
-            key = (mandt, bname)
-            current_entry = addr_users_map.setdefault(
-                key,
-                {
-                    "MANDT": mandt,
-                    "BNAME": bname,
-                    "NAME_FIRST": "",
-                    "NAME_LAST": "",
-                    "NAME_TEXTC": "",
-                    "COMPANY": "",
-                    "DEPARTMENT": "",
-                    "ADDRNUMBER": "",
-                    "PERSNUMBER": "",
-                    "SMTP_ADDR": "",
-                },
-            )
-
-            for field_name in ["NAME_FIRST", "NAME_LAST", "NAME_TEXTC", "COMPANY", "DEPARTMENT", "ADDRNUMBER", "PERSNUMBER", "SMTP_ADDR"]:
-                field_value = self._get_row_value(row, field_name)
-                if field_value and not current_entry[field_name]:
-                    current_entry[field_name] = field_value
-
-        if usr02_map:
-            ordered_keys = sorted(list(usr02_map.keys()), key=lambda item: (item[0], item[1]))
-        else:
-            ordered_keys = sorted(list(addr_users_map.keys()), key=lambda item: (item[0], item[1]))
-
-        preview_rows: list[dict[str, str]] = []
-        extraction_date_text = self._get_slot_extraction_date("USR02")
-        work_environment_label = self._current_work_environment_label()
-
-        for key in ordered_keys:
-            usr_entry = usr02_map.get(key, {})
-            addr_entry = addr_users_map.get(key, {})
-            merged_mandt = usr_entry.get("MANDT") or addr_entry.get("MANDT", "")
-            merged_bname = usr_entry.get("BNAME") or addr_entry.get("BNAME", "")
-            review_values = self._get_reviewer_values(merged_mandt, merged_bname)
-            findings_description = self._build_user_findings_description(usr_entry, extraction_date_text)
-            email_value = (
-                addr_entry.get("SMTP_ADDR", "")
-                or email_by_addr.get(addr_entry.get("ADDRNUMBER", ""), "")
-                or email_by_pers.get(addr_entry.get("PERSNUMBER", ""), "")
-            )
-            preview_rows.append(
-                {
-                    "MANDT": merged_mandt,
-                    "WORK_ENVIRONMENT": work_environment_label,
-                    "BNAME": merged_bname,
-                    "NAME_FIRST": addr_entry.get("NAME_FIRST", ""),
-                    "NAME_LAST": addr_entry.get("NAME_LAST", ""),
-                    "NAME_TEXTC": addr_entry.get("NAME_TEXTC", ""),
-                    "COMPANY": addr_entry.get("COMPANY", ""),
-                    "DEPARTMENT": addr_entry.get("DEPARTMENT", ""),
-                    "SMTP_ADDR": email_value,
-                    "STATUS": usr_entry.get("STATUS", "לא זמין"),
-                    "UFLAG": usr_entry.get("UFLAG", ""),
-                    "ADDRNUMBER": addr_entry.get("ADDRNUMBER", ""),
-                    "PERSNUMBER": addr_entry.get("PERSNUMBER", ""),
-                    "TRDAT": usr_entry.get("TRDAT", ""),
-                    "LTIME": usr_entry.get("LTIME", ""),
-                    "GLTGV": usr_entry.get("GLTGV", ""),
-                    "GLTGB": usr_entry.get("GLTGB", ""),
-                    "USTYP": usr_entry.get("USTYP", ""),
-                    "LOCNT": usr_entry.get("LOCNT", ""),
-                    "PWDINITIAL": usr_entry.get("PWDINITIAL", ""),
-                    "PWDCHGDATE": usr_entry.get("PWDCHGDATE", ""),
-                    "PWDSETDATE": usr_entry.get("PWDSETDATE", ""),
-                    "OCOD1": usr_entry.get("OCOD1", ""),
-                    "PASSCODE": usr_entry.get("PASSCODE", ""),
-                    "PWDSALTEDHASH": usr_entry.get("PWDSALTEDHASH", ""),
-                    "SECURITY_POLICY": usr_entry.get("SECURITY_POLICY", ""),
-                    "REVIEW_STATUS": review_values.get("REVIEW_STATUS", self.DEFAULT_REVIEW_STATUS),
-                    "FINDINGS_DESCRIPTION": findings_description,
-                    "TECH_REVIEW_NOTES": review_values.get("TECH_REVIEW_NOTES", ""),
-                    "BUS_REVIEW_NOTES": review_values.get("BUS_REVIEW_NOTES", ""),
-                }
-            )
-
-        return preview_rows
+        return build_user_preview_rows(
+            usr02_rows,
+            combined_rows,
+            self._get_row_value,
+            self._format_user_status,
+            self._get_slot_extraction_date("USR02"),
+            self._current_work_environment_label(),
+            self._get_reviewer_values,
+            self._build_user_findings_description,
+            self.DEFAULT_REVIEW_STATUS,
+        )
 
     def refresh_user_preview(self) -> None:
         # Prevent nested refresh calls from transient Qt events while the table is rebuilding.
@@ -6714,36 +6465,15 @@ class ValidationDesktopApp(QMainWindow):
         control_meta: dict[str, str],
         control_snapshot: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        if issue is None:
-            return {
-                "control_id": control_id,
-                "source_file": source_file,
-                "extraction_date": extraction_date,
-                "work_environment": self._current_work_environment_label(),
-                "category": control_meta.get("category", "-"),
-                "risk_level": control_meta.get("risk_level", "-"),
-                "description": control_meta.get("description", "-"),
-                "check_type": control_meta.get("check_type", "-"),
-                "actual_value": (control_snapshot or {}).get("actual_value", "-"),
-                "expected_value": (control_snapshot or {}).get("expected_value", "-"),
-                "status": (control_snapshot or {}).get("status", "תקין"),
-                "full_description": (control_snapshot or {}).get("full_description", "לא נמצאו ממצאים עבור הבקרה."),
-            }
-
-        return {
-            "control_id": control_id,
-            "source_file": issue.source_file or source_file,
-            "extraction_date": extraction_date,
-            "work_environment": self._current_work_environment_label(),
-            "category": issue.category or control_meta.get("category", "-"),
-            "risk_level": issue.risk_level or control_meta.get("risk_level", "-"),
-            "description": issue.description or control_meta.get("description", "-"),
-            "check_type": issue.check_type or control_meta.get("check_type", "-"),
-            "actual_value": issue.actual_value or "-",
-            "expected_value": issue.expected_value or "-",
-            "status": issue.status or "עם ממצא",
-            "full_description": issue.full_description or issue.message,
-        }
+        return build_audit_detail_row(
+            issue,
+            control_id,
+            source_file,
+            extraction_date,
+            control_meta,
+            self._current_work_environment_label(),
+            control_snapshot,
+        )
 
     def _upsert_audit_control_data(
         self,
@@ -6752,103 +6482,37 @@ class ValidationDesktopApp(QMainWindow):
         audit_issues: list[ValidationIssue],
         extraction_date: str,
     ) -> None:
-        control_ids = [issue.control_id for issue in audit_issues if issue.control_id]
-        expected_controls = get_profile_audit_controls(getattr(result, "detected_profile", slot_key))
-        all_control_ids = sorted(set(control_ids + expected_controls))
-        if not all_control_ids:
-            return
-
-        source_file_label = ", ".join(getattr(result, "source_files", []) or [self._get_slot_display_name(slot_key)])
-        detected_profile = str(getattr(result, "detected_profile", slot_key) or slot_key).upper()
-        password_snapshots = self._build_password_control_snapshots(getattr(result, "rows", [])) if detected_profile in {"RSPARAM", "TPFET"} else {}
-        for control_id in all_control_ids:
-            control_meta = get_audit_control_definition(control_id)
-            control_issues = [issue for issue in audit_issues if issue.control_id == control_id]
-            finding_records = len(control_issues)
-
-            if control_id == "44":
-                total_records = self._count_stms_control_records(getattr(result, "rows", []))
-            else:
-                total_records = 1
-
-            if total_records <= 0:
-                total_records = max(finding_records, 1)
-            valid_records = max(total_records - finding_records, 0)
-
-            self.audit_summary_records[control_id] = {
-                "control_id": control_id,
-                "check_type": control_meta.get("check_type", "-"),
-                "source_file": source_file_label,
-                "extraction_date": extraction_date,
-                "work_environment": self._current_work_environment_label(),
-                "risk_level": control_meta.get("risk_level", "-"),
-                "description": control_meta.get("description", "-"),
-                "valid_records": valid_records,
-                "finding_records": finding_records,
-                "total_records": total_records,
-            }
-
-            detail_rows = [
-                self._build_audit_detail_row(issue, control_id, source_file_label, extraction_date, control_meta)
-                for issue in control_issues
-            ]
-            if not detail_rows:
-                detail_rows = [
-                    self._build_audit_detail_row(
-                        None,
-                        control_id,
-                        source_file_label,
-                        extraction_date,
-                        control_meta,
-                        password_snapshots.get(control_id),
-                    )
-                ]
-            self.audit_details_by_control[control_id] = detail_rows
+        upsert_audit_control_data(
+            self.audit_summary_records,
+            self.audit_details_by_control,
+            slot_key,
+            result,
+            audit_issues,
+            extraction_date,
+            self._current_work_environment_label(),
+            self._get_slot_display_name(slot_key),
+            get_audit_control_definition,
+            get_profile_audit_controls,
+            self._count_stms_control_records,
+            self._build_password_control_snapshots,
+        )
 
     def _sync_user_review_completion_finding(self) -> None:
         control_id = self.REVIEW_COMPLETION_CONTROL_ID
-        self.audit_summary_records.pop(control_id, None)
-        self.audit_details_by_control.pop(control_id, None)
-
         preview_rows, reviewed_rows, incomplete_rows = self._get_user_review_completion_snapshot()
-        total_rows = len(preview_rows)
-        if total_rows <= 0 or not incomplete_rows:
-            return
-
-        control_meta = get_audit_control_definition(control_id)
-        source_file_label = self._get_slot_display_name("USR02")
-        extraction_date = self._get_slot_extraction_date("USR02") or "-"
-
-        self.audit_summary_records[control_id] = {
-            "control_id": control_id,
-            "check_type": control_meta.get("check_type", "השלמת סקירת משתמשים"),
-            "source_file": source_file_label,
-            "extraction_date": extraction_date,
-            "work_environment": self._current_work_environment_label(),
-            "risk_level": control_meta.get("risk_level", "בינוני"),
-            "description": control_meta.get("description", "סקירת המשתמשים טרם הושלמה במלואה."),
-            "valid_records": reviewed_rows,
-            "finding_records": len(incomplete_rows),
-            "total_records": total_rows,
-        }
-
-        self.audit_details_by_control[control_id] = [
-            {
-                "control_id": control_id,
-                "source_file": source_file_label,
-                "extraction_date": extraction_date,
-                "work_environment": self._current_work_environment_label(),
-                "category": control_meta.get("category", "MA - ניהול גישה"),
-                "risk_level": control_meta.get("risk_level", "בינוני"),
-                "description": control_meta.get("description", "סקירת המשתמשים טרם הושלמה במלואה."),
-                "check_type": control_meta.get("check_type", "השלמת סקירת משתמשים"),
-                "actual_value": str(preview_row.get("BNAME", "-")) or "-",
-                "expected_value": "השלמת סקירה בהתאם לכלל ההשלמה",
-                "status": "עם ממצא",
-                "full_description": self._build_user_review_incomplete_reason(preview_row),
-            }
-            for preview_row in incomplete_rows
-        ]
+        sync_user_review_completion_finding(
+            self.audit_summary_records,
+            self.audit_details_by_control,
+            control_id,
+            get_audit_control_definition(control_id),
+            self._get_slot_display_name("USR02"),
+            self._get_slot_extraction_date("USR02") or "-",
+            self._current_work_environment_label(),
+            reviewed_rows,
+            preview_rows,
+            incomplete_rows,
+            self._build_user_review_incomplete_reason,
+        )
 
     def _refresh_audit_summary_table(self) -> None:
         self._sync_user_review_completion_finding()
@@ -6862,21 +6526,10 @@ class ValidationDesktopApp(QMainWindow):
                 self.audit_detail_table.setItem(0, column, item)
             return
 
-        for row_data in sorted(self.audit_summary_records.values(), key=lambda item: str(item.get("control_id", ""))):
+        for row_data in sorted_audit_summary_rows(self.audit_summary_records):
             row_index = self.audit_summary_table.rowCount()
             self.audit_summary_table.insertRow(row_index)
-            values = [
-                str(row_data.get("control_id", "-")),
-                str(row_data.get("check_type", "-")),
-                str(row_data.get("source_file", "-")),
-                str(row_data.get("extraction_date", "-")),
-                str(row_data.get("work_environment", "-")),
-                str(row_data.get("risk_level", "-")),
-                str(row_data.get("description", "-")),
-                str(row_data.get("valid_records", 0)),
-                str(row_data.get("finding_records", 0)),
-                str(row_data.get("total_records", 0)),
-            ]
+            values = build_audit_summary_values(row_data)
             for column, value in enumerate(values):
                 item = QTableWidgetItem(self.format_rtl_text(value))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -6906,19 +6559,7 @@ class ValidationDesktopApp(QMainWindow):
         for detail in detail_rows:
             row_index = self.audit_detail_table.rowCount()
             self.audit_detail_table.insertRow(row_index)
-            values = [
-                str(detail.get("source_file", "-")),
-                str(detail.get("extraction_date", "-")),
-                str(detail.get("work_environment", "-")),
-                str(detail.get("category", "-")),
-                str(detail.get("risk_level", "-")),
-                str(detail.get("description", "-")),
-                str(detail.get("check_type", "-")),
-                str(detail.get("actual_value", "-")),
-                str(detail.get("expected_value", "-")),
-                str(detail.get("status", "-")),
-                str(detail.get("full_description", "-")),
-            ]
+            values = build_audit_detail_values(detail)
             for column, value in enumerate(values):
                 item = QTableWidgetItem(self.format_rtl_text(value))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)

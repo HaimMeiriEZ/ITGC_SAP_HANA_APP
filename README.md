@@ -1,48 +1,113 @@
-# ITGC SAP HANA App
+# ITGC SAP HANA APP
 
-Initial MVP for loading Excel and TXT files and performing integrity checks.
+כלי Desktop מבוסס Python/PySide6 לתמיכה בתהליכי בקרות ITGC בסביבת SAP HANA APP.
+הכלי מיועד לקליטת קבצי יצוא SAP, זיהוי שגיאות קליטה, הפקת ממצאים לביקורת,
+ותמיכה בתהליך סקירת משתמשים (כולל ייצוא/ייבוא סקירה וטיוטות Outlook).
 
-## First-phase scope
+## מטרות עסקיות
 
-- Load `.txt`, `.csv`, `.xlsx`, and `.xlsm` files
-- Validate required columns
-- Detect missing values in mandatory fields
-- Produce a summary of valid and invalid rows
-- Export an Excel validation report to the output folder
-- Work through a local PySide6 desktop screen in Hebrew with native RTL support
+- שיפור איכות הקליטה של קבצי SAP לפני בדיקות ביקורת.
+- אוטומציה של בדיקות בקרה מרכזיות (גישה, הרשאות, סיסמאות, STMS, ועוד).
+- הפקת דוחות ממצאים ברמת הנהלה ורמת פירוט.
+- ניהול תהליך סקירת משתמשים עם מעקב התקדמות ואכיפת כללי השלמה.
 
-## Project structure
+## יכולות מרכזיות
 
-- `src/readers/` - file readers for text and Excel
-- `src/validators/` - validation engine
-- `src/models/` - shared result models
-- `src/pipeline.py` - orchestrates reading and validation
-- `data/input/` - sample incoming files
-- `data/output/` - generated Excel validation reports
-- `tests/` - automated smoke tests
+- קליטת קבצים בפורמטים `.txt`, `.csv`, `.xlsx`, `.xlsm`.
+- זיהוי פרופיל קובץ (USR02, AGR_1251, UST04, STMS/E070 ועוד).
+- ולידציות מבניות ועסקיות לפי סט בקרות ITGC.
+- הפקת דוח שגיאות קליטה ייעודי כאשר קיימות שגיאות Intake.
+- מסכי ניתוח ממצאים (סיכום ופירוט) וייצוא לאקסל.
+- מסך סקירת משתמשים:
+   - סטטוס סקירה.
+   - הערות גורם טכני וגורם עסקי.
+   - ייצוא/ייבוא קובץ סקירה בתבנית עדכנית.
+   - טיוטות מייל דרך Outlook (Windows).
 
-## Quick start
+## דרישות מערכת
 
-1. Install dependencies:
+- Python `>= 3.10`
+- Windows מומלץ (נדרש עבור Outlook COM / `pywin32`)
+- הרשאות כתיבה לתיקיות:
+   - `data/output/`
+   - `output/`
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+## התקנה מהירה
 
-2. Open the desktop application:
+1. יצירת סביבת עבודה וירטואלית (מומלץ):
 
-   ```bash
-   python -m src.main
-   ```
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+```
 
-3. Validate a file from the command line if needed:
+2. התקנת תלויות Runtime:
 
-   ```bash
-   python -m src.main data/input/sample.txt --required user_id name
-   ```
+```bash
+pip install -r requirements.txt
+```
 
-4. Run tests:
+3. הפעלת האפליקציה:
 
-   ```bash
-   python -m unittest discover -s tests -v
-   ```
+```bash
+python -m src.main
+```
+
+## עבודה דרך CLI (אופציונלי)
+
+אפשר להריץ ולידציה גם מהשורה:
+
+```bash
+python -m src.main data/input/sample.txt --required user_id name
+```
+
+## בדיקות אוטומטיות
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+## מבנה פרויקט
+
+- `src/main.py` - נקודת כניסה ל-UI/CLI.
+- `src/pipeline.py` - אורקסטרציה של טעינה, ולידציה והפקת דוחות.
+- `src/readers/` - קוראי קבצים (טקסט/אקסל/STMS).
+- `src/validators/` - מנוע ולידציה וכללי בקרה.
+- `src/reporting/` - כתיבת דוחות אקסל.
+- `src/ui/` - שכבת הממשק הגרפי PySide6.
+- `src/models/` - מודלי תוצאות ולידציה.
+- `tests/` - בדיקות smoke ורגרסיה.
+
+## תצורת פלטים וקבצי מצב
+
+- `data/output/system_settings.json` - הגדרות מערכת.
+- `data/output/user_preview_reviewer_state.json` - מצב סקירה למשתמשים.
+- `output/` - דוחות אקסל שנוצרים במהלך עבודה.
+
+## כללים חשובים בסקירת משתמשים
+
+משתמש נחשב "נסקר" לפי כללי השלמה עסקיים:
+
+- `נבדק - תקין` ללא ממצא: תקין גם ללא הערה.
+- `נבדק - תקין` עם ממצא: חובה לפחות הערה אחת (טכנית או עסקית).
+- `נבדק - לא תקין`: חובה לפחות הערה אחת (טכנית או עסקית).
+
+כאשר ההשלמה מתחת ל-100%, מוזרק ממצא ייעודי לסיכום ניתוח הבקרות.
+
+## תקלות נפוצות
+
+- שגיאת Outlook COM (`win32com`):
+   יש לוודא התקנת `pywin32` בסביבה הפעילה.
+
+```bash
+python -m pip install pywin32
+```
+
+- קובץ ייבוא סקירה נדחה:
+   יש לייבא קובץ שיוצא מהכלי בתבנית העדכנית (כולל שדות סקירה החדשים).
+
+## הנחיות פיתוח
+
+- לשינויים פונקציונליים להריץ smoke מלאה לפני commit.
+- להעדיף שינויים מדורגים עם בדיקות אחרי כל פאזה.
+- להוסיף הערות קוד רק במקטעים מורכבים ולא טריוויאליים.

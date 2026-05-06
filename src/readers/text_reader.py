@@ -165,6 +165,9 @@ class TextFileReader:
                 for cell in normalized_cells
                 if re.fullmatch(r"[0-9./:\-]+", cell)
             )
+            # ניקוד היוריסטי לזיהוי שורת כותרת:
+            # יותר התאמות למילות כותרת מגדילות ניקוד, בעוד שורה "דאטאית" (תאריכים/מספרים)
+            # מורידה ניקוד כדי להימנע מבחירה בשורת נתונים כשורת כותרת.
             score = (header_matches * 4) + min(identifier_like, len(cells)) - (data_like * 2)
 
             if header_matches >= 2 and len(cells) >= 3:
