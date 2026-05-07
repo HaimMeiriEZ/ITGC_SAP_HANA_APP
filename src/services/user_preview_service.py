@@ -170,6 +170,7 @@ def build_user_preview_rows(
         merged_mandt = usr_entry.get("MANDT") or addr_entry.get("MANDT", "")
         merged_bname = usr_entry.get("BNAME") or addr_entry.get("BNAME", "")
         review_values = get_reviewer_values(merged_mandt, merged_bname)
+        usr_entry["WORK_ENVIRONMENT"] = work_environment_label
         findings_description = build_user_findings_description(usr_entry, extraction_date_text)
         email_value = (
             addr_entry.get("SMTP_ADDR", "")

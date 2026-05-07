@@ -45,6 +45,10 @@ nosetests.xml
 *.cover
 *.py,cover
 
+# Logs
+*.log
+dev_finding_debug.log
+
 # Env
 .env
 

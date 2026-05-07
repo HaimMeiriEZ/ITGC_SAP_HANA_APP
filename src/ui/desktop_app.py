@@ -4,6 +4,7 @@ import re
 import subprocess
 import sys
 import copy
+
 from typing import Any, Sequence
 from datetime import datetime, date
 from pathlib import Path
@@ -2209,6 +2210,21 @@ class ValidationDesktopApp(QMainWindow):
                 return True
         return False
 
+    def _is_developer_user(self, mandt: object, bname: object, settings: dict[str, Any]) -> bool:
+        if not bname or not isinstance(settings, dict):
+            return False
+        normalized_mandt = str(mandt).strip()
+        normalized_bname = str(bname).strip().casefold()
+        dev_users = settings.get("authorized_developers", [])
+        if not isinstance(dev_users, list):
+            return False
+        for row in dev_users:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("MANDT", "")).strip() == normalized_mandt and str(row.get("BNAME", "")).strip().casefold() == normalized_bname:
+                return True
+        return False
+
     def _build_user_findings_description(self, usr_entry: dict[str, str], extraction_date_text: str) -> str:
         findings: list[str] = []
         settings = self._current_system_settings()
@@ -2222,6 +2238,14 @@ class ValidationDesktopApp(QMainWindow):
         is_generic_user = self._is_generic_user(usr_entry.get("BNAME", ""), settings)
         is_locked = self._is_user_locked(usr_entry.get("UFLAG", ""))
         is_active = self._is_user_active_in_period(usr_entry, period_start, period_end)
+
+        work_environment_raw = usr_entry.get("WORK_ENVIRONMENT", "")
+        work_environment = work_environment_raw.strip().upper()
+        mandt_val = usr_entry.get("MANDT", "")
+        bname_val = usr_entry.get("BNAME", "")
+        is_developer = self._is_developer_user(mandt_val, bname_val, settings)
+        if is_developer and work_environment.startswith("FPP"):
+            findings.append("המשתמש הוא מפתח בסביבת ייצור - יש לבחון הרשאות ומומלץ להסיר אותו מהסביבה")
 
         if (is_super_user or is_generic_user) and not is_locked and is_active:
             if is_super_user and is_generic_user:
