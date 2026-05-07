@@ -1666,6 +1666,181 @@ class TestSmoke(unittest.TestCase):
             finally:
                 window.close()
 
+    # ------------------------------------------------------------------ #
+    #  MA-SOD-01 — Developer SOD block tests                              #
+    # ------------------------------------------------------------------ #
+
+    def test_ma_sod_01_control_definition_is_registered(self) -> None:
+        from src.validators.spec_rules import AUDIT_CONTROL_DEFINITIONS
+
+        self.assertIn("MA-SOD-01", AUDIT_CONTROL_DEFINITIONS)
+        definition = AUDIT_CONTROL_DEFINITIONS["MA-SOD-01"]
+        self.assertEqual(definition["category"], "MA - ניהול גישה")
+        self.assertEqual(definition["risk_level"], "גבוה")
+        self.assertIn("הפרדת תפקידים", definition["check_type"])
+        self.assertIn("מפתח", definition["description"])
+
+    def test_authorized_developers_settings_section_exists_in_ui(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            self.assertIn("authorized_developers", window.system_settings_widgets)
+            self.assertIn("authorized_developers", window.system_settings_sections)
+            self.assertIn("authorized_developers", window.system_settings_unavailable_labels)
+
+            dev_table = window.system_settings_widgets["authorized_developers"]
+            self.assertEqual(dev_table.columnCount(), 2)
+            self.assertEqual(dev_table.rowCount(), 0)
+            self.assertEqual(dev_table.horizontalHeaderItem(0).text(), "CLIENT")
+            self.assertEqual(dev_table.horizontalHeaderItem(1).text(), "BNAME מפתח")
+        finally:
+            window.close()
+
+    def test_authorized_developers_settings_are_collected_and_loaded(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=Path(temp_dir))
+            try:
+                dev_table = window.system_settings_widgets.get("authorized_developers")
+                self.assertIsNotNone(dev_table)
+                self.assertEqual(dev_table.rowCount(), 0)
+
+                window._append_super_user_row(dev_table)
+                dev_table.item(0, 0).setText("100")
+                dev_table.item(0, 1).setText("DEVUSER1")
+
+                settings = window._collect_system_settings_from_form()
+                self.assertEqual(settings["authorized_developers"], [{"MANDT": "100", "BNAME": "DEVUSER1"}])
+
+                settings["authorized_developers"] = [{"MANDT": "200", "BNAME": "DEVUSER2"}]
+                window._load_system_settings_into_form(settings, load_review_period=False)
+
+                self.assertEqual(dev_table.rowCount(), 1)
+                self.assertEqual(dev_table.item(0, 0).text(), "200")
+                self.assertEqual(dev_table.item(0, 1).text(), "DEVUSER2")
+            finally:
+                window.close()
+
+    def test_developer_sod_finding_created_for_active_developer_in_fpp(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "100;DEVUSER;0;20260101;080000\n"
+                "100;NORMALUSER;0;20260101;090000\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window._current_system_settings = lambda: {
+                    "authorized_developers": [{"MANDT": "100", "BNAME": "DEVUSER"}],
+                    "user_review_period": {"start_date": "2026-01-01", "end_date": "2026-03-31"},
+                }
+                window._current_work_environment_code = lambda: "FPP"
+
+                window.refresh_user_preview()
+
+                summary = window.audit_summary_records.get("MA-SOD-01")
+                self.assertIsNotNone(summary)
+                assert summary is not None
+                self.assertEqual(summary["finding_records"], 1)
+                self.assertEqual(summary["valid_records"], 0)
+                self.assertEqual(summary["total_records"], 1)
+
+                details = window.audit_details_by_control.get("MA-SOD-01")
+                self.assertIsNotNone(details)
+                assert details is not None
+                self.assertEqual(len(details), 1)
+                self.assertEqual(details[0]["actual_value"], "DEVUSER")
+                self.assertEqual(details[0]["status"], "עם ממצא")
+                self.assertIn("DEVUSER", details[0]["full_description"])
+                self.assertIn("100", details[0]["full_description"])
+            finally:
+                window.close()
+
+    def test_developer_sod_finding_not_created_for_locked_developer(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "100;DEVUSER;64;20260101;080000\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window._current_system_settings = lambda: {
+                    "authorized_developers": [{"MANDT": "100", "BNAME": "DEVUSER"}],
+                    "user_review_period": {"start_date": "2026-01-01", "end_date": "2026-03-31"},
+                }
+                window._current_work_environment_code = lambda: "FPP"
+
+                window.refresh_user_preview()
+
+                summary = window.audit_summary_records.get("MA-SOD-01")
+                self.assertIsNotNone(summary)
+                assert summary is not None
+                self.assertEqual(summary["finding_records"], 0)
+                self.assertEqual(summary["valid_records"], 1)
+                self.assertEqual(summary["total_records"], 1)
+                self.assertNotIn("MA-SOD-01", window.audit_details_by_control)
+            finally:
+                window.close()
+
+    def test_developer_sod_finding_skipped_for_non_fpp_environment(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            usr02_path = base_dir / "usr02_100.txt"
+            usr02_path.write_text(
+                "MANDT;BNAME;UFLAG;TRDAT;LTIME\n"
+                "100;DEVUSER;0;20260101;080000\n",
+                encoding="utf-8",
+            )
+
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=base_dir)
+            try:
+                window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
+                window._current_system_settings = lambda: {
+                    "authorized_developers": [{"MANDT": "100", "BNAME": "DEVUSER"}],
+                    "user_review_period": {"start_date": "2026-01-01", "end_date": "2026-03-31"},
+                }
+                window._current_work_environment_code = lambda: "FPD"
+
+                window.refresh_user_preview()
+
+                self.assertNotIn("MA-SOD-01", window.audit_summary_records)
+                self.assertNotIn("MA-SOD-01", window.audit_details_by_control)
+            finally:
+                window.close()
+
+    def test_developer_sod_finding_cleared_when_dev_list_is_empty(self) -> None:
+        get_qt_app()
+        window = ValidationDesktopApp()
+        try:
+            window.audit_summary_records["MA-SOD-01"] = {"dummy": True}
+            window.audit_details_by_control["MA-SOD-01"] = [{"dummy": True}]
+
+            window._current_system_settings = lambda: {
+                "authorized_developers": [],
+                "user_review_period": {"start_date": "2026-01-01", "end_date": "2026-03-31"},
+            }
+            window._current_work_environment_code = lambda: "FPP"
+
+            window._sync_developer_sod_finding()
+
+            self.assertNotIn("MA-SOD-01", window.audit_summary_records)
+            self.assertNotIn("MA-SOD-01", window.audit_details_by_control)
+        finally:
+            window.close()
+
     def test_agr_1251_allows_empty_high_value_in_normal_sap_rows(self) -> None:
         with TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "agr_1251_100.txt"

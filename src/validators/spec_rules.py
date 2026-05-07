@@ -244,6 +244,12 @@ AUDIT_CONTROL_DEFINITIONS: dict[str, dict[str, str]] = {
         "check_type": "השלמת סקירת משתמשים",
         "description": "סקירת המשתמשים טרם הושלמה במלואה בהתאם לכלל ההשלמה שהוגדר.",
     },
+    "MA-SOD-01": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "הפרדת תפקידים - מפתחים בסביבת ייצור",
+        "description": "זיהוי מפתחים המוגדרים כמשתמשים פעילים בסביבת הייצור (Segregation of Duties).",
+    },
 }
 
 PROFILE_AUDIT_CONTROLS: dict[str, list[str]] = {

@@ -1525,6 +1525,12 @@ class ValidationDesktopApp(QMainWindow):
         self.system_settings_unavailable_labels["authorized_stms_users"] = authorized_stms_unavailable_label
         self.system_settings_unavailable_labels["super_users"] = authorized_stms_unavailable_label
 
+        dev_group, dev_table, dev_unavailable_label = self._build_developer_list_section()
+        self.settings_layout.addWidget(dev_group)
+        self.system_settings_widgets["authorized_developers"] = dev_table
+        self.system_settings_sections["authorized_developers"] = dev_group
+        self.system_settings_unavailable_labels["authorized_developers"] = dev_unavailable_label
+
         generic_users_group = self._add_settings_text_list_section(
             "generic_users",
             "משתמשים גנריים",
@@ -1678,6 +1684,36 @@ class ValidationDesktopApp(QMainWindow):
 
         return group, table, unavailable_label
 
+    def _build_developer_list_section(self) -> tuple[QGroupBox, QTableWidget, QLabel]:
+        group, layout, unavailable_label = self._build_settings_group(
+            "רשימת מפתחים - הפרדת תפקידים",
+            "רשימת משתמשים המוגדרים כמפתחים בארגון. הבקרה תזהה אם משתמשים אלו קיימים ופעילים בסביבת הייצור.",
+        )
+        table = QTableWidget(0, 2)
+        table.setItemDelegate(_RightAlignDelegate(table))
+        table.setHorizontalHeaderLabels(["CLIENT", "BNAME מפתח"])
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.setMinimumHeight(140)
+        layout.addWidget(table)
+
+        control_row = QWidget()
+        control_layout = QHBoxLayout(control_row)
+        control_layout.setContentsMargins(0, 0, 0, 0)
+        control_layout.setSpacing(8)
+        control_layout.addStretch(1)
+
+        add_button = QPushButton(self.format_ui_rtl_text("הוסף שורה"))
+        remove_button = QPushButton(self.format_ui_rtl_text("הסר שורה"))
+        add_button.clicked.connect(lambda: self._append_super_user_row(table))
+        remove_button.clicked.connect(lambda: self._remove_selected_super_user_row(table))
+        control_layout.addWidget(remove_button)
+        control_layout.addWidget(add_button)
+        layout.addWidget(control_row)
+
+        return group, table, unavailable_label
+
     def _append_super_user_row(self, table: QTableWidget) -> None:
         row = table.rowCount()
         table.insertRow(row)
@@ -1726,6 +1762,7 @@ class ValidationDesktopApp(QMainWindow):
             "technical_reviewer_email": "",
             "generic_users": ["SAP", "DDIC", "TMSADM", "SAPCPIC"],
             "authorized_stms_users": [],
+            "authorized_developers": [],
             "super_users": [],
             "critical_roles": ["SAP_ALL", "SAP_NEW"],
             "critical_privileges": ["S_TABU_DIS", "S_USER_GRP", "S_USER_AGR"],
@@ -1808,6 +1845,20 @@ class ValidationDesktopApp(QMainWindow):
                             authorized_table.setItem(row, 0, QTableWidgetItem(mandt))
                             authorized_table.setItem(row, 1, QTableWidgetItem(bname))
 
+        dev_table = self.system_settings_widgets.get("authorized_developers")
+        dev_list = settings.get("authorized_developers", [])
+        if isinstance(dev_table, QTableWidget):
+            dev_table.setRowCount(0)
+            if isinstance(dev_list, list):
+                for dev_entry in dev_list:
+                    if isinstance(dev_entry, dict):
+                        mandt = str(dev_entry.get("MANDT", "")).strip()
+                        bname = str(dev_entry.get("BNAME", "")).strip()
+                        row = dev_table.rowCount()
+                        dev_table.insertRow(row)
+                        dev_table.setItem(row, 0, QTableWidgetItem(mandt))
+                        dev_table.setItem(row, 1, QTableWidgetItem(bname))
+
         if load_review_period:
             period_cfg = settings.get("user_review_period", {}) if isinstance(settings, dict) else {}
             start_text = str(period_cfg.get("start_date", self._default_extraction_date())).strip()
@@ -1882,6 +1933,18 @@ class ValidationDesktopApp(QMainWindow):
                     authorized_users.append({"MANDT": mandt_text, "BNAME": bname_text})
         settings["authorized_stms_users"] = authorized_users
         settings["super_users"] = authorized_users
+
+        dev_table = self.system_settings_widgets.get("authorized_developers")
+        dev_list: list[dict[str, str]] = []
+        if isinstance(dev_table, QTableWidget):
+            for row_index in range(dev_table.rowCount()):
+                m_item = dev_table.item(row_index, 0)
+                b_item = dev_table.item(row_index, 1)
+                m_val = m_item.text().strip() if m_item else ""
+                b_val = b_item.text().strip() if b_item else ""
+                if m_val or b_val:
+                    dev_list.append({"MANDT": m_val, "BNAME": b_val})
+        settings["authorized_developers"] = dev_list
 
         period_start_widget = self.system_settings_widgets.get("user_review_period.start_date")
         period_end_widget = self.system_settings_widgets.get("user_review_period.end_date")
@@ -6514,8 +6577,82 @@ class ValidationDesktopApp(QMainWindow):
             self._build_user_review_incomplete_reason,
         )
 
+    def _sync_developer_sod_finding(self) -> None:
+        control_id = "MA-SOD-01"
+        self.audit_summary_records.pop(control_id, None)
+        self.audit_details_by_control.pop(control_id, None)
+
+        if self._current_work_environment_code() != "FPP":
+            return
+
+        settings = self._current_system_settings()
+        dev_list = settings.get("authorized_developers", [])
+        if not dev_list:
+            return
+
+        usr02_rows = self._load_preview_rows("USR02")
+        if not usr02_rows:
+            return
+
+        control_meta = get_audit_control_definition(control_id)
+        dev_lookup = {(str(d.get("MANDT", "")).strip(), str(d.get("BNAME", "")).strip().upper()) for d in dev_list}
+        
+        findings: list[dict[str, Any]] = []
+        active_developers_count = 0
+        
+        for row in usr02_rows:
+            mandt = self._get_row_value(row, "MANDT")
+            bname = self._get_row_value(row, "BNAME").upper()
+            uflag = self._get_row_value(row, "UFLAG")
+            
+            if (mandt, bname) in dev_lookup and not self._is_user_locked(uflag):
+                active_developers_count += 1
+                findings.append({
+                    "control_id": control_id,
+                    "source_file": self._get_slot_display_name("USR02"),
+                    "extraction_date": self._get_slot_extraction_date("USR02"),
+                    "work_environment": self._current_work_environment_label(),
+                    "category": control_meta.get("category", "-"),
+                    "risk_level": control_meta.get("risk_level", "-"),
+                    "description": control_meta.get("description", "-"),
+                    "check_type": control_meta.get("check_type", "-"),
+                    "actual_value": bname,
+                    "expected_value": "מפתח ללא גישת ייצור",
+                    "status": "עם ממצא",
+                    "full_description": f"המשתמש {bname} (MANDT {mandt}) מוגדר כמפתח וזוהה כפעיל בסביבת הייצור.",
+                })
+
+        if findings:
+            self.audit_summary_records[control_id] = {
+                "control_id": control_id,
+                "check_type": control_meta.get("check_type"),
+                "source_file": self._get_slot_display_name("USR02"),
+                "extraction_date": self._get_slot_extraction_date("USR02"),
+                "work_environment": self._current_work_environment_label(),
+                "risk_level": control_meta.get("risk_level"),
+                "description": control_meta.get("description"),
+                "valid_records": len(dev_list) - active_developers_count,
+                "finding_records": active_developers_count,
+                "total_records": len(dev_list),
+            }
+            self.audit_details_by_control[control_id] = findings
+        else:
+            self.audit_summary_records[control_id] = {
+                "control_id": control_id,
+                "check_type": control_meta.get("check_type"),
+                "source_file": self._get_slot_display_name("USR02"),
+                "extraction_date": self._get_slot_extraction_date("USR02"),
+                "work_environment": self._current_work_environment_label(),
+                "risk_level": control_meta.get("risk_level"),
+                "description": control_meta.get("description"),
+                "valid_records": len(dev_list),
+                "finding_records": 0,
+                "total_records": len(dev_list),
+            }
+
     def _refresh_audit_summary_table(self) -> None:
         self._sync_user_review_completion_finding()
+        self._sync_developer_sod_finding()
         self.audit_summary_table.setRowCount(0)
         if not self.audit_summary_records:
             self.audit_detail_table.setRowCount(0)
