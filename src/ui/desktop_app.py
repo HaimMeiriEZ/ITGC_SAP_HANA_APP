@@ -1434,6 +1434,21 @@ class ValidationDesktopApp(QMainWindow):
             QTableWidget::item {
                 padding-right: 4px;
             }
+            QComboBox {
+                background-color: #eef3fc;
+                border: 1px solid #b7c4d8;
+                border-radius: 4px;
+                padding: 3px 6px;
+            }
+            QComboBox:hover {
+                background-color: #dbe7f8;
+                border-color: #7a9ec8;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #f5f8ff;
+                border: 1px solid #b7c4d8;
+                selection-background-color: #dbe7f8;
+            }
             """
         )
 
