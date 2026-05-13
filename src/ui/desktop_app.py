@@ -13,9 +13,10 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from PySide6.QtCore import QCoreApplication, QDate, QObject, QThread, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QStyledItemDelegate,
     QSizePolicy,
     QTabWidget,
@@ -45,10 +46,10 @@ from PySide6.QtWidgets import (
     QHeaderView,
 )
 
-from src.config import AppConfig
+from src.config import AppConfig, CONTROL_GROUPS, CONTROL_LABELS, SLOT_DEFAULT_CONTROLS
 from src.models.validation_result import ValidationIssue
 from src.pipeline import process_file
-from src.persistence.ui_state_repository import UiStateRepository
+from src.persistence.ui_state_repository import IpeEvidenceRepository, UiStateRepository
 from src.readers.excel_reader import ExcelFileReader
 from src.readers.text_reader import TextFileReader
 from src.reporting.excel_report import ExcelReportWriter
@@ -167,6 +168,92 @@ class SlotValidationWorker(QObject):
             self.failed.emit(self.slot_key, list(self.file_paths), str(error))
         finally:
             self.finished.emit()
+
+
+# ---------------------------------------------------------------------------
+# IPE Evidence: dialog for tagging a screenshot to one or more audit controls
+# ---------------------------------------------------------------------------
+
+class IpeControlTagDialog(QDialog):
+    """Let the user pick which audit controls a screenshot belongs to.
+
+    Pre-selects the default controls for the given *slot_key* based on
+    ``SLOT_DEFAULT_CONTROLS`` from config.  The user may freely check /
+    uncheck any combination before clicking OK.
+    """
+
+    def __init__(
+        self,
+        slot_key: str,
+        filename: str,
+        preselected: list[str] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("שייך ראיה לבקרות")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumWidth(480)
+
+        defaults = set(preselected if preselected is not None else SLOT_DEFAULT_CONTROLS.get(slot_key, []))
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        header = QLabel(f"<b>קובץ:</b> {filename}<br><b>סלוט:</b> {slot_key}")
+        header.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        header.setAlignment(Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(header)
+
+        instruction = QLabel("סמן את הבקרות הקשורות לראיה זו:")
+        instruction.setAlignment(Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(instruction)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(280)
+        container = QWidget()
+        container.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        container_layout = QVBoxLayout(container)
+        container_layout.setSpacing(4)
+        container_layout.setContentsMargins(8, 8, 8, 8)
+
+        self._checkboxes: dict[str, QCheckBox] = {}
+
+        seen_ids: set[str] = set()
+        for group_label, control_ids in CONTROL_GROUPS:
+            group_box = QGroupBox(group_label)
+            group_box.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            group_box.setAlignment(Qt.AlignmentFlag.AlignRight)
+            group_layout = QVBoxLayout(group_box)
+            group_layout.setSpacing(3)
+            group_layout.setContentsMargins(8, 6, 8, 6)
+            for ctrl_id in control_ids:
+                if ctrl_id in seen_ids:
+                    continue
+                seen_ids.add(ctrl_id)
+                label_text = CONTROL_LABELS.get(ctrl_id, ctrl_id)
+                cb = QCheckBox(label_text)
+                cb.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                cb.setChecked(ctrl_id in defaults)
+                group_layout.addWidget(cb)
+                self._checkboxes[ctrl_id] = cb
+            container_layout.addWidget(group_box)
+
+        container_layout.addStretch(1)
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selected_control_ids(self) -> list[str]:
+        return [ctrl_id for ctrl_id, cb in self._checkboxes.items() if cb.isChecked()]
 
 
 class ValidationDesktopApp(QMainWindow):
@@ -418,6 +505,10 @@ class ValidationDesktopApp(QMainWindow):
         super().__init__()
         self.config = AppConfig.default(base_dir or Path.cwd())
         self.ui_state_repository = UiStateRepository(self.config.output_dir, self.config.input_dir)
+        self.ipe_repository = IpeEvidenceRepository(
+            self.config.output_dir, base_dir or Path.cwd()
+        )
+        self.ipe_evidence_data: dict[str, list[dict[str, Any]]] = self.ipe_repository.load()
         self.config.input_dir.mkdir(parents=True, exist_ok=True)
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         self.report_path: Path | None = None
@@ -465,6 +556,7 @@ class ValidationDesktopApp(QMainWindow):
 
         self._configure_window()
         self._build_ui()
+        self._populate_all_slot_thumbnails()
         self._load_system_settings_into_form(
             self._current_system_settings(),
             load_review_period=self._system_settings_path().exists(),
@@ -559,11 +651,6 @@ class ValidationDesktopApp(QMainWindow):
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(8)
         buttons_layout.addStretch(1)
-
-        self.clear_last_load_button = QPushButton(self.format_ui_rtl_text("נקה טעינה אחרונה"))
-        self.clear_last_load_button.clicked.connect(self.clear_last_loaded_slot)
-        # ...existing code for the rest of _build_ui...
-        buttons_layout.addWidget(self.clear_last_load_button)
 
         self.clear_button = QPushButton(self.format_ui_rtl_text("נקה מסך"))
         self.clear_button.clicked.connect(self.clear_results)
@@ -1093,6 +1180,36 @@ class ValidationDesktopApp(QMainWindow):
                         slot_buttons_layout.addWidget(select_button)
                         slot_buttons_layout.addWidget(clear_slot_button)
 
+                        # IPE evidence button
+                        ipe_button = QPushButton("📎 ראיה (IPE)")
+                        ipe_button.setToolTip("צרף תמונת מסך כראיית שליפה אותנטית (IPE)")
+                        ipe_button.setMinimumHeight(34)
+                        ipe_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                        ipe_button.setStyleSheet(
+                            "QPushButton { background-color: #e8f4fd; border: 1px solid #90caf9; color: #0d47a1; }"
+                            "QPushButton:hover { background-color: #bbdefb; }"
+                        )
+                        ipe_button.clicked.connect(lambda _checked=False, sk=slot_key: self._add_ipe_evidence(sk))
+
+                        slot_buttons_layout.addWidget(ipe_button)
+
+                        # Thumbnail strip (hidden until images are attached)
+                        thumb_scroll = QScrollArea()
+                        thumb_scroll.setWidgetResizable(True)
+                        thumb_scroll.setFixedHeight(90)
+                        thumb_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+                        thumb_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                        thumb_scroll.setVisible(False)
+                        thumb_scroll.setStyleSheet("QScrollArea { border: 1px solid #90caf9; background: #f5f9ff; }")
+
+                        thumb_container = QWidget()
+                        thumb_container.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+                        thumb_layout = QHBoxLayout(thumb_container)
+                        thumb_layout.setContentsMargins(4, 4, 4, 4)
+                        thumb_layout.setSpacing(6)
+                        thumb_layout.addStretch(1)
+                        thumb_scroll.setWidget(thumb_container)
+
                         category_layout.setRowMinimumHeight(section_row, 42)
                         category_layout.addWidget(slot_title, section_row, 3)
                         category_layout.addWidget(description, section_row, 2)
@@ -1105,11 +1222,17 @@ class ValidationDesktopApp(QMainWindow):
                         category_layout.setRowMinimumHeight(section_row, 34)
                         category_layout.addWidget(extraction_date_row, section_row, 0, 1, 4)
                         section_row += 1
+                        # thumbnail strip row (hidden by default)
+                        category_layout.addWidget(thumb_scroll, section_row, 0, 1, 4)
+                        section_row += 1
 
                         self.slot_widgets[slot_key] = {
                             "path_label": status_label,
                             "button": select_button,
                             "clear_button": clear_slot_button,
+                            "ipe_button": ipe_button,
+                            "thumb_scroll": thumb_scroll,
+                            "thumb_layout": thumb_layout,
                             "metadata": metadata,
                             "selected_paths": [],
                             "extraction_date_edit": extraction_date_edit,
@@ -2513,22 +2636,24 @@ class ValidationDesktopApp(QMainWindow):
         if not isinstance(label, QLabel):
             return
 
+        # Apply stylesheet indicator first: Qt's setStyleSheet resets QLabel
+        # alignment to the parent's RTL default, so we must call it before
+        # setting alignment and text.
+        self._update_slot_ipe_indicator(slot_key)
+
         paths = file_paths if file_paths is not None else list(widget_data.get("selected_paths", []))
         if not paths:
             label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
             label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             label.setText(self.format_ui_rtl_text("טרם נבחר קובץ"))
-            return
-
-        if len(paths) == 1:
+        elif len(paths) == 1:
             label.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
             label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             label.setText(self.format_rtl_text(paths[0]))
-            return
-
-        label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        label.setText(self.format_ui_rtl_text(self._format_selected_files(paths)))
+        else:
+            label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            label.setText(self.format_ui_rtl_text(self._format_selected_files(paths)))
 
     def _remember_slot_load(self, slot_key: str) -> None:
         self.load_history = [item for item in self.load_history if item != slot_key]
@@ -2553,6 +2678,7 @@ class ValidationDesktopApp(QMainWindow):
         if slot_key in self.USER_PREVIEW_SLOTS:
             self.refresh_user_preview()
         self._apply_system_settings_availability()
+        self._update_slot_ipe_indicator(slot_key)
 
     def clear_last_loaded_slot(self) -> None:
         while self.load_history:
@@ -2561,6 +2687,119 @@ class ValidationDesktopApp(QMainWindow):
                 self.clear_slot_selection(last_slot_key)
                 return
             self.load_history.pop()
+
+    # ------------------------------------------------------------------
+    # IPE Evidence helpers
+    # ------------------------------------------------------------------
+
+    def _add_ipe_evidence(self, slot_key: str) -> None:
+        """Open a file picker for images and let the user tag controls."""
+        image_filter = "Images (*.png *.jpg *.jpeg *.bmp *.tiff *.tif *.gif);;All files (*.*)"
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, f"בחירת תמונות ראיה עבור {slot_key}", "", image_filter
+        )
+        if not file_paths:
+            return
+
+        for path_str in file_paths:
+            source = Path(path_str)
+            dlg = IpeControlTagDialog(slot_key, source.name, parent=self)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                continue
+            control_ids = dlg.selected_control_ids()
+            entry = self.ipe_repository.add_image(slot_key, source, control_ids, self.ipe_evidence_data)
+            self._append_thumbnail(slot_key, entry)
+            self._update_slot_ipe_indicator(slot_key)
+
+    def _remove_ipe_evidence(self, slot_key: str, image_id: str) -> None:
+        """Remove a single IPE image from the slot."""
+        self.ipe_repository.remove_image(slot_key, image_id, self.ipe_evidence_data)
+        self._refresh_slot_thumbnails(slot_key)
+        self._update_slot_ipe_indicator(slot_key)
+
+    def _append_thumbnail(self, slot_key: str, entry: dict[str, Any]) -> None:
+        """Add a single thumbnail widget to the slot's thumbnail strip."""
+        widget_data = self.slot_widgets.get(slot_key)
+        if widget_data is None:
+            return
+        thumb_layout: QHBoxLayout = widget_data["thumb_layout"]
+        thumb_scroll: QScrollArea = widget_data["thumb_scroll"]
+
+        thumb_widget = self._build_thumbnail_widget(slot_key, entry)
+        # Insert before the trailing stretch (last item)
+        count = thumb_layout.count()
+        thumb_layout.insertWidget(count - 1, thumb_widget)
+
+        thumb_scroll.setVisible(True)
+
+    def _build_thumbnail_widget(self, slot_key: str, entry: dict[str, Any]) -> QWidget:
+        """Return a small widget with an image preview and a remove button."""
+        image_id: str = entry.get("id", "")
+        stored_path = entry.get("stored_path", "")
+        filename = entry.get("original_filename", stored_path)
+        control_ids: list[str] = entry.get("control_ids", [])
+
+        container = QWidget()
+        container.setFixedSize(90, 82)
+        container.setToolTip(
+            f"{filename}\nבקרות: {', '.join(control_ids) if control_ids else '—'}"
+        )
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
+
+        thumb_label = QLabel()
+        thumb_label.setFixedSize(82, 62)
+        thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        thumb_label.setStyleSheet("border: 1px solid #90caf9; background: #ffffff;")
+        pixmap = QPixmap(stored_path)
+        if pixmap.isNull():
+            thumb_label.setText("🖼")
+        else:
+            thumb_label.setPixmap(pixmap.scaled(82, 62, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        layout.addWidget(thumb_label)
+
+        remove_btn = QPushButton("✕")
+        remove_btn.setFixedHeight(16)
+        remove_btn.setStyleSheet(
+            "QPushButton { font-size: 10px; color: #c62828; border: none; background: transparent; }"
+            "QPushButton:hover { color: #b71c1c; text-decoration: underline; }"
+        )
+        remove_btn.setToolTip("הסר ראיה")
+        remove_btn.clicked.connect(lambda _checked=False, sk=slot_key, iid=image_id: self._remove_ipe_evidence(sk, iid))
+        layout.addWidget(remove_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        return container
+
+    def _refresh_slot_thumbnails(self, slot_key: str) -> None:
+        """Rebuild the thumbnail strip for *slot_key* from current evidence data."""
+        widget_data = self.slot_widgets.get(slot_key)
+        if widget_data is None:
+            return
+        thumb_layout: QHBoxLayout = widget_data["thumb_layout"]
+        thumb_scroll: QScrollArea = widget_data["thumb_scroll"]
+
+        # Remove all existing thumbnail widgets (keep the trailing stretch)
+        while thumb_layout.count() > 1:
+            item = thumb_layout.takeAt(0)
+            if item is not None:
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+
+        entries = self.ipe_evidence_data.get(slot_key, [])
+        for entry in entries:
+            thumb_widget = self._build_thumbnail_widget(slot_key, entry)
+            thumb_layout.insertWidget(thumb_layout.count() - 1, thumb_widget)
+
+        thumb_scroll.setVisible(bool(entries))
+
+    def _populate_all_slot_thumbnails(self) -> None:
+        """Called once after _build_ui to restore thumbnails from persisted evidence."""
+        for slot_key in self.slot_widgets:
+            if self.ipe_evidence_data.get(slot_key):
+                self._refresh_slot_thumbnails(slot_key)
+            self._update_slot_ipe_indicator(slot_key)
 
     def choose_file(self, slot_key: str) -> None:
         initial_directory = self._get_last_file_dialog_directory()
@@ -3192,6 +3431,82 @@ class ValidationDesktopApp(QMainWindow):
         self.validation_thread = None
         self._set_validation_running_state(False)
 
+    # ------------------------------------------------------------------
+    # IPE pre-run prerequisites check & visual indicators
+    # ------------------------------------------------------------------
+
+    def _check_ipe_prerequisites(self, slot_keys: list[str]) -> list[dict[str, str]]:
+        """Return a list of blocking issues for *slot_keys*.
+
+        Each issue dict has keys:
+          ``slot``        — slot key (e.g. "USR02")
+          ``display_name``— label shown in SLOT_DEFINITIONS (or slot key)
+          ``type``        — ``"missing_file"`` | ``"missing_ipe"``
+
+        Only required slots are checked.  A slot without an IPE image is
+        blocking even if a file was loaded — the screenshot is mandatory.
+        """
+        issues: list[dict[str, str]] = []
+        for slot_key in slot_keys:
+            metadata = self.SLOT_DEFINITIONS.get(slot_key, {})
+            if not metadata.get("required", False):
+                continue
+            display_name = str(metadata.get("label", slot_key))
+            file_paths = list(self.slot_widgets.get(slot_key, {}).get("selected_paths", []))
+            if not file_paths:
+                issues.append({"slot": slot_key, "display_name": display_name, "type": "missing_file"})
+            elif not self.ipe_evidence_data.get(slot_key):
+                issues.append({"slot": slot_key, "display_name": display_name, "type": "missing_ipe"})
+        return issues
+
+    def _show_prerequisites_error(self, scope_label: str, issues: list[dict[str, str]]) -> None:
+        """Display a blocking QMessageBox.critical listing all *issues*."""
+        lines = [f"לא ניתן להריץ את {scope_label} — חסרים תנאים מקדימים:", ""]
+        for issue in issues:
+            name = issue["display_name"]
+            if issue["type"] == "missing_file":
+                lines.append(f"  • {name} *  —  קובץ לא נטען")
+            else:
+                lines.append(f"  • {name} *  —  חסרה ראיה IPE (צילום מסך)")
+        lines += [
+            "",
+            "יש לטעון את כל הקבצים המנדטוריים (מסומנים ב-*) ולצרף לכל אחד",
+            "לפחות תמונת ראיה אחת לפני הרצת הבדיקה.",
+        ]
+        QMessageBox.critical(self, "חסרים תנאים מקדימים להרצה", "\n".join(lines))
+
+    def _update_slot_ipe_indicator(self, slot_key: str) -> None:
+        """Set the visual style of the slot's path_label based on IPE state.
+
+        - required + file loaded + IPE present  → green border
+        - required + file loaded + IPE missing  → orange border / background
+        - anything else (no file / not required) → default style
+        """
+        widget_data = self.slot_widgets.get(slot_key)
+        if widget_data is None:
+            return
+        label = widget_data.get("path_label")
+        if not isinstance(label, QLabel):
+            return
+
+        metadata = self.SLOT_DEFINITIONS.get(slot_key, {})
+        is_required = bool(metadata.get("required", False))
+        has_file = bool(widget_data.get("selected_paths"))
+        has_ipe = bool(self.ipe_evidence_data.get(slot_key))
+
+        if is_required and has_file and has_ipe:
+            label.setStyleSheet(
+                "padding: 6px; background: #e8f5e9; border: 1px solid #388e3c;"
+            )
+        elif is_required and has_file and not has_ipe:
+            label.setStyleSheet(
+                "padding: 6px; background: #fff3e0; border: 1px solid #ff8f00;"
+            )
+        else:
+            label.setStyleSheet(
+                "padding: 6px; background: #ffffff; border: 1px solid #cfd6e4;"
+            )
+
     def run_domain_validation(self, domain: str) -> None:
         if bool(self.DOMAIN_DEFINITIONS.get(domain, {}).get("in_development", False)):
             QMessageBox.information(
@@ -3202,15 +3517,19 @@ class ValidationDesktopApp(QMainWindow):
             return
 
         domain_slots = self._get_domain_slots(domain)
-        selected_slots: list[tuple[str, list[str]]] = []
-        missing_required: list[str] = []
 
+        # IPE prerequisite gate — blocks execution if any required slot has no
+        # file loaded or no IPE screenshot attached.
+        ipe_issues = self._check_ipe_prerequisites(domain_slots)
+        if ipe_issues:
+            self._show_prerequisites_error(f"תחום {domain}", ipe_issues)
+            return
+
+        selected_slots: list[tuple[str, list[str]]] = []
         for slot_key in domain_slots:
             file_paths = list(self.slot_widgets[slot_key].get("selected_paths", []))
             if file_paths:
                 selected_slots.append((slot_key, file_paths))
-            elif self.SLOT_DEFINITIONS[slot_key]["required"]:
-                missing_required.append(slot_key)
 
         if not selected_slots:
             QMessageBox.warning(
@@ -3219,13 +3538,6 @@ class ValidationDesktopApp(QMainWindow):
                 f"לא נבחרו קבצים עבור תחום {domain}. יש לבחור לפחות קובץ אחד לפני הרצת הבדיקה.",
             )
             return
-
-        if missing_required:
-            QMessageBox.warning(
-                self,
-                "חסרים קבצי חובה",
-                f"בתחום {domain} חסרים קבצי חובה עבור המשבצות: {', '.join(missing_required)}.\n\nהבדיקה תמשיך עבור הקבצים שנבחרו.",
-            )
 
         processed_slots = 0
         processed_files = 0
@@ -3296,15 +3608,20 @@ class ValidationDesktopApp(QMainWindow):
             QMessageBox.information(self, "בדיקת תחום הושלמה", "\n".join(summary_lines))
 
     def run_category_validation(self, category: str) -> None:
-        selected_slots: list[tuple[str, list[str]]] = []
-        missing_required: list[str] = []
+        category_slots = self._get_category_slots(category)
 
-        for slot_key in self._get_category_slots(category):
+        # IPE prerequisite gate — blocks execution if any required slot in this
+        # category has no file loaded or no IPE screenshot attached.
+        ipe_issues = self._check_ipe_prerequisites(category_slots)
+        if ipe_issues:
+            self._show_prerequisites_error(f"קטגוריה {category}", ipe_issues)
+            return
+
+        selected_slots: list[tuple[str, list[str]]] = []
+        for slot_key in category_slots:
             file_paths = list(self.slot_widgets[slot_key].get("selected_paths", []))
             if file_paths:
                 selected_slots.append((slot_key, file_paths))
-            elif self.SLOT_DEFINITIONS[slot_key]["required"]:
-                missing_required.append(slot_key)
 
         if not selected_slots:
             QMessageBox.warning(
@@ -3313,13 +3630,6 @@ class ValidationDesktopApp(QMainWindow):
                 f"לא נבחרו קבצים עבור הקבוצה {category}. יש לבחור לפחות קובץ אחד לפני הרצת הבדיקה.",
             )
             return
-
-        if missing_required:
-            QMessageBox.warning(
-                self,
-                "חסרים קבצי חובה",
-                f"בקבוצה {category} חסרים קבצי חובה עבור המשבצות: {', '.join(missing_required)}.\n\nהבדיקה תמשיך עבור הקבצים שנבחרו.",
-            )
 
         processed_slots = 0
         processed_files = 0

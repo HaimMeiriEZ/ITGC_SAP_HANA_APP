@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -183,3 +186,83 @@ class UiStateRepository:
         }
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+class IpeEvidenceRepository:
+    """Persists IPE (Independent Proof of Evidence) screenshot metadata and manages stored image files."""
+
+    _EVIDENCE_JSON = "ipe_evidence.json"
+
+    def __init__(self, output_dir: Path, base_dir: Path) -> None:
+        self._output_dir = output_dir
+        self._evidence_dir = base_dir / "data" / "evidence"
+
+    def _json_path(self) -> Path:
+        return self._output_dir / self._EVIDENCE_JSON
+
+    def load(self) -> dict[str, list[dict[str, Any]]]:
+        path = self._json_path()
+        if not path.exists():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        return raw
+
+    def save(self, data: dict[str, list[dict[str, Any]]]) -> None:
+        path = self._json_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def add_image(
+        self,
+        slot_key: str,
+        source_path: Path,
+        control_ids: list[str],
+        data: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        """Copy *source_path* into the evidence folder and append a new entry to *data* in-place.
+
+        Returns the new entry dict.
+        """
+        slot_dir = self._evidence_dir / slot_key
+        slot_dir.mkdir(parents=True, exist_ok=True)
+
+        image_id = str(uuid.uuid4())
+        dest_filename = f"{image_id}_{source_path.name}"
+        dest_path = slot_dir / dest_filename
+        shutil.copy2(source_path, dest_path)
+
+        entry: dict[str, Any] = {
+            "id": image_id,
+            "original_filename": source_path.name,
+            "stored_path": str(dest_path),
+            "control_ids": list(control_ids),
+            "added_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        data.setdefault(slot_key, []).append(entry)
+        self.save(data)
+        return entry
+
+    def remove_image(
+        self,
+        slot_key: str,
+        image_id: str,
+        data: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        """Remove the image entry from *data* and delete the stored file.  Saves afterwards."""
+        entries = data.get(slot_key, [])
+        to_remove = next((e for e in entries if e.get("id") == image_id), None)
+        if to_remove is None:
+            return
+        stored = Path(to_remove.get("stored_path", ""))
+        if stored.exists():
+            try:
+                stored.unlink()
+            except OSError:
+                pass
+        data[slot_key] = [e for e in entries if e.get("id") != image_id]
+        self.save(data)

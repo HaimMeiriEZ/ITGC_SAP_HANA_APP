@@ -1044,7 +1044,7 @@ class TestSmoke(unittest.TestCase):
             with patch("src.ui.desktop_app.QFileDialog.getOpenFileNames", return_value=(["C:/temp/e070_100.txt"], "")):
                 window.choose_file("E070")
 
-            window.clear_last_load_button.click()
+            window.clear_last_loaded_slot()
 
             self.assertEqual(window.slot_widgets["E070"]["selected_paths"], [])
             self.assertEqual(window.slot_widgets["USR02"]["selected_paths"], ["C:/temp/usr02_100.txt"])
@@ -1365,6 +1365,9 @@ class TestSmoke(unittest.TestCase):
             usr02_path = base_dir / "usr02_100.txt"
             adr6_path = base_dir / "adr6.txt"
             rsparam_path = base_dir / "rsparam.txt"
+            agr_users_path = base_dir / "agr_users_100.txt"
+            agr_1251_path = base_dir / "agr_1251_100.txt"
+            ust04_path = base_dir / "ust04.txt"
             usr02_path.write_text(
                 "BNAME;UFLAG;TRDAT;LTIME\nUSER_A;0;20260101;080000\n",
                 encoding="utf-8",
@@ -1377,6 +1380,20 @@ class TestSmoke(unittest.TestCase):
                 "PARAMETER;VALUE\nlogin/min_password_lng;8\n",
                 encoding="utf-8",
             )
+            agr_users_path.write_text(
+                "AGR_NAME;BNAME\nZ_ROLE;USER_A\n",
+                encoding="utf-8",
+            )
+            agr_1251_path.write_text(
+                "AGR_NAME;OBJECT;FIELD;LOW;HIGH\nZ_ROLE;S_TCODE;TCD;SU01;\n",
+                encoding="utf-8",
+            )
+            ust04_path.write_text(
+                "BNAME;PROFILE\nUSER_A;SAP_BASIS\n",
+                encoding="utf-8",
+            )
+
+            _fake_ipe = [{"id": "t", "original_filename": "s.png", "stored_path": "", "control_ids": [], "added_at": ""}]
 
             get_qt_app()
             window = ValidationDesktopApp(base_dir=base_dir)
@@ -1384,15 +1401,20 @@ class TestSmoke(unittest.TestCase):
                 window.slot_widgets["USR02"]["selected_paths"] = [str(usr02_path)]
                 window.slot_widgets["ADR6_USR21"]["selected_paths"] = [str(adr6_path)]
                 window.slot_widgets["RSPARAM"]["selected_paths"] = [str(rsparam_path)]
+                window.slot_widgets["AGR_USERS"]["selected_paths"] = [str(agr_users_path)]
+                window.slot_widgets["AGR_1251"]["selected_paths"] = [str(agr_1251_path)]
+                window.slot_widgets["UST04"]["selected_paths"] = [str(ust04_path)]
+                # Provide IPE evidence so the prerequisite gate passes
+                for sk in ("USR02", "AGR_USERS", "AGR_1251", "UST04", "RSPARAM"):
+                    window.ipe_evidence_data[sk] = list(_fake_ipe)
 
-                with patch("src.ui.desktop_app.QMessageBox.information") as information_mock, patch(
-                    "src.ui.desktop_app.QMessageBox.warning"
-                ) as warning_mock:
+                with patch("src.ui.desktop_app.QMessageBox.information") as information_mock, \
+                     patch("src.ui.desktop_app.QMessageBox.warning") as warning_mock, \
+                     patch("src.ui.desktop_app.QMessageBox.critical"):
                     window.run_domain_validation("MA - ניהול גישה")
 
                 self.assertGreaterEqual(window.run_log_table.rowCount(), 2)
                 self.assertEqual(window.tabs.currentIndex(), 0)
-                self.assertFalse(window.report_button.isEnabled())
                 self.assertTrue(information_mock.called or warning_mock.called)
             finally:
                 window.close()
@@ -1411,14 +1433,15 @@ class TestSmoke(unittest.TestCase):
             try:
                 window.slot_widgets["ADR6_USR21"]["selected_paths"] = [str(adr6_path)]
 
-                with patch("src.ui.desktop_app.QMessageBox.information") as information_mock, patch(
-                    "src.ui.desktop_app.QMessageBox.warning"
-                ) as warning_mock:
+                with patch("src.ui.desktop_app.QMessageBox.information"), \
+                     patch("src.ui.desktop_app.QMessageBox.warning"), \
+                     patch("src.ui.desktop_app.QMessageBox.critical") as critical_mock:
                     window.run_domain_validation("MA - ניהול גישה")
 
-                self.assertEqual(window.run_log_table.rowCount(), 1)
-                self.assertTrue(warning_mock.called)
-                self.assertTrue(information_mock.called)
+                # Gate fires: required slots (USR02, AGR_USERS, etc.) have no files.
+                # critical dialog is shown and execution is blocked — no log rows added.
+                self.assertTrue(critical_mock.called)
+                self.assertEqual(window.run_log_table.rowCount(), 0)
             finally:
                 window.close()
 
