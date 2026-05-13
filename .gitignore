@@ -72,6 +72,7 @@ Icon?
 
 # Application outputs
 /data/output/
+/data/evidence/
 /output/
 /data/input/20*.txt
 
