@@ -1,4 +1,5 @@
-﻿import json
+﻿import fnmatch
+import json
 import os
 import re
 import subprocess
@@ -2329,7 +2330,10 @@ class ValidationDesktopApp(QMainWindow):
         generic_users = settings.get("generic_users", [])
         if not isinstance(generic_users, list):
             return False
-        return any(str(item).strip().casefold() == normalized_name for item in generic_users)
+        return any(
+            fnmatch.fnmatch(normalized_name, str(item).strip().casefold())
+            for item in generic_users
+        )
 
     def _is_super_user(self, mandt: object, bname: object, settings: dict[str, Any]) -> bool:
         if not bname or not isinstance(settings, dict):
@@ -2427,6 +2431,17 @@ class ValidationDesktopApp(QMainWindow):
                         findings.append("סיסמה ראשונית לא הוחלפה תוך 48 שעות")
                     else:
                         findings.append(f"סיסמה ראשונית לא הוחלפה תוך {initial_password_change_max_days} ימים")
+
+            security_policy = str(usr_entry.get("SECURITY_POLICY", "")).strip()
+            if security_policy:
+                findings.append("עולה חשד שלמשתמש הוגדרה מדיניות סיסמה מיוחדת - ודא בטרנזקציית 'SEC_POLICY' שהמדיניות של משתמש זה אינה כוללת החרגות סיסמה")
+
+        ustyp = str(usr_entry.get("USTYP", "")).strip().upper()
+        if ustyp in ("B", "S"):
+            if is_generic_user:
+                findings.append("משתמש גנרי - יש לוודא המשתמש נעול ולא היה פעיל במהלך השנה ללא אישור מתועד")
+            else:
+                findings.append("יש לוודא צורך במשתמש ולנעול כשאין צורך, לוודא שהמשתמש הוא אכן משתמש מערכת ולא אנושי")
 
         return " | ".join(findings)
 
