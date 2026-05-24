@@ -583,7 +583,8 @@ class TestSmoke(unittest.TestCase):
                 self.assertIn("סיסמה לא הוחלפה מעל 90 יום", findings_text)
                 self.assertIn("סיסמה ראשונית לא הוחלפה תוך 48 שעות", findings_text)
                 self.assertIn("|", findings_text)
-                self.assertEqual(window.user_preview_table.item(1, 2).text(), "")
+                system_ok_findings = window.user_preview_table.item(1, 2).text()
+                self.assertIn("מערכת", system_ok_findings)
             finally:
                 window.close()
 
@@ -985,20 +986,20 @@ class TestSmoke(unittest.TestCase):
                 window._update_reviewer_value(review_key, "REVIEW_STATUS", "נבדק - תקין")
                 window.refresh_user_preview()
 
-                summary_row = window.audit_summary_records.get("MA-REVIEW-01")
+                summary_row = window.audit_summary_records.get("MA1-1&MA7-17_AYALON_2")
                 self.assertIsNotNone(summary_row)
                 assert summary_row is not None
                 self.assertEqual(summary_row["valid_records"], 1)
                 self.assertEqual(summary_row["finding_records"], 1)
                 self.assertEqual(summary_row["total_records"], 2)
-                self.assertIn("MA-REVIEW-01", window.audit_details_by_control)
+                self.assertIn("MA1-1&MA7-17_AYALON_2", window.audit_details_by_control)
 
                 review_key_b = window._user_reviewer_state_key("100", "USER_B")
                 window._update_reviewer_value(review_key_b, "REVIEW_STATUS", "נבדק - תקין")
                 window.refresh_user_preview()
 
-                self.assertNotIn("MA-REVIEW-01", window.audit_summary_records)
-                self.assertNotIn("MA-REVIEW-01", window.audit_details_by_control)
+                self.assertNotIn("MA1-1&MA7-17_AYALON_2", window.audit_summary_records)
+                self.assertNotIn("MA1-1&MA7-17_AYALON_2", window.audit_details_by_control)
             finally:
                 window.close()
 
@@ -1152,7 +1153,7 @@ class TestSmoke(unittest.TestCase):
                         column_name="IMPORT_USER",
                         message="בקרה 44: BAD_USER אינו מורשה",
                         source_file="stms.txt",
-                        control_id="44",
+                        control_id="MC7-25_AYALON_44",
                         category="MC - ניהול שינויים",
                         risk_level="גבוה",
                         check_type="STMS - Import מורשים בלבד",
@@ -1172,11 +1173,11 @@ class TestSmoke(unittest.TestCase):
             window._refresh_audit_summary_table()
 
             self.assertEqual(window.audit_summary_table.rowCount(), 1)
-            self.assertEqual(window.audit_summary_table.item(0, 0).text(), "44")
-            self.assertEqual(window.audit_summary_table.item(0, 8).text(), "1")
-            self.assertEqual(window.audit_summary_table.item(0, 9).text(), "2")
-            self.assertIn("44", window.audit_details_by_control)
-            self.assertGreaterEqual(len(window.audit_details_by_control["44"]), 1)
+            self.assertEqual(window.audit_summary_table.item(0, 0).text(), "MC7-25_AYALON_44")
+            self.assertEqual(window.audit_summary_table.item(0, 4).text(), "1")
+            self.assertEqual(window.audit_summary_table.item(0, 5).text(), "2")
+            self.assertIn("MC7-25_AYALON_44", window.audit_details_by_control)
+            self.assertGreaterEqual(len(window.audit_details_by_control["MC7-25_AYALON_44"]), 1)
 
             window.audit_summary_table.setCurrentCell(0, 0)
             window.audit_summary_table.selectRow(0)
@@ -1203,7 +1204,7 @@ class TestSmoke(unittest.TestCase):
                         column_name="PROFILE",
                         message="זוהה פרופיל חזק SAP_ALL למשתמש AUDIT_ADMIN",
                         source_file="ust04.txt",
-                        control_id="MA-PERM-01",
+                        control_id="MA3-3_AYALON_14",
                         category="MA - ניהול גישה",
                         risk_level="גבוה",
                         check_type="פרופילים למשתמשים חזקים",
@@ -1218,7 +1219,7 @@ class TestSmoke(unittest.TestCase):
                         column_name="PROFILE",
                         message="זוהה פרופיל חזק S_A.ADMIN למשתמש POWER_ADMIN",
                         source_file="ust04.txt",
-                        control_id="MA-PERM-01",
+                        control_id="MA3-3_AYALON_14",
                         category="MA - ניהול גישה",
                         risk_level="גבוה",
                         check_type="פרופילים למשתמשים חזקים",
@@ -1239,7 +1240,7 @@ class TestSmoke(unittest.TestCase):
 
             self.assertEqual(window.permissions_summary_group.title(), ValidationDesktopApp.format_ui_rtl_text("ממצאי הרשאות - משתמשים חזקים"))
             self.assertEqual(window.permissions_summary_table.rowCount(), 2)
-            self.assertEqual(window.permissions_summary_table.item(0, 0).text(), "MA-PERM-01")
+            self.assertEqual(window.permissions_summary_table.item(0, 0).text(), "MA3-3_AYALON_14")
             self.assertEqual(window.permissions_summary_table.item(0, 1).text(), "100")
             self.assertEqual(window.permissions_summary_table.item(0, 3).text(), "1")
 
@@ -1350,11 +1351,9 @@ class TestSmoke(unittest.TestCase):
 
             window._upsert_audit_control_data("RSPARAM", result, [], "2026-04-30")
 
-            detail_rows = window.audit_details_by_control.get("MA-PWD-01", [])
+            detail_rows = window.audit_details_by_control.get("MA2-2_AYALON_6", [])
             self.assertGreaterEqual(len(detail_rows), 1)
             self.assertEqual(detail_rows[0]["status"], "תקין")
-            self.assertEqual(detail_rows[0]["actual_value"], "10")
-            self.assertEqual(detail_rows[0]["expected_value"], "8")
             self.assertIn("ההגדרה תקינה", detail_rows[0]["full_description"])
         finally:
             window.close()
@@ -1549,12 +1548,18 @@ class TestSmoke(unittest.TestCase):
             {"Parameter Name": "login/failed_user_auto_unlock", "User-Defined Value": "", "System Default Value": "0"},
             {"Parameter Name": "login/password_expiration_time", "User-Defined Value": "", "System Default Value": "60"},
             {"Parameter Name": "login/password_history_size", "User-Defined Value": "", "System Default Value": "6"},
+            {"Parameter Name": "login/min_password_digits", "User-Defined Value": "", "System Default Value": "1"},
+            {"Parameter Name": "login/min_password_letters", "User-Defined Value": "", "System Default Value": "1"},
+            {"Parameter Name": "login/min_password_lowercase", "User-Defined Value": "", "System Default Value": "1"},
+            {"Parameter Name": "login/min_password_specials", "User-Defined Value": "", "System Default Value": "1"},
+            {"Parameter Name": "login/min_password_uppercase", "User-Defined Value": "", "System Default Value": "1"},
+            {"Parameter Name": "rdisp/gui_auto_logout", "User-Defined Value": "", "System Default Value": "900"},
             {"Parameter Name": "login/no_automatic_user_sapstar", "User-Defined Value": "", "System Default Value": "1"},
         ]
 
         result = ValidationEngine().validate(rows, source_name="rsparam.csv")
 
-        self.assertFalse(any(issue.control_id == "MA-PWD-01" for issue in result.issues))
+        self.assertFalse(any(issue.control_id == "MA2-2_AYALON_6" for issue in result.issues))
 
     def test_ust04_flags_users_with_strong_profiles(self) -> None:
         rows = [
@@ -1564,7 +1569,7 @@ class TestSmoke(unittest.TestCase):
         ]
 
         result = ValidationEngine().validate(rows, source_name="ust04.txt")
-        strong_profile_issues = [issue for issue in result.issues if issue.control_id == "MA-PERM-01"]
+        strong_profile_issues = [issue for issue in result.issues if issue.control_id == "MA3-3_AYALON_14"]
 
         self.assertEqual(len(strong_profile_issues), 2)
         self.assertEqual({issue.actual_value for issue in strong_profile_issues}, {"ADMIN_USER", "POWER_USER"})
@@ -1696,28 +1701,29 @@ class TestSmoke(unittest.TestCase):
     def test_ma_sod_01_control_definition_is_registered(self) -> None:
         from src.validators.spec_rules import AUDIT_CONTROL_DEFINITIONS
 
-        self.assertIn("MA-SOD-01", AUDIT_CONTROL_DEFINITIONS)
-        definition = AUDIT_CONTROL_DEFINITIONS["MA-SOD-01"]
-        self.assertEqual(definition["category"], "MA - ניהול גישה")
+        self.assertIn("MC5-23_AYALON_48", AUDIT_CONTROL_DEFINITIONS)
+        definition = AUDIT_CONTROL_DEFINITIONS["MC5-23_AYALON_48"]
+        self.assertEqual(definition["category"], "MC - ניהול שינויים")
         self.assertEqual(definition["risk_level"], "גבוה")
         self.assertIn("הפרדת תפקידים", definition["check_type"])
         self.assertIn("מפתח", definition["description"])
 
     def test_authorized_developers_settings_section_exists_in_ui(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            self.assertIn("authorized_developers", window.system_settings_widgets)
-            self.assertIn("authorized_developers", window.system_settings_sections)
-            self.assertIn("authorized_developers", window.system_settings_unavailable_labels)
+        with TemporaryDirectory() as temp_dir:
+            get_qt_app()
+            window = ValidationDesktopApp(base_dir=Path(temp_dir))
+            try:
+                self.assertIn("authorized_developers", window.system_settings_widgets)
+                self.assertIn("authorized_developers", window.system_settings_sections)
+                self.assertIn("authorized_developers", window.system_settings_unavailable_labels)
 
-            dev_table = window.system_settings_widgets["authorized_developers"]
-            self.assertEqual(dev_table.columnCount(), 2)
-            self.assertEqual(dev_table.rowCount(), 0)
-            self.assertEqual(dev_table.horizontalHeaderItem(0).text(), "CLIENT")
-            self.assertEqual(dev_table.horizontalHeaderItem(1).text(), "BNAME מפתח")
-        finally:
-            window.close()
+                dev_table = window.system_settings_widgets["authorized_developers"]
+                self.assertEqual(dev_table.columnCount(), 2)
+                self.assertEqual(dev_table.rowCount(), 0)
+                self.assertEqual(dev_table.horizontalHeaderItem(0).text(), "CLIENT")
+                self.assertEqual(dev_table.horizontalHeaderItem(1).text(), "BNAME מפתח")
+            finally:
+                window.close()
 
     def test_authorized_developers_settings_are_collected_and_loaded(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -1767,14 +1773,14 @@ class TestSmoke(unittest.TestCase):
 
                 window.refresh_user_preview()
 
-                summary = window.audit_summary_records.get("MA-SOD-01")
+                summary = window.audit_summary_records.get("MC5-23_AYALON_48")
                 self.assertIsNotNone(summary)
                 assert summary is not None
                 self.assertEqual(summary["finding_records"], 1)
                 self.assertEqual(summary["valid_records"], 0)
                 self.assertEqual(summary["total_records"], 1)
 
-                details = window.audit_details_by_control.get("MA-SOD-01")
+                details = window.audit_details_by_control.get("MC5-23_AYALON_48")
                 self.assertIsNotNone(details)
                 assert details is not None
                 self.assertEqual(len(details), 1)
@@ -1807,13 +1813,13 @@ class TestSmoke(unittest.TestCase):
 
                 window.refresh_user_preview()
 
-                summary = window.audit_summary_records.get("MA-SOD-01")
+                summary = window.audit_summary_records.get("MC5-23_AYALON_48")
                 self.assertIsNotNone(summary)
                 assert summary is not None
                 self.assertEqual(summary["finding_records"], 0)
                 self.assertEqual(summary["valid_records"], 1)
                 self.assertEqual(summary["total_records"], 1)
-                self.assertNotIn("MA-SOD-01", window.audit_details_by_control)
+                self.assertNotIn("MC5-23_AYALON_48", window.audit_details_by_control)
             finally:
                 window.close()
 
@@ -1839,8 +1845,8 @@ class TestSmoke(unittest.TestCase):
 
                 window.refresh_user_preview()
 
-                self.assertNotIn("MA-SOD-01", window.audit_summary_records)
-                self.assertNotIn("MA-SOD-01", window.audit_details_by_control)
+                self.assertNotIn("MC5-23_AYALON_48", window.audit_summary_records)
+                self.assertNotIn("MC5-23_AYALON_48", window.audit_details_by_control)
             finally:
                 window.close()
 
@@ -1848,8 +1854,8 @@ class TestSmoke(unittest.TestCase):
         get_qt_app()
         window = ValidationDesktopApp()
         try:
-            window.audit_summary_records["MA-SOD-01"] = {"dummy": True}
-            window.audit_details_by_control["MA-SOD-01"] = [{"dummy": True}]
+            window.audit_summary_records["MC5-23_AYALON_48"] = {"dummy": True}
+            window.audit_details_by_control["MC5-23_AYALON_48"] = [{"dummy": True}]
 
             window._current_system_settings = lambda: {
                 "authorized_developers": [],
@@ -1859,8 +1865,8 @@ class TestSmoke(unittest.TestCase):
 
             window._sync_developer_sod_finding()
 
-            self.assertNotIn("MA-SOD-01", window.audit_summary_records)
-            self.assertNotIn("MA-SOD-01", window.audit_details_by_control)
+            self.assertNotIn("MC5-23_AYALON_48", window.audit_summary_records)
+            self.assertNotIn("MC5-23_AYALON_48", window.audit_details_by_control)
         finally:
             window.close()
 

@@ -76,7 +76,7 @@ def upsert_audit_control_data(
         control_issues = [issue for issue in audit_issues if issue.control_id == control_id]
         finding_records = len(control_issues)
 
-        if control_id == "44":
+        if control_id == "MC7-25_AYALON_44":
             total_records = count_stms_control_records_cb(rows)
         else:
             total_records = 1
@@ -184,14 +184,14 @@ def build_audit_summary_values(row_data: dict[str, Any]) -> list[str]:
     return [
         str(row_data.get("control_id", "-")),
         str(row_data.get("check_type", "-")),
-        str(row_data.get("source_file", "-")),
-        str(row_data.get("extraction_date", "-")),
-        str(row_data.get("work_environment", "-")),
         str(row_data.get("risk_level", "-")),
-        str(row_data.get("description", "-")),
         str(row_data.get("valid_records", 0)),
         str(row_data.get("finding_records", 0)),
         str(row_data.get("total_records", 0)),
+        str(row_data.get("work_environment", "-")),
+        str(row_data.get("source_file", "-")),
+        str(row_data.get("extraction_date", "-")),
+        str(row_data.get("description", "-")),
     ]
 
 

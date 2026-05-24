@@ -13,11 +13,10 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
-from PySide6.QtCore import QCoreApplication, QDate, QObject, QThread, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QPixmap
+from PySide6.QtCore import QCoreApplication, QDate, QEvent, QObject, QThread, Qt, Signal, Slot
+from PySide6.QtGui import QBrush, QColor, QFont, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QStyledItemDelegate,
     QSizePolicy,
     QTabWidget,
@@ -117,6 +116,33 @@ class _RightAlignDelegate(QStyledItemDelegate):
         )
 
 
+class _IpeMappingCellDelegate(QStyledItemDelegate):
+    """IPE mapping slot cells: filled accent color when checked, plain when unchecked. No checkbox drawn."""
+
+    _CHECKED_COLOR = QColor("#6d002f")
+
+    def paint(self, painter: Any, option: Any, index: Any) -> None:
+        bg = index.data(Qt.ItemDataRole.BackgroundRole)
+        painter.save()
+        if isinstance(bg, QBrush) and bg.style() != Qt.BrushStyle.NoBrush:
+            painter.fillRect(option.rect, bg)
+        else:
+            painter.fillRect(option.rect, option.palette.base().color())
+        painter.restore()
+
+    def editorEvent(self, event: Any, model: Any, option: Any, index: Any) -> bool:  # type: ignore[override]
+        if (
+            event.type() == QEvent.Type.MouseButtonRelease
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            bg = index.data(Qt.ItemDataRole.BackgroundRole)
+            is_checked = isinstance(bg, QBrush) and bg.style() != Qt.BrushStyle.NoBrush
+            new_state = Qt.CheckState.Unchecked if is_checked else Qt.CheckState.Checked
+            model.setData(index, new_state, Qt.ItemDataRole.CheckStateRole)
+            return True
+        return bool(super().editorEvent(event, model, option, index))
+
+
 class SortableTableWidgetItem(QTableWidgetItem):
     SORT_ROLE = Qt.ItemDataRole.UserRole + 2
 
@@ -171,92 +197,6 @@ class SlotValidationWorker(QObject):
             self.finished.emit()
 
 
-# ---------------------------------------------------------------------------
-# IPE Evidence: dialog for tagging a screenshot to one or more audit controls
-# ---------------------------------------------------------------------------
-
-class IpeControlTagDialog(QDialog):
-    """Let the user pick which audit controls a screenshot belongs to.
-
-    Pre-selects the default controls for the given *slot_key* based on
-    ``SLOT_DEFAULT_CONTROLS`` from config.  The user may freely check /
-    uncheck any combination before clicking OK.
-    """
-
-    def __init__(
-        self,
-        slot_key: str,
-        filename: str,
-        preselected: list[str] | None = None,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("שייך ראיה לבקרות")
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.setMinimumWidth(480)
-
-        defaults = set(preselected if preselected is not None else SLOT_DEFAULT_CONTROLS.get(slot_key, []))
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(16, 16, 16, 16)
-
-        header = QLabel(f"<b>קובץ:</b> {filename}<br><b>סלוט:</b> {slot_key}")
-        header.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        header.setAlignment(Qt.AlignmentFlag.AlignRight)
-        layout.addWidget(header)
-
-        instruction = QLabel("סמן את הבקרות הקשורות לראיה זו:")
-        instruction.setAlignment(Qt.AlignmentFlag.AlignRight)
-        layout.addWidget(instruction)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setMinimumHeight(280)
-        container = QWidget()
-        container.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        container_layout = QVBoxLayout(container)
-        container_layout.setSpacing(4)
-        container_layout.setContentsMargins(8, 8, 8, 8)
-
-        self._checkboxes: dict[str, QCheckBox] = {}
-
-        seen_ids: set[str] = set()
-        for group_label, control_ids in CONTROL_GROUPS:
-            group_box = QGroupBox(group_label)
-            group_box.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-            group_box.setAlignment(Qt.AlignmentFlag.AlignRight)
-            group_layout = QVBoxLayout(group_box)
-            group_layout.setSpacing(3)
-            group_layout.setContentsMargins(8, 6, 8, 6)
-            for ctrl_id in control_ids:
-                if ctrl_id in seen_ids:
-                    continue
-                seen_ids.add(ctrl_id)
-                label_text = CONTROL_LABELS.get(ctrl_id, ctrl_id)
-                cb = QCheckBox(label_text)
-                cb.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-                cb.setChecked(ctrl_id in defaults)
-                group_layout.addWidget(cb)
-                self._checkboxes[ctrl_id] = cb
-            container_layout.addWidget(group_box)
-
-        container_layout.addStretch(1)
-        scroll.setWidget(container)
-        layout.addWidget(scroll)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def selected_control_ids(self) -> list[str]:
-        return [ctrl_id for ctrl_id, cb in self._checkboxes.items() if cb.isChecked()]
-
-
 class ValidationDesktopApp(QMainWindow):
     USER_PREVIEW_SLOTS = {"USR02", "ADR6_USR21"}
 
@@ -268,6 +208,7 @@ class ValidationDesktopApp(QMainWindow):
         "AGR_1252",
         "AGR_DEFINE",
         "UST04",
+        "USH04",
         "E070",
         "STMS",
     }
@@ -326,7 +267,7 @@ class ValidationDesktopApp(QMainWindow):
     REVIEW_STATUS_OPTIONS = ["טרם נבדק", "נבדק - תקין", "נבדק - לא תקין"]
     DEFAULT_REVIEW_STATUS = "טרם נבדק"
     REVIEWED_STATUSES = {"נבדק - תקין", "נבדק - לא תקין"}
-    REVIEW_COMPLETION_CONTROL_ID = "MA-REVIEW-01"
+    REVIEW_COMPLETION_CONTROL_ID = "MA1-1&MA7-17_AYALON_2"
     USER_TYPE_RULES = {
         "Dialog": ["A"],
         "System": ["B"],
@@ -383,6 +324,13 @@ class ValidationDesktopApp(QMainWindow):
             "description": "פרופילים-משתמשים - שיוך פרופילים ישיר למשתמשים.",
             "expected_file": "ust04.txt",
             "required": True,
+        },
+        "USH04": {
+            "domain": "MA - ניהול גישה",
+            "sub_category": "1.2 - סקר הרשאות תקופתי",
+            "description": "היסטוריית שיוך פרופילים למשתמשים - זיהוי שינויים בפרופילים ופרופילים חזקים.",
+            "expected_file": "ush04.txt",
+            "required": False,
         },
         "AGR_1252": {
             "domain": "MA - ניהול גישה",
@@ -509,7 +457,7 @@ class ValidationDesktopApp(QMainWindow):
         self.ipe_repository = IpeEvidenceRepository(
             self.config.output_dir, base_dir or Path.cwd()
         )
-        self.ipe_evidence_data: dict[str, list[dict[str, Any]]] = self.ipe_repository.load()
+        self.ipe_evidence_data: dict[str, list[dict[str, Any]]] = {}
         self.config.input_dir.mkdir(parents=True, exist_ok=True)
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         self.report_path: Path | None = None
@@ -555,12 +503,17 @@ class ValidationDesktopApp(QMainWindow):
         self.system_settings_unavailable_labels: dict[str, QLabel] = {}
         self.system_settings_file_mapping_order: list[str] = []
 
+        self._slot_control_mapping: dict[str, list[str]] = dict(SLOT_DEFAULT_CONTROLS)
         self._configure_window()
         self._build_ui()
         self._populate_all_slot_thumbnails()
         self._load_system_settings_into_form(
             self._current_system_settings(),
             load_review_period=self._system_settings_path().exists(),
+        )
+        _saved_mapping = self._current_system_settings().get("slot_ipe_control_mapping")
+        self._slot_control_mapping = (
+            dict(_saved_mapping) if isinstance(_saved_mapping, dict) else dict(SLOT_DEFAULT_CONTROLS)
         )
         self._apply_system_settings_availability()
 
@@ -761,20 +714,21 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_summary_table.setHorizontalHeaderLabels([
             self.format_rtl_text("מזהה בקרה"),
             self.format_rtl_text("סוג בדיקה"),
-            self.format_rtl_text("קובץ מקור"),
-            self.format_rtl_text("תאריך הפקה"),
-            self.format_rtl_text("סביבת עבודה"),
             self.format_rtl_text("רמת סיכון"),
-            self.format_rtl_text("תיאור הבדיקה"),
             self.format_rtl_text("רשומות תקינות"),
             self.format_rtl_text("רשומות עם ממצא"),
             self.format_rtl_text("סהכ רשומות"),
+            self.format_rtl_text("סביבת עבודה"),
+            self.format_rtl_text("קובץ מקור"),
+            self.format_rtl_text("תאריך הפקה"),
+            self.format_rtl_text("תיאור בדיקה"),
         ])
         _audit_summary_hdr = self.audit_summary_table.horizontalHeader()
         _audit_summary_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         _audit_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _audit_summary_hdr.setStretchLastSection(False)
-        self.audit_summary_table.setColumnWidth(6, 220)  # תיאור הבדיקה
+        self.audit_summary_table.setColumnWidth(1, 200)  # סוג בדיקה
+        self.audit_summary_table.setColumnWidth(9, 220)  # תיאור בדיקה
         self.audit_summary_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.audit_summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.audit_summary_table.setAlternatingRowColors(True)
@@ -1772,6 +1726,85 @@ class ValidationDesktopApp(QMainWindow):
         self.system_settings_unavailable_labels["business_reviewer_email"] = email_unavailable_label
         self.system_settings_unavailable_labels["technical_reviewer_email"] = email_unavailable_label
 
+        # ---- IPE Evidence Mapping Table ----
+        ipe_group = QGroupBox(self.format_ui_rtl_text("מיפוי ראיות IPE לבקרות"))
+        ipe_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        ipe_group_layout = QVBoxLayout(ipe_group)
+        ipe_group_layout.setContentsMargins(8, 14, 8, 8)
+
+        ipe_desc = QLabel(self.format_ui_rtl_text(
+            "הגדר אילו בקרות ישויכו אוטומטית לכל ראיית IPE שתתווסף לסלוט."
+        ))
+        ipe_desc.setWordWrap(True)
+        ipe_desc.setAlignment(Qt.AlignmentFlag.AlignRight)
+        ipe_group_layout.addWidget(ipe_desc)
+
+        ipe_reset_btn = QPushButton(self.format_ui_rtl_text("אפס לברירות מחדל"))
+        ipe_reset_btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        ipe_reset_btn.clicked.connect(self._reset_ipe_mapping_to_defaults)
+        ipe_group_layout.addWidget(ipe_reset_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        self._ipe_mapping_control_ids: list[str] = list(CONTROL_LABELS.keys())
+        self._ipe_mapping_slot_keys: list[str] = list(self.SLOT_DEFINITIONS.keys())
+        _ipe_col_offset = 2  # columns 0 and 1 are fixed: control ID + short name
+
+        self.ipe_mapping_table = QTableWidget(
+            len(self._ipe_mapping_control_ids),
+            _ipe_col_offset + len(self._ipe_mapping_slot_keys),
+        )
+        self.ipe_mapping_table.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.ipe_mapping_table.setAlternatingRowColors(True)
+        self.ipe_mapping_table.setMinimumHeight(440)
+        self.ipe_mapping_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.ipe_mapping_table.verticalHeader().setVisible(False)
+        self.ipe_mapping_table.verticalHeader().setDefaultSectionSize(26)
+        _ipe_hdr = self.ipe_mapping_table.horizontalHeader()
+        _ipe_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+
+        # Column headers: two fixed labels then slot/table names
+        for col_idx, header_text in enumerate(["מזהה בקרה", "שם קצר"] + self._ipe_mapping_slot_keys):
+            self.ipe_mapping_table.setHorizontalHeaderItem(col_idx, QTableWidgetItem(header_text))
+        self.ipe_mapping_table.setColumnWidth(0, 195)
+        self.ipe_mapping_table.setColumnWidth(1, 165)
+        for _sc in range(len(self._ipe_mapping_slot_keys)):
+            self.ipe_mapping_table.setColumnWidth(_ipe_col_offset + _sc, 82)
+
+        # Custom delegate for slot columns: colored fill = checked, plain = unchecked
+        _ipe_delegate = _IpeMappingCellDelegate(self.ipe_mapping_table)
+        for _sc in range(len(self._ipe_mapping_slot_keys)):
+            self.ipe_mapping_table.setItemDelegateForColumn(_ipe_col_offset + _sc, _ipe_delegate)
+
+        # One row per control: col-0 = full ID, col-1 = short Hebrew name, col-2+ = slot checkboxes
+        self.ipe_mapping_table.blockSignals(True)
+        for row_idx, ctrl_id in enumerate(self._ipe_mapping_control_ids):
+            id_item = QTableWidgetItem(ctrl_id)
+            id_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.ipe_mapping_table.setItem(row_idx, 0, id_item)
+
+            raw_label = CONTROL_LABELS.get(ctrl_id, ctrl_id)
+            hebrew_part = raw_label.split(" — ", 1)[1] if " — " in raw_label else raw_label
+            words = hebrew_part.split()
+            short_name = " ".join(words[:5]) + ("..." if len(words) > 5 else "")
+            name_item = QTableWidgetItem(short_name)
+            name_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            name_item.setToolTip(hebrew_part)
+            self.ipe_mapping_table.setItem(row_idx, 1, name_item)
+
+            for slot_col, slot_key in enumerate(self._ipe_mapping_slot_keys):
+                default_controls = set(SLOT_DEFAULT_CONTROLS.get(slot_key, []))
+                is_checked = ctrl_id in default_controls
+                cb_item = QTableWidgetItem()
+                cb_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+                cb_item.setCheckState(Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked)
+                if is_checked:
+                    cb_item.setBackground(QBrush(QColor("#6d002f")))
+                self.ipe_mapping_table.setItem(row_idx, _ipe_col_offset + slot_col, cb_item)
+        self.ipe_mapping_table.blockSignals(False)
+        self.ipe_mapping_table.itemChanged.connect(self._on_ipe_mapping_changed)
+
+        ipe_group_layout.addWidget(self.ipe_mapping_table)
+        self.settings_layout.addWidget(ipe_group)
+
     def _build_settings_group(self, title: str, description: str | None = None) -> tuple[QGroupBox, QVBoxLayout, QLabel]:
         group = QGroupBox(self.format_ui_rtl_text(title))
         group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -1934,6 +1967,7 @@ class ValidationDesktopApp(QMainWindow):
                 slot_key: str(metadata.get("expected_file", ""))
                 for slot_key, metadata in self.SLOT_DEFINITIONS.items()
             },
+            "slot_ipe_control_mapping": {k: list(v) for k, v in SLOT_DEFAULT_CONTROLS.items()},
         }
 
     def _current_system_settings(self) -> dict[str, Any]:
@@ -2039,6 +2073,23 @@ class ValidationDesktopApp(QMainWindow):
                 elif isinstance(widget, QLineEdit):
                     widget.setText(str(value))
 
+        # Load IPE mapping into table
+        if hasattr(self, "ipe_mapping_table"):
+            ipe_mapping = settings.get("slot_ipe_control_mapping") if isinstance(settings, dict) else None
+            if not isinstance(ipe_mapping, dict):
+                ipe_mapping = {k: list(v) for k, v in SLOT_DEFAULT_CONTROLS.items()}
+            _offset = 2
+            self.ipe_mapping_table.blockSignals(True)
+            for row_idx, ctrl_id in enumerate(self._ipe_mapping_control_ids):
+                for slot_col, slot_key in enumerate(self._ipe_mapping_slot_keys):
+                    checked_controls = set(ipe_mapping.get(slot_key, []))
+                    is_checked = ctrl_id in checked_controls
+                    item = self.ipe_mapping_table.item(row_idx, _offset + slot_col)
+                    if item is not None:
+                        item.setCheckState(Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked)
+                        item.setBackground(QBrush(QColor("#6d002f")) if is_checked else QBrush())
+            self.ipe_mapping_table.blockSignals(False)
+
     def _collect_system_settings_from_form(self) -> dict[str, Any]:
         def _lines_from_editor(editor: object) -> list[str]:
             if not isinstance(editor, QPlainTextEdit):
@@ -2140,6 +2191,19 @@ class ValidationDesktopApp(QMainWindow):
                 password_defaults[field_name] = self._safe_int(widget.text(), int(default_value))
         settings["password_policy_defaults"] = password_defaults
 
+        # Collect IPE mapping from table
+        if hasattr(self, "ipe_mapping_table"):
+            ipe_mapping: dict[str, list[str]] = {}
+            _offset = 2
+            for slot_col, slot_key in enumerate(self._ipe_mapping_slot_keys):
+                checked: list[str] = []
+                for row_idx, ctrl_id in enumerate(self._ipe_mapping_control_ids):
+                    item = self.ipe_mapping_table.item(row_idx, _offset + slot_col)
+                    if item is not None and item.checkState() == Qt.CheckState.Checked:
+                        checked.append(ctrl_id)
+                ipe_mapping[slot_key] = checked
+            settings["slot_ipe_control_mapping"] = ipe_mapping
+
         return settings
 
     def _normalize_work_environment_code(self, value: object) -> str:
@@ -2174,6 +2238,10 @@ class ValidationDesktopApp(QMainWindow):
         try:
             settings = self._collect_system_settings_from_form()
             self.ui_state_repository.save_system_settings(settings)
+            _saved_mapping = settings.get("slot_ipe_control_mapping")
+            self._slot_control_mapping = (
+                dict(_saved_mapping) if isinstance(_saved_mapping, dict) else dict(SLOT_DEFAULT_CONTROLS)
+            )
             self._sync_review_filters_from_settings(settings)
             self.refresh_user_preview()
             QMessageBox.information(self, "הצלחה", "הגדרות המערכת נשמרו בהצלחה.")
@@ -2184,6 +2252,30 @@ class ValidationDesktopApp(QMainWindow):
         defaults = self._default_system_settings()
         self._load_system_settings_into_form(defaults)
         self._apply_system_settings_availability()
+
+    def _on_ipe_mapping_changed(self, item: QTableWidgetItem) -> None:
+        if self.ipe_mapping_table.column(item) < 2:
+            return
+        self.ipe_mapping_table.blockSignals(True)
+        try:
+            is_checked = item.checkState() == Qt.CheckState.Checked
+            item.setBackground(QBrush(QColor("#6d002f")) if is_checked else QBrush())
+        finally:
+            self.ipe_mapping_table.blockSignals(False)
+
+    def _reset_ipe_mapping_to_defaults(self) -> None:
+        if not hasattr(self, "ipe_mapping_table"):
+            return
+        _offset = 2
+        self.ipe_mapping_table.blockSignals(True)
+        for row_idx, ctrl_id in enumerate(self._ipe_mapping_control_ids):
+            for slot_col, slot_key in enumerate(self._ipe_mapping_slot_keys):
+                is_checked = ctrl_id in set(SLOT_DEFAULT_CONTROLS.get(slot_key, []))
+                item = self.ipe_mapping_table.item(row_idx, _offset + slot_col)
+                if item is not None:
+                    item.setCheckState(Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked)
+                    item.setBackground(QBrush(QColor("#6d002f")) if is_checked else QBrush())
+        self.ipe_mapping_table.blockSignals(False)
 
     def _available_selected_slots(self) -> set[str]:
         return {
@@ -2718,10 +2810,7 @@ class ValidationDesktopApp(QMainWindow):
 
         for path_str in file_paths:
             source = Path(path_str)
-            dlg = IpeControlTagDialog(slot_key, source.name, parent=self)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
-                continue
-            control_ids = dlg.selected_control_ids()
+            control_ids = list(self._slot_control_mapping.get(slot_key, []))
             entry = self.ipe_repository.add_image(slot_key, source, control_ids, self.ipe_evidence_data)
             self._append_thumbnail(slot_key, entry)
             self._update_slot_ipe_indicator(slot_key)
@@ -4239,8 +4328,8 @@ class ValidationDesktopApp(QMainWindow):
         del slot_key
         del extraction_date
         detected_profile = str(getattr(result, "detected_profile", "") or "").upper()
-        control_id = "MA-PERM-01"
-        if detected_profile != "UST04":
+        control_id = "MA3-3_AYALON_14"
+        if detected_profile not in ("UST04", "USH04"):
             return
         if control_id not in get_profile_audit_controls(detected_profile):
             return
@@ -4335,14 +4424,14 @@ class ValidationDesktopApp(QMainWindow):
 
     def _permission_control_slots(self, control_id: str) -> list[str]:
         control_slots: dict[str, list[str]] = {
-            "MA-PERM-01": ["UST04"],
-            "MA-USRMGMT-01": ["AGR_1251", "AGR_USERS"],
-            "MA-AUTHMGMT-01": ["AGR_1251", "AGR_USERS"],
-            "MA-RSCDOK99-01": ["AGR_1251", "AGR_USERS"],
-            "MA-DATAMGMT-01": ["AGR_1251", "AGR_USERS"],
-            "MA-TRANSPORT-01": ["AGR_1251", "AGR_USERS"],
-            "MA-DEBUG-01": ["AGR_1251", "AGR_USERS"],
-            "MA-JOBMGMT-01": ["AGR_1251", "AGR_USERS"],
+            "MA3-3_AYALON_14": ["UST04", "USH04"],
+            "MA1-1_AYALON_10": ["AGR_1251", "AGR_USERS"],
+            "MA1-1_AYALON_11": ["AGR_1251", "AGR_USERS"],
+            "MA1-1_AYALON_12": ["AGR_1251", "AGR_USERS"],
+            "MA1-1_AYALON_16": ["AGR_1251", "AGR_USERS"],
+            "MA1-1_AYALON_43": ["AGR_1251", "AGR_USERS"],
+            "MA1-1_AYALON_45": ["AGR_1251", "AGR_USERS"],
+            "MA1-1_AYALON_67": ["AGR_1251", "AGR_USERS"],
         }
         return control_slots.get(control_id, ["AGR_1251", "AGR_USERS"])
 
@@ -4364,26 +4453,26 @@ class ValidationDesktopApp(QMainWindow):
 
     def _permission_summary_sources(self) -> list[tuple[str, dict[str, dict[str, Any]]]]:
         return [
-            ("MA-PERM-01", self.permissions_summary_records),
-            ("MA-USRMGMT-01", self.user_mgmt_summary_records),
-            ("MA-AUTHMGMT-01", self.auth_mgmt_summary_records),
-            ("MA-RSCDOK99-01", self.rscdok99_summary_records),
-            ("MA-DATAMGMT-01", self.data_mgmt_summary_records),
-            ("MA-TRANSPORT-01", self.transport_summary_records),
-            ("MA-DEBUG-01", self.debug_summary_records),
-            ("MA-JOBMGMT-01", self.job_mgmt_summary_records),
+            ("MA3-3_AYALON_14", self.permissions_summary_records),
+            ("MA1-1_AYALON_10", self.user_mgmt_summary_records),
+            ("MA1-1_AYALON_11", self.auth_mgmt_summary_records),
+            ("MA1-1_AYALON_12", self.rscdok99_summary_records),
+            ("MA1-1_AYALON_16", self.data_mgmt_summary_records),
+            ("MA1-1_AYALON_43", self.transport_summary_records),
+            ("MA1-1_AYALON_45", self.debug_summary_records),
+            ("MA1-1_AYALON_67", self.job_mgmt_summary_records),
         ]
 
     def _permission_user_sources(self) -> dict[str, dict[str, list[dict[str, Any]]]]:
         return {
-            "MA-PERM-01": self.permissions_users_by_control,
-            "MA-USRMGMT-01": self.user_mgmt_users_by_control,
-            "MA-AUTHMGMT-01": self.auth_mgmt_users_by_control,
-            "MA-RSCDOK99-01": self.rscdok99_users_by_control,
-            "MA-DATAMGMT-01": self.data_mgmt_users_by_control,
-            "MA-TRANSPORT-01": self.transport_users_by_control,
-            "MA-DEBUG-01": self.debug_users_by_control,
-            "MA-JOBMGMT-01": self.job_mgmt_users_by_control,
+            "MA3-3_AYALON_14": self.permissions_users_by_control,
+            "MA1-1_AYALON_10": self.user_mgmt_users_by_control,
+            "MA1-1_AYALON_11": self.auth_mgmt_users_by_control,
+            "MA1-1_AYALON_12": self.rscdok99_users_by_control,
+            "MA1-1_AYALON_16": self.data_mgmt_users_by_control,
+            "MA1-1_AYALON_43": self.transport_users_by_control,
+            "MA1-1_AYALON_45": self.debug_users_by_control,
+            "MA1-1_AYALON_67": self.job_mgmt_users_by_control,
         }
 
     def _sync_permissions_findings_into_analysis_summary(self) -> None:
@@ -4648,7 +4737,7 @@ class ValidationDesktopApp(QMainWindow):
         dialog.exec()
 
     # ------------------------------------------------------------------
-    # User-Management Permissions (MA-USRMGMT-01)
+    # User-Management Permissions (MA1-1_AYALON_10)
     # Cross-join: AGR_1251 (permission objects) × AGR_USERS (role assignments)
     # ------------------------------------------------------------------
 
@@ -4657,7 +4746,7 @@ class ValidationDesktopApp(QMainWindow):
         if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
             return
 
-        control_id = "MA-USRMGMT-01"
+        control_id = "MA1-1_AYALON_10"
         control_meta = get_audit_control_definition(control_id)
 
         # Step A: find AGR_NAMEs that carry user-management permission objects.
@@ -4981,7 +5070,7 @@ class ValidationDesktopApp(QMainWindow):
         if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
             return
 
-        control_id = "MA-AUTHMGMT-01"
+        control_id = "MA1-1_AYALON_11"
         control_meta = get_audit_control_definition(control_id)
 
         qualifying_map: dict[tuple[str, str], set[str]] = {
@@ -5228,7 +5317,7 @@ class ValidationDesktopApp(QMainWindow):
         dialog.exec()
 
     # ------------------------------------------------------------------
-    # RSCDOK99 Program Permissions (MA-RSCDOK99-01)
+    # RSCDOK99 Program Permissions (MA1-1_AYALON_12)
     # Cross-join: AGR_1251 (permission objects) × AGR_USERS (role assignments)
     # AND logic: an AGR_NAME qualifies only when it satisfies ALL criteria
     # (S_PROGRAM/P_GROUP=RSCDOK99 AND S_PROGRAM/P_ACTION=SUB).
@@ -5305,7 +5394,7 @@ class ValidationDesktopApp(QMainWindow):
         if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
             return
 
-        control_id = "MA-RSCDOK99-01"
+        control_id = "MA1-1_AYALON_12"
         control_meta = get_audit_control_definition(control_id)
 
         # Build per-AGR_NAME satisfied-criteria tracking.
@@ -5639,7 +5728,7 @@ class ValidationDesktopApp(QMainWindow):
         if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
             return
 
-        control_id = "MA-DATAMGMT-01"
+        control_id = "MA1-1_AYALON_16"
         control_meta = get_audit_control_definition(control_id)
 
         # Step A: find AGR_NAMEs that carry data-management permission objects.
@@ -5971,7 +6060,7 @@ class ValidationDesktopApp(QMainWindow):
         if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
             return
 
-        control_id = "MA-TRANSPORT-01"
+        control_id = "MA1-1_AYALON_43"
         control_meta = get_audit_control_definition(control_id)
 
         # Step A: find AGR_NAMEs that carry transport permission objects.
@@ -6301,7 +6390,7 @@ class ValidationDesktopApp(QMainWindow):
         if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
             return
 
-        control_id = "MA-DEBUG-01"
+        control_id = "MA1-1_AYALON_45"
         control_meta = get_audit_control_definition(control_id)
 
         # Step A: find AGR_NAMEs that carry DEBUG permission objects.
@@ -6633,7 +6722,7 @@ class ValidationDesktopApp(QMainWindow):
         if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
             return
 
-        control_id = "MA-JOBMGMT-01"
+        control_id = "MA1-1_AYALON_67"
         control_meta = get_audit_control_definition(control_id)
 
         qualifying_map: dict[tuple[str, str], set[str]] = {
@@ -6942,7 +7031,7 @@ class ValidationDesktopApp(QMainWindow):
         )
 
     def _sync_developer_sod_finding(self) -> None:
-        control_id = "MA-SOD-01"
+        control_id = "MC5-23_AYALON_48"
         self.audit_summary_records.pop(control_id, None)
         self.audit_details_by_control.pop(control_id, None)
 

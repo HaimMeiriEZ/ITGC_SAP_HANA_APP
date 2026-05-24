@@ -15,6 +15,7 @@ PROFILE_REQUIRED_COLUMNS: dict[str, list[str]] = {
     "E070": ["TRKORR", "AS4USER"],
     "T000": ["MANDT"],
     "STMS": ["TRKORR"],
+    "USH04": ["BNAME", "PROFS"],
     "RSPARAM": ["PARAMETER", "VALUE"],
     "TPFET": ["PARAMETER", "VALUE"],
 }
@@ -80,6 +81,11 @@ PROFILE_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "FIELD": ("FIELD NAME", "AUTH FIELD"),
     "LOW": ("LOW VALUE", "FROM", "FROM VALUE"),
     "HIGH": ("HIGH VALUE", "TO", "TO VALUE"),
+    "MODDA": ("CHANGE DATE", "MODIFICATION DATE", "MODIFIED DATE"),
+    "MODTI": ("CHANGE TIME", "MODIFICATION TIME", "MODIFIED TIME"),
+    "MODBE": ("CHANGED BY", "MODIFIED BY", "MODIFIER"),
+    "NRPRO": ("NUMBER OF PROFILES", "PROFILE COUNT"),
+    "PROFS": ("PROFILES", "PROFILE LIST", "PROFILE NAMES"),
 }
 
 PROFILE_STRUCTURE_RULES: dict[str, dict[str, Any]] = {
@@ -117,6 +123,10 @@ PROFILE_STRUCTURE_RULES: dict[str, dict[str, Any]] = {
         "required_all": ["BNAME", "PROFILE"],
         "friendly_name": "UST04",
     },
+    "USH04": {
+        "required_all": ["BNAME", "PROFS"],
+        "friendly_name": "USH04",
+    },
     "E070": {
         "required_all": ["TRKORR", "AS4USER"],
         "required_one_of": [("AS4DATE", "TRFUNCTION")],
@@ -148,104 +158,98 @@ PROFILE_STRUCTURE_RULES: dict[str, dict[str, Any]] = {
 }
 
 AUDIT_CONTROL_DEFINITIONS: dict[str, dict[str, str]] = {
-    "44": {
+    "MC7-25_AYALON_44": {
         "category": "MC - ניהול שינויים",
         "risk_level": "גבוה",
         "check_type": "STMS - Import מורשים בלבד",
         "description": "Import לסביבת ייצור יתבצע רק על ידי משתמשים מורשים.",
     },
-    "MA-PWD-01": {
+    "MA1-1&MA7-17_AYALON_2": {
         "category": "MA - ניהול גישה",
         "risk_level": "גבוה",
-        "check_type": "מדיניות סיסמאות",
-        "description": "אורך סיסמה מינימלי חייב להיות לפחות 8 תווים.",
+        "check_type": "השלמת סקירת משתמשים",
+        "description": "אחת לשנה ישלף דוח כל המשתמשים הפעילים במערכת ויישלח לאחראי ה-IT לסקירה. הסקירה תכלול בחינה אם המשתמש פעיל/מחוק/נעול, תאריך התחברות אחרון, סוג המשתמש. אם סקירת המשתמשים טרם הושלמה - נוצר ממצא.",
     },
-    "MA-PWD-02": {
-        "category": "MA - ניהול גישה",
-        "risk_level": "גבוה",
-        "check_type": "מדיניות סיסמאות",
-        "description": "נעילת משתמש לאחר ניסיונות כושלים חייבת להיות לכל היותר 6.",
-    },
-    "MA-PWD-03": {
-        "category": "MA - ניהול גישה",
-        "risk_level": "בינוני",
-        "check_type": "מדיניות סיסמאות",
-        "description": "ביטול נעילה אוטומטי לאחר כישלון חייב להיות מבוטל (0).",
-    },
-    "MA-PWD-04": {
-        "category": "MA - ניהול גישה",
-        "risk_level": "גבוה",
-        "check_type": "מדיניות סיסמאות",
-        "description": "תקופת תפוגת סיסמה חייבת להיות לכל היותר 90 ימים.",
-    },
-    "MA-PWD-05": {
-        "category": "MA - ניהול גישה",
-        "risk_level": "בינוני",
-        "check_type": "מדיניות סיסמאות",
-        "description": "היסטוריית סיסמאות חייבת לכלול לפחות 5 ערכים.",
-    },
-    "MA-PWD-06": {
+    "MA1-1_AYALON_5": {
         "category": "MA - ניהול גישה",
         "risk_level": "גבוה",
         "check_type": "משתמשי מערכת",
-        "description": "פרמטר SAP* האוטומטי חייב להיות מבוטל (1).",
+        "description": "DDIC וSAP* הינם משתמשים עם הרשאות הגבוהות ביותר במערכת. יש לוודא שפרמטר login/no_automatic_user_sapstar = 1 להשבתת משתמש SAP* האוטומטי.",
     },
-    "MA-PERM-01": {
+    "MA2-2_AYALON_6": {
         "category": "MA - ניהול גישה",
         "risk_level": "גבוה",
-        "check_type": "פרופילים למשתמשים חזקים",
-        "description": "הקצאת פרופילי-על למשתמש מעניקה הרשאות מערכת רחבות ודורשת בקרה הדוקה.",
+        "check_type": "מדיניות סיסמאות",
+        "description": "מדיניות הסיסמאות במערכת הSAP הינה על פי הbest practice: 1. אורך סיסמה מינימלי 8 תווים. 2. נעילה לאחר לכל היותר 6 ניסיונות כושלים. 3. ביטול נעילה אוטומטי מבוטל. 4. תפוגת סיסמה לכל היותר 90 ימים. 5. היסטוריית סיסמאות לפחות 5 ערכים. 6. מורכבות סיסמה (ספרות, אותיות, תווים מיוחדים). 7. Maximum idle time <=1800 שניות (30 דקות).",
     },
-    "MA-USRMGMT-01": {
+    "MA3-3_AYALON_14": {
         "category": "MA - ניהול גישה",
         "risk_level": "גבוה",
-        "check_type": "AGR_1251+AGR_USERS - הרשאות ניהול משתמשים",
+        "check_type": "פרופילים חזקים",
+        "description": "הקצאת פרופילי-על למשתמש (כגון SAP_ALL, SAP_NEW, S_A.SYSTEM) מעניקה הרשאות מערכת רחבות ודורשת בקרה הדוקה. נבדק על פי UST04 ו-USH04.",
+    },
+    "MA1-1_AYALON_10": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "הרשאות ניהול משתמשים",
         "description": "משתמשים בעלי הרשאות לניהול משתמשים (S_TCODE/SU01/SU10, S_USER_*) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
     },
-    "MA-AUTHMGMT-01": {
+    "MA1-1_AYALON_11": {
         "category": "MA - ניהול גישה",
         "risk_level": "גבוה",
-        "check_type": "AGR_1251+AGR_USERS - הרשאות ניהול הרשאות",
+        "check_type": "הרשאות ניהול הרשאות",
         "description": "משתמשים בעלי הרשאות לניהול הרשאות (S_TCODE/PFCG, S_DEVELOP/ACGR, S_USER_ADM) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
     },
-    "MA-RSCDOK99-01": {
+    "MA1-1_AYALON_12": {
         "category": "MA - ניהול גישה",
         "risk_level": "גבוה",
-        "check_type": "AGR_1251+AGR_USERS - הרשאות לתוכנית RSCDOK99",
+        "check_type": "הרשאות לתוכנית RSCDOK99",
         "description": "משתמשים בעלי הרשאה להרצת תוכנית RSCDOK99 (S_PROGRAM עם P_GROUP=RSCDOK99 ו-P_ACTION=SUB) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
     },
-    "MA-DATAMGMT-01": {
+    "MA1-1_AYALON_16": {
         "category": "MA - ניהול גישה",
         "risk_level": "גבוה",
-        "check_type": "AGR_1251+AGR_USERS - הרשאות לניהול נתונים",
+        "check_type": "הרשאות לניהול נתונים",
         "description": "משתמשים בעלי הרשאות לניהול נתונים (S_TCODE/SE16/SM30/SM31/SE16N/SE17/SM38/SE37, S_TABU_DIS, S_TABU_NAM, S_TABU_CLI, S_DATASET) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
     },
-    "MA-TRANSPORT-01": {
+    "MA1-1_AYALON_43": {
         "category": "MA - ניהול גישה",
         "risk_level": "גבוה",
-        "check_type": "AGR_1251+AGR_USERS - הרשאה להעברת שינויים",
+        "check_type": "הרשאה להעברת שינויים",
         "description": "משתמשים בעלי הרשאה להעברת שינויים (S_TCODE/STMS/SCC4, S_TABU_DIS/DICBERCLS=SS, S_TRANSPORT, S_CTS_ADMI) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
     },
-    "MA-DEBUG-01": {
+    "MA1-1_AYALON_45": {
         "category": "MA - ניהול גישה",
         "risk_level": "גבוה",
-        "check_type": "AGR_1251+AGR_USERS - הרשאות לשימוש ב-DEBUG",
+        "check_type": "הרשאות לשימוש ב-DEBUG",
         "description": "משתמשים בעלי הרשאות DEBUG (S_TCODE/SE38/SA38/SE80/ST05, S_DEVELOP/OBJTYPE=DEBUG, S_DEVELOP/ACTVT, S_PROGRAM/P_ACTION=SUB, S_PROGRAM/P_GROUP=*, S_ADMI_FCD/PADM) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
     },
-    "MA-JOBMGMT-01": {
+    "MA1-1_AYALON_67": {
         "category": "MA - ניהול גישה",
         "risk_level": "גבוה",
-        "check_type": "AGR_1251+AGR_USERS - הרשאה לעידכון ג'ובים",
+        "check_type": "הרשאה לעידכון ג'ובים",
         "description": "משתמשים בעלי הרשאות ניהול ג'ובים (S_TCODE/SM36 וכד', S_BTCH_ADM, S_BTCH_JOB/DELE/RELE/PROT, S_BTCH_NAM/*, S_BTCH_MONI/DELE/RELE) זוהו לפי אובייקטי הרשאה ב-AGR_1251.",
     },
-    "MA-REVIEW-01": {
+    "MA5.1-13_AYALON_24": {
+        "category": "MA - ניהול גישה",
+        "risk_level": "גבוה",
+        "check_type": "משתמשים חדשים",
+        "description": "זיהוי משתמשים שנוצרו במהלך תקופת הביקורת על פי תאריך הוקמת המשתמש (GLTGV) בUSR02.",
+    },
+    "MA5.3-13_AYALON_25": {
         "category": "MA - ניהול גישה",
         "risk_level": "בינוני",
-        "check_type": "השלמת סקירת משתמשים",
-        "description": "סקירת המשתמשים טרם הושלמה במלואה בהתאם לכלל ההשלמה שהוגדר.",
+        "check_type": "משתמשים מנויידים",
+        "description": "זיהוי משתמשים שפרופיל ההרשאות שלהם השתנה במהלך תקופת הביקורת על פי שינוי ב-PROFS בטבלת USH04.",
     },
-    "MA-SOD-01": {
+    "MA7-17_AYALON_30": {
         "category": "MA - ניהול גישה",
+        "risk_level": "בינוני",
+        "check_type": "סקירת הרשאות משתמשים",
+        "description": "סקירת הרשאות תקופתית של כלל המשתמשים הפעילים במערכת על ידי גורמים עסקיים, לווידוא נחיצות ותקינות ההרשאות.",
+    },
+    "MC5-23_AYALON_48": {
+        "category": "MC - ניהול שינויים",
         "risk_level": "גבוה",
         "check_type": "הפרדת תפקידים - מפתחים בסביבת ייצור",
         "description": "זיהוי מפתחים המוגדרים כמשתמשים פעילים בסביבת הייצור (Segregation of Duties).",
@@ -253,10 +257,11 @@ AUDIT_CONTROL_DEFINITIONS: dict[str, dict[str, str]] = {
 }
 
 PROFILE_AUDIT_CONTROLS: dict[str, list[str]] = {
-    "STMS": ["44"],
-    "RSPARAM": ["MA-PWD-01", "MA-PWD-02", "MA-PWD-03", "MA-PWD-04", "MA-PWD-05", "MA-PWD-06"],
-    "TPFET": ["MA-PWD-01", "MA-PWD-02", "MA-PWD-03", "MA-PWD-04", "MA-PWD-05", "MA-PWD-06"],
-    "UST04": ["MA-PERM-01"],
+    "STMS": ["MC7-25_AYALON_44"],
+    "RSPARAM": ["MA2-2_AYALON_6", "MA1-1_AYALON_5"],
+    "TPFET": ["MA2-2_AYALON_6", "MA1-1_AYALON_5"],
+    "UST04": ["MA3-3_AYALON_14"],
+    "USH04": ["MA3-3_AYALON_14", "MA5.3-13_AYALON_25"],
 }
 
 # Criteria for user-management permission check (control MA-USRMGMT-01).
@@ -368,12 +373,18 @@ STRONG_PERMISSION_PROFILES: tuple[str, ...] = (
 
 SAP_APP_RSPARAM_RULES = [
     # (control_id, parameter_name, expected_value, rule_type, message)
-    ("MA-PWD-01", "login/min_password_lng", 8, "minimum", "אורך סיסמה מינימלי חייב להיות לפחות 8 תווים"),
-    ("MA-PWD-02", "login/fails_to_user_lock", 6, "maximum", "נעילת משתמש לאחר ניסיונות כושלים חייבת להיות לכל היותר 6"),
-    ("MA-PWD-03", "login/failed_user_auto_unlock", 0, "maximum", "ביטול נעילה אוטומטי לאחר כישלון חייב להיות מבוטל (0)"),
-    ("MA-PWD-04", "login/password_expiration_time", 90, "maximum", "תקופת תפוגת סיסמה חייבת להיות לכל היותר 90 ימים"),
-    ("MA-PWD-05", "login/password_history_size", 5, "minimum", "היסטוריית סיסמאות חייבת לכלול לפחות 5 ערכים"),
-    ("MA-PWD-06", "login/no_automatic_user_sapstar", 1, "minimum", "פרמטר SAP* האוטומטי חייב להיות מבוטל (1)"),
+    ("MA2-2_AYALON_6", "login/min_password_lng", 8, "minimum", "אורך סיסמה מינימלי חייב להיות לפחות 8 תווים"),
+    ("MA2-2_AYALON_6", "login/fails_to_user_lock", 6, "maximum", "נעילת משתמש לאחר ניסיונות כושלים חייבת להיות לכל היותר 6"),
+    ("MA2-2_AYALON_6", "login/failed_user_auto_unlock", 0, "maximum", "ביטול נעילה אוטומטי לאחר כישלון חייב להיות מבוטל (0)"),
+    ("MA2-2_AYALON_6", "login/password_expiration_time", 90, "maximum", "תקופת תפוגת סיסמה חייבת להיות לכל היותר 90 ימים"),
+    ("MA2-2_AYALON_6", "login/password_history_size", 5, "minimum", "היסטוריית סיסמאות חייבת לכלול לפחות 5 ערכים"),
+    ("MA2-2_AYALON_6", "login/min_password_digits", 1, "minimum", "מספר ספרות מינימלי בסיסמה חייב להיות לפחות 1"),
+    ("MA2-2_AYALON_6", "login/min_password_letters", 1, "minimum", "מספר אותיות מינימלי בסיסמה חייב להיות לפחות 1"),
+    ("MA2-2_AYALON_6", "login/min_password_lowercase", 1, "minimum", "מספר אותיות קטנות מינימלי בסיסמה חייב להיות לפחות 1"),
+    ("MA2-2_AYALON_6", "login/min_password_specials", 1, "minimum", "מספר תווים מיוחדים מינימלי בסיסמה חייב להיות לפחות 1"),
+    ("MA2-2_AYALON_6", "login/min_password_uppercase", 1, "minimum", "מספר אותיות גדולות מינימלי בסיסמה חייב להיות לפחות 1"),
+    ("MA2-2_AYALON_6", "rdisp/gui_auto_logout", 1800, "maximum", "זמן חוסר פעילות מקסימלי חייב להיות לכל היותר 1800 שניות (30 דקות)"),
+    ("MA1-1_AYALON_5", "login/no_automatic_user_sapstar", 1, "minimum", "פרמטר SAP* האוטומטי חייב להיות מבוטל (1)"),
 ]
 
 SAP_ITGC_RELEVANT_PARAMETERS = {
@@ -390,6 +401,7 @@ SAP_ITGC_RELEVANT_PARAMETERS = {
     "login/password_change_for_sso",
     "login/password_downwards_compatibility",
     "login/no_automatic_user_sapstar",
+    "rdisp/gui_auto_logout",
 }
 
 PROFILE_SCOPED_VALUE_PARAMETERS: dict[str, set[str]] = {
@@ -444,6 +456,7 @@ def detect_validation_profile(source_name: str | None, rows: list[dict[str, Any]
         "agr_1252": "AGR_1252",
         "agr_define": "AGR_DEFINE",
         "ust04": "UST04",
+        "ush04": "USH04",
         "e070": "E070",
         "t000": "T000",
         "stms": "STMS",
@@ -477,6 +490,8 @@ def detect_validation_profile(source_name: str | None, rows: list[dict[str, Any]
         return "AGR_1251"
     if matches_column_alias(columns, "AGR_NAME") and matches_column_alias(columns, "UNAME"):
         return "AGR_USERS"
+    if matches_column_alias(columns, "BNAME") and matches_column_alias(columns, "PROFS"):
+        return "USH04"
     if matches_column_alias(columns, "BNAME") and matches_column_alias(columns, "PROFILE"):
         return "UST04"
     if matches_column_alias(columns, "USER_NAME"):
@@ -565,13 +580,13 @@ def build_control_44_issues(
                 ValidationIssue(
                     row_number=row_index,
                     column_name="IMPORT_USER",
-                    message=f"בקרה 44: המשתמש {import_user} העביר את טרנספורט {trkorr} ב-{as4date} אך אינו ברשימת המורשים",
+                    message=f"בקרה MC7-25_AYALON_44: המשתמש {import_user} העביר את טרנספורט {trkorr} ב-{as4date} אך אינו ברשימת המורשים",
                     source_file=str(row.get("__source_file", "")),
-                    control_id="44",
-                    category=AUDIT_CONTROL_DEFINITIONS["44"]["category"],
-                    risk_level=AUDIT_CONTROL_DEFINITIONS["44"]["risk_level"],
-                    check_type=AUDIT_CONTROL_DEFINITIONS["44"]["check_type"],
-                    description=AUDIT_CONTROL_DEFINITIONS["44"]["description"],
+                    control_id="MC7-25_AYALON_44",
+                    category=AUDIT_CONTROL_DEFINITIONS["MC7-25_AYALON_44"]["category"],
+                    risk_level=AUDIT_CONTROL_DEFINITIONS["MC7-25_AYALON_44"]["risk_level"],
+                    check_type=AUDIT_CONTROL_DEFINITIONS["MC7-25_AYALON_44"]["check_type"],
+                    description=AUDIT_CONTROL_DEFINITIONS["MC7-25_AYALON_44"]["description"],
                     actual_value=import_user,
                     expected_value="משתמש מורשה",
                     status="עם ממצא",
@@ -586,13 +601,14 @@ def build_strong_profile_issues(
     profile: str | None,
     rows: list[dict[str, Any]],
 ) -> list[ValidationIssue]:
-    """Detect users with strong system profiles from UST04 rows."""
-    if profile != "UST04" or not rows:
+    """Detect users with strong system profiles from UST04 or USH04 rows."""
+    if profile not in ("UST04", "USH04") or not rows:
         return []
 
     strong_profiles = {normalize_name(value) for value in STRONG_PERMISSION_PROFILES}
-    control_meta = AUDIT_CONTROL_DEFINITIONS.get("MA-PERM-01", {})
+    control_meta = AUDIT_CONTROL_DEFINITIONS.get("MA3-3_AYALON_14", {})
     issues: list[ValidationIssue] = []
+    reported: set[tuple[str, str]] = set()  # deduplicate by (user_name, profile_name)
 
     for row_index, row in enumerate(rows, start=1):
         normalized_row = {
@@ -608,33 +624,61 @@ def build_strong_profile_issues(
                 if user_name:
                     break
 
-        profile_name = ""
-        for candidate in get_column_aliases("PROFILE"):
-            if candidate in normalized_row:
-                profile_name = str(normalized_row.get(candidate, "")).strip().upper()
-                if profile_name:
-                    break
-
-        if not user_name or not profile_name or profile_name not in strong_profiles:
+        if not user_name:
             continue
 
-        issues.append(
-            ValidationIssue(
-                row_number=row_index,
-                column_name="PROFILE",
-                message=f"זוהה פרופיל חזק {profile_name} למשתמש {user_name}",
-                source_file=str(row.get("__source_file", "")),
-                control_id="MA-PERM-01",
-                category=control_meta.get("category", ""),
-                risk_level=control_meta.get("risk_level", ""),
-                check_type=control_meta.get("check_type", ""),
-                description=control_meta.get("description", ""),
-                actual_value=user_name,
-                expected_value=profile_name,
-                status="עם ממצא",
-                full_description=f"למשתמש {user_name} הוקצה הפרופיל החזק {profile_name}.",
+        if profile == "UST04":
+            profile_name = ""
+            for candidate in get_column_aliases("PROFILE"):
+                if candidate in normalized_row:
+                    profile_name = str(normalized_row.get(candidate, "")).strip().upper()
+                    if profile_name:
+                        break
+            if not profile_name or profile_name not in strong_profiles:
+                continue
+            profiles_to_check = [profile_name]
+        else:  # USH04
+            profs_raw = normalized_row.get("PROFS", "")
+            if not profs_raw:
+                # also check alias
+                for candidate in get_column_aliases("PROFS"):
+                    if candidate in normalized_row:
+                        profs_raw = normalized_row.get(candidate, "")
+                        break
+            if not profs_raw:
+                continue
+            profiles_to_check = [
+                p.strip().upper()
+                for p in str(profs_raw).split()
+                if p.strip()
+            ]
+
+        for profile_name in profiles_to_check:
+            if profile_name not in strong_profiles:
+                continue
+            dedup_key = (user_name, profile_name)
+            if dedup_key in reported:
+                continue
+            reported.add(dedup_key)
+
+            col_name = "PROFILE" if profile == "UST04" else "PROFS"
+            issues.append(
+                ValidationIssue(
+                    row_number=row_index,
+                    column_name=col_name,
+                    message=f"זוהה פרופיל חזק {profile_name} למשתמש {user_name}",
+                    source_file=str(row.get("__source_file", "")),
+                    control_id="MA3-3_AYALON_14",
+                    category=control_meta.get("category", ""),
+                    risk_level=control_meta.get("risk_level", ""),
+                    check_type=control_meta.get("check_type", ""),
+                    description=control_meta.get("description", ""),
+                    actual_value=user_name,
+                    expected_value=profile_name,
+                    status="עם ממצא",
+                    full_description=f"למשתמש {user_name} הוקצה הפרופיל החזק {profile_name}.",
+                )
             )
-        )
 
     return issues
 
