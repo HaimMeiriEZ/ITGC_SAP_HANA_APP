@@ -264,6 +264,172 @@ PROFILE_AUDIT_CONTROLS: dict[str, list[str]] = {
     "USH04": ["MA3-3_AYALON_14", "MA5.3-13_AYALON_25"],
 }
 
+# Mapping of detected profile -> Hebrew description of source tables (working-paper "תיעוד נדרש")
+PROFILE_REQUIRED_TABLES: dict[str, str] = {
+    "STMS": "טבלה STMS, טבלה E070",
+    "RSPARAM": "טבלה RSPARAM",
+    "TPFET": "טבלה TPFET",
+    "USR02": "טבלה USR02, טבלה ADR6, טבלה USR21",
+    "AGR_1251": "AGR_1251 × AGR_USERS (cross-join)",
+    "AGR_USERS": "AGR_1251 × AGR_USERS (cross-join)",
+    "UST04": "טבלה UST04, טבלה USH04",
+    "USH04": "טבלה UST04, טבלה USH04",
+}
+
+# Per-control documentation/tables string used in working paper (overrides profile mapping)
+CONTROL_REQUIRED_TABLES: dict[str, str] = {
+    "MC7-25_AYALON_44": "טבלה STMS, טבלה E070",
+    "MA1-1&MA7-17_AYALON_2": "טבלה USR02, טבלה ADR6, טבלה USR21",
+    "MA1-1_AYALON_5": "טבלה RSPARAM",
+    "MA2-2_AYALON_6": "טבלה RSPARAM",
+    "MA3-3_AYALON_14": "טבלה UST04, טבלה USH04",
+    "MA1-1_AYALON_10": "AGR_1251 × AGR_USERS (cross-join)",
+    "MA1-1_AYALON_11": "AGR_1251 × AGR_USERS (cross-join)",
+    "MA1-1_AYALON_12": "AGR_1251 × AGR_USERS (cross-join)",
+    "MA1-1_AYALON_16": "AGR_1251 × AGR_USERS (cross-join)",
+    "MA1-1_AYALON_43": "AGR_1251 × AGR_USERS (cross-join)",
+    "MA1-1_AYALON_45": "AGR_1251 × AGR_USERS (cross-join)",
+    "MA1-1_AYALON_67": "AGR_1251 × AGR_USERS (cross-join)",
+    "MA5.1-13_AYALON_24": "טבלה USR02, AGR_1251 × AGR_USERS (cross-join)",
+    "MA5.3-13_AYALON_25": "טבלה USH04",
+    "MA7-17_AYALON_30": "טבלה USR02, AGR_1251 × AGR_USERS (cross-join)",
+    "MC5-23_AYALON_48": "טבלה USR02",
+}
+
+# Per-control list of parameter/object names validated automatically.
+# Used in working-paper "צעדי טסט" section 3 (auto-validation).
+CONTROL_VALIDATION_PARAMS: dict[str, list[str]] = {
+    "MA2-2_AYALON_6": [
+        "login/min_password_lng",
+        "login/fails_to_user_lock",
+        "login/failed_user_auto_unlock",
+        "login/password_expiration_time",
+        "login/password_history_size",
+        "login/min_password_digits",
+        "login/min_password_letters",
+        "login/min_password_lowercase",
+        "login/min_password_specials",
+        "login/min_password_uppercase",
+        "rdisp/gui_auto_logout",
+    ],
+    "MA1-1_AYALON_5": ["login/no_automatic_user_sapstar"],
+    "MC7-25_AYALON_44": ["משתמשי TR בטבלת E070 / STMS"],
+    "MA3-3_AYALON_14": ["SAP_ALL", "SAP_NEW", "S_A.SYSTEM"],
+    "MA1-1_AYALON_10": [
+        "S_TCODE/SU01, SU10",
+        "S_USER_PRO/ACTVT (01,02)",
+        "S_USER_AGR/ACTVT (01,02)",
+        "S_USER_AUT/ACTVT (01,02)",
+        "S_USER_GRP/ACTVT (01,02)",
+    ],
+    "MA1-1_AYALON_11": [
+        "S_TCODE/PFCG",
+        "S_USER_PRO, S_USER_AGR, S_USER_AUT, S_USER_GRP, S_USER_SYS",
+        "S_USER_TCD, S_USER_VAL (ACTVT 01,02)",
+        "S_DEVELOP/OBJTYPE=ACGR",
+        "S_USER_ADM/ACTVT=01",
+    ],
+    "MA1-1_AYALON_12": [
+        "S_PROGRAM/P_GROUP=RSCDOK99",
+        "S_PROGRAM/P_ACTION=SUB",
+    ],
+    "MA1-1_AYALON_16": [
+        "S_TCODE/SE16, SM30, SM31, SE16N, SE17, SM38, SE37",
+        "S_TABU_DIS/ACTVT (01,02,06)",
+        "S_TABU_NAM (כל טבלה)",
+        "S_TABU_CLI/CLIIDMAINT=X",
+        "S_DATASET/ACTVT (06,34)",
+    ],
+    "MA1-1_AYALON_43": [
+        "S_TCODE/STMS, STMS_IMPORT, SCC4",
+        "S_TABU_DIS/DICBERCLS=SS",
+        "S_TRANSPORT/ACTVT (01,02,50,60,06,43)",
+        "S_CTS_ADMI/CTS_ADMFCT (IMPT,IMPA,IMP*)",
+    ],
+    "MA1-1_AYALON_45": [
+        "S_TCODE/SE38, SA38, SE80, ST05",
+        "S_DEVELOP/OBJTYPE=DEBUG",
+        "S_DEVELOP/ACTVT (01,02)",
+        "S_PROGRAM/P_ACTION=SUB, P_GROUP=*",
+        "S_ADMI_FCD=PADM",
+    ],
+    "MA1-1_AYALON_67": [
+        "S_TCODE/SM36, SE36, SE37, SM36WIZ",
+        "S_BTCH_ADM/BTCADMIN=Y",
+        "S_BTCH_JOB/JOBACTION (DELE,RELE,PROT)",
+        "S_BTCH_NAM/BTCUNAME",
+        "S_BTCH_MONI/BSCAKTI (DELE,RELE)",
+    ],
+    "MA1-1&MA7-17_AYALON_2": [
+        "USR02.BNAME, USR02.GLTGB, USR02.TRDAT",
+        "ADR6.SMTP_ADDR",
+        "USR21.PERSNUMBER",
+    ],
+    "MA5.1-13_AYALON_24": ["USR02.GLTGV (תאריך הקמת משתמש)"],
+    "MA5.3-13_AYALON_25": ["USH04.PROFS (שינוי פרופיל)"],
+    "MA7-17_AYALON_30": ["USR02 + AGR_1251 × AGR_USERS"],
+    "MC5-23_AYALON_48": ["USR02.USTYP, רשימת מפתחות מורשים"],
+}
+
+# Per-control description of filtering applied (working-paper "צעדי טסט" section 4)
+CONTROL_FILTER_CRITERIA: dict[str, str] = {
+    "MC7-25_AYALON_44": "סינון רשומות בטבלת E070/STMS לפי שדה משתמש שביצע Import לסביבת ייצור, והשוואה לרשימת המורשים שהוגדרה בהגדרות המערכת.",
+    "MA1-1_AYALON_5": "סינון רשומת הפרמטר login/no_automatic_user_sapstar והשוואת הערך לערך הנדרש (1).",
+    "MA2-2_AYALON_6": "סינון 11 הפרמטרים הרלוונטיים בלבד מתוך RSPARAM/TPFET, והשוואת ערכיהם לערכי הסף שהוגדרו במסך 'הגדרות מערכת לביקורת'.",
+    "MA3-3_AYALON_14": "סינון רשומות מ-UST04/USH04 שהפרופיל המוקצה הוא SAP_ALL / SAP_NEW / S_A.SYSTEM.",
+    "MA1-1_AYALON_10": "סינון רולים (AGR_NAME) שמכילים את אובייקטי ההרשאה לניהול משתמשים, ומשם מיפוי המשתמשים (UNAME) דרך AGR_USERS.",
+    "MA1-1_AYALON_11": "סינון רולים שמכילים את אובייקטי ההרשאה לניהול הרשאות (PFCG וכו'), ומיפוי משתמשים דרך AGR_USERS.",
+    "MA1-1_AYALON_12": "סינון רולים שמכילים AT-once את שני הקריטריונים: S_PROGRAM/P_GROUP=RSCDOK99 וגם S_PROGRAM/P_ACTION=SUB.",
+    "MA1-1_AYALON_16": "סינון רולים עם אובייקטי הרשאה לניהול נתונים, מיפוי המשתמשים דרך AGR_USERS.",
+    "MA1-1_AYALON_43": "סינון רולים עם הרשאות העברת שינויים (STMS/SCC4/S_TRANSPORT/S_CTS_ADMI), מיפוי משתמשים דרך AGR_USERS.",
+    "MA1-1_AYALON_45": "סינון רולים עם הרשאות DEBUG, מיפוי משתמשים דרך AGR_USERS.",
+    "MA1-1_AYALON_67": "סינון רולים עם הרשאות ניהול ג'ובים, מיפוי משתמשים דרך AGR_USERS.",
+    "MA1-1&MA7-17_AYALON_2": "סינון משתמשים פעילים מ-USR02 (לפי GLTGB/USTYP), הוספת מידע אימייל מ-ADR6/USR21, וזיהוי ממצאים לפי כללי השלמת סקירת המשתמשים.",
+    "MA5.1-13_AYALON_24": "סינון משתמשים שתאריך הקמתם (GLTGV) חל בתקופת הביקורת שהוגדרה.",
+    "MA5.3-13_AYALON_25": "סינון רשומות USH04 בהן שדה PROFS השתנה במהלך תקופת הביקורת.",
+    "MA7-17_AYALON_30": "צירוף משתמשים פעילים מ-USR02 עם רשימת הרולים שלהם (AGR_USERS) לצורך סקירת הרשאות תקופתית.",
+    "MC5-23_AYALON_48": "זיהוי מפתחים פעילים בסביבת ייצור על-ידי חיתוך USR02 (משתמשים פעילים) עם רשימת המפתחות שהוגדרה.",
+}
+
+# Generic template for "צעדי טסט". Sections 3 and 4 are filled dynamically per control.
+TEST_STEPS_TEMPLATE = (
+    "1. הפקת הנתונים מהמערכת (Source: SAP HANA), כולל הקפדה על הפקת התקופה הרלוונטית לביקורת.\n"
+    "2. קליטת הקבצים במסך 'קליטת קבצים' עם ולידציה של מבנה הקובץ והשדות הנדרשים.\n"
+    "3. ולידציה אוטומטית של ערכי הפרמטרים והאובייקטים שנקבעו לבדיקה:\n"
+    "{validation_params}\n"
+    "4. סינון הרשומות לפי כללי הבקרה:\n"
+    "   {filter_criteria}\n"
+    "5. איסוף ממצאים: השוואת תוצאות לציפיות, סימון רשומות חורגות והפקת רשימת ממצאים.\n"
+    "6. תיעוד IPE (Independent Proof of Evidence) המצורף לקליטת הקבצים, כולל צילומי מסך והוכחת מקור הנתונים."
+)
+
+
+def build_test_steps_for_control(control_id: str) -> str:
+    """Return the dynamic 'צעדי טסט' text for a given control_id.
+
+    Uses TEST_STEPS_TEMPLATE plus per-control validation params and filter criteria.
+    Appends 'הערות נוספות' from AUDIT_CONTROL_DEFINITIONS (loaded from CSV) when present.
+    """
+    params = CONTROL_VALIDATION_PARAMS.get(control_id, [])
+    if params:
+        params_block = "\n".join(f"   - {p}" for p in params)
+    else:
+        params_block = "   - בהתאם להגדרות הולידציה של פרופיל הקובץ"
+
+    filters = CONTROL_FILTER_CRITERIA.get(
+        control_id,
+        "סינון בהתאם לכללי הבקרה והפרופיל שנקלט.",
+    )
+
+    text = TEST_STEPS_TEMPLATE.format(
+        validation_params=params_block,
+        filter_criteria=filters,
+    )
+    extra_notes = (AUDIT_CONTROL_DEFINITIONS.get(control_id, {}) or {}).get("extra_notes", "")
+    if extra_notes:
+        text += f"\n\nהערות נוספות:\n{extra_notes}"
+    return text
+
 # Criteria for user-management permission check (control MA-USRMGMT-01).
 # Maps (OBJECT, FIELD) -> set of qualifying LOW/HIGH values.
 # A row in AGR_1251 qualifies when its OBJECT+FIELD match and either:

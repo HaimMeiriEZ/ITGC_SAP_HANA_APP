@@ -50,9 +50,14 @@ from src.config import AppConfig, CONTROL_GROUPS, CONTROL_LABELS, SLOT_DEFAULT_C
 from src.models.validation_result import ValidationIssue
 from src.pipeline import process_file
 from src.persistence.ui_state_repository import IpeEvidenceRepository, UiStateRepository
+from src.persistence.controls_metadata_loader import (
+    apply_metadata_to_definitions,
+    load_controls_metadata_csv,
+)
 from src.readers.excel_reader import ExcelFileReader
 from src.readers.text_reader import TextFileReader
 from src.reporting.excel_report import ExcelReportWriter
+from src.reporting.working_paper_report import write_control_working_paper
 from src.services.audit_service import (
     build_audit_detail_row,
     build_audit_detail_values,
@@ -78,6 +83,7 @@ from src.services.user_review_service import (
     reviewer_state_key,
 )
 from src.validators.spec_rules import (
+    AUDIT_CONTROL_DEFINITIONS,
     AUTH_MGMT_PERMISSION_CRITERIA,
     DATA_MGMT_PERMISSION_CRITERIA,
     DEBUG_PERMISSION_CRITERIA,
@@ -460,6 +466,14 @@ class ValidationDesktopApp(QMainWindow):
         self.ipe_evidence_data: dict[str, list[dict[str, Any]]] = {}
         self.config.input_dir.mkdir(parents=True, exist_ok=True)
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Merge CSV-supplied metadata into AUDIT_CONTROL_DEFINITIONS at startup
+        try:
+            csv_metadata = load_controls_metadata_csv(self.config.output_dir)
+            if csv_metadata:
+                apply_metadata_to_definitions(csv_metadata, AUDIT_CONTROL_DEFINITIONS)
+        except Exception:  # pragma: no cover - never block startup
+            pass
         self.report_path: Path | None = None
         self.log_export_path: Path | None = None
         self.slot_widgets: dict[str, dict[str, Any]] = {}
@@ -471,10 +485,19 @@ class ValidationDesktopApp(QMainWindow):
         self.run_log_records: list[dict[str, Any]] = []
         self.audit_summary_records: dict[str, dict[str, Any]] = {}
         self.audit_details_by_control: dict[str, list[dict[str, Any]]] = {}
+        # Raw slot rows captured per control_id for working-paper export
+        self.control_to_slot_rows: dict[str, list[dict[str, Any]]] = {}
+        self.control_to_slot_key: dict[str, str] = {}
+        # Population count per slot_key (rows ingested) for IPE working-paper sheet
+        self.slot_to_row_count: dict[str, int] = {}
         self.permissions_summary_records: dict[str, dict[str, Any]] = {}
         self.permissions_users_by_control: dict[str, list[dict[str, Any]]] = {}
+        # Per-source-profile staging for MA3-3 strong profiles control.
+        # Structure: {detected_profile (UST04/USH04): {client_name: {user_name: set(profile_names)}}}
+        self._strong_profile_data: dict[str, dict[str, dict[str, set[str]]]] = {}
         self.agr_1251_cached_rows: list[dict[str, Any]] = []
         self.agr_users_cached_rows: list[dict[str, Any]] = []
+        self.agr_users_population_by_mandt: dict[str, int] = {}
         self.user_mgmt_summary_records: dict[str, dict[str, Any]] = {}
         self.user_mgmt_users_by_control: dict[str, list[dict[str, Any]]] = {}
         self.auth_mgmt_summary_records: dict[str, dict[str, Any]] = {}
@@ -709,7 +732,7 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_summary_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         audit_summary_layout = QVBoxLayout(self.audit_summary_group)
         audit_summary_layout.setContentsMargins(8, 14, 8, 8)
-        self.audit_summary_table = QTableWidget(0, 10)
+        self.audit_summary_table = QTableWidget(0, 11)
         self.audit_summary_table.setItemDelegate(_RightAlignDelegate(self.audit_summary_table))
         self.audit_summary_table.setHorizontalHeaderLabels([
             self.format_rtl_text("מזהה בקרה"),
@@ -718,6 +741,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("רשומות תקינות"),
             self.format_rtl_text("רשומות עם ממצא"),
             self.format_rtl_text("סהכ רשומות"),
+            self.format_rtl_text("נייר עבודה"),
             self.format_rtl_text("סביבת עבודה"),
             self.format_rtl_text("קובץ מקור"),
             self.format_rtl_text("תאריך הפקה"),
@@ -728,7 +752,8 @@ class ValidationDesktopApp(QMainWindow):
         _audit_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _audit_summary_hdr.setStretchLastSection(False)
         self.audit_summary_table.setColumnWidth(1, 200)  # סוג בדיקה
-        self.audit_summary_table.setColumnWidth(9, 220)  # תיאור בדיקה
+        self.audit_summary_table.setColumnWidth(6, 90)   # נייר עבודה
+        self.audit_summary_table.setColumnWidth(10, 220) # תיאור בדיקה
         self.audit_summary_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.audit_summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.audit_summary_table.setAlternatingRowColors(True)
@@ -1511,6 +1536,16 @@ class ValidationDesktopApp(QMainWindow):
             }
             QTableWidget::item {
                 padding-right: 4px;
+            }
+            QTableWidget::item:selected,
+            QTableView::item:selected {
+                background-color: #1f4e79;
+                color: white;
+            }
+            QTableWidget::item:selected:!active,
+            QTableView::item:selected:!active {
+                background-color: #1f4e79;
+                color: white;
             }
             QComboBox {
                 background-color: #eef3fc;
@@ -3929,6 +3964,19 @@ class ValidationDesktopApp(QMainWindow):
             audit_issues=audit_issues,
             extraction_date=self._get_slot_extraction_date(slot_key),
         )
+
+        # Capture raw rows per control for working-paper export
+        try:
+            slot_rows = list(getattr(result, "rows", []) or [])
+            self.slot_to_row_count[slot_key] = len(slot_rows)
+            expected_controls = get_profile_audit_controls(getattr(result, "detected_profile", slot_key))
+            control_ids = sorted(set([iss.control_id for iss in audit_issues if iss.control_id] + expected_controls))
+            for cid in control_ids:
+                self.control_to_slot_rows[cid] = slot_rows
+                self.control_to_slot_key[cid] = slot_key
+        except Exception:
+            pass
+
         self._refresh_audit_summary_table()
         self._upsert_permissions_control_data(
             slot_key=slot_key,
@@ -3951,6 +3999,20 @@ class ValidationDesktopApp(QMainWindow):
             self._compute_job_mgmt_permissions()
         elif detected_profile == "AGR_USERS":
             self.agr_users_cached_rows = list(getattr(result, "rows", []))
+            # Compute unique-user population per MANDT for summary table
+            _pop_sets: dict[str, set[str]] = {}
+            for _row in self.agr_users_cached_rows:
+                _mandt_val = self._resolve_row_value_by_priority(_row, "MANDT")
+                if _mandt_val is not None and str(_mandt_val).strip():
+                    _mandt = str(_mandt_val).strip()
+                else:
+                    _src = str(_row.get("__source_file", ""))
+                    _dm = re.search(r"\d{3}", Path(_src).name)
+                    _mandt = _dm.group(0) if _dm else "-"
+                _uname_val = self._resolve_row_value_by_priority(_row, "UNAME")
+                if _uname_val is not None and str(_uname_val).strip():
+                    _pop_sets.setdefault(_mandt, set()).add(str(_uname_val).strip().upper())
+            self.agr_users_population_by_mandt = {m: len(s) for m, s in _pop_sets.items()}
             self._compute_user_mgmt_permissions()
             self._compute_auth_mgmt_permissions()
             self._compute_rscdok99_permissions()
@@ -4168,7 +4230,7 @@ class ValidationDesktopApp(QMainWindow):
         return fallback_value
 
     @classmethod
-    def _build_password_control_snapshots(cls, rows: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    def _build_password_control_snapshots(cls, rows: list[dict[str, Any]]) -> dict[str, list[dict[str, str]]]:
         param_map: dict[str, object] = {}
         for row in rows:
             parameter_column = cls._find_row_column_by_alias(row, "PARAMETER")
@@ -4185,18 +4247,47 @@ class ValidationDesktopApp(QMainWindow):
 
             param_map[parameter_name] = value
 
-        snapshots: dict[str, dict[str, str]] = {}
-        for control_id, param_name, expected, _rule_type, _message in SAP_APP_RSPARAM_RULES:
+        snapshots: dict[str, list[dict[str, str]]] = {}
+        for control_id, param_name, expected, rule_type, message in SAP_APP_RSPARAM_RULES:
             if param_name not in param_map:
+                entry: dict[str, str] = {
+                    "check_type": param_name,
+                    "description": message,
+                    "actual_value": "לא נמצא",
+                    "expected_value": str(expected),
+                    "status": "עם ממצא",
+                    "full_description": f"הפרמטר {param_name} לא נמצא בדוח RSPARAM. הערך המצופה הוא {expected}.",
+                }
+                snapshots.setdefault(control_id, []).append(entry)
                 continue
 
             actual = param_map[param_name]
-            snapshots[control_id] = {
+            try:
+                actual_float = float(str(actual).replace(",", "").strip())
+                if rule_type == "minimum":
+                    passes = actual_float >= float(expected)
+                elif rule_type == "maximum":
+                    passes = actual_float <= float(expected)
+                else:
+                    passes = True
+            except (ValueError, TypeError):
+                passes = False
+
+            status = "תקין" if passes else "עם ממצא"
+            if passes:
+                full_desc = f"הערך בפועל עבור {param_name} הוא {actual}, בעוד שהערך המצופה הוא {expected}. ההגדרה תקינה לפי דרישת הבקרה."
+            else:
+                full_desc = f"הערך בפועל עבור {param_name} הוא {actual}, בעוד שהערך המצופה הוא {expected}. ההגדרה אינה עומדת בדרישת הבקרה."
+
+            entry = {
+                "check_type": param_name,
+                "description": message,
                 "actual_value": str(actual),
                 "expected_value": str(expected),
-                "status": "תקין",
-                "full_description": f"הערך בפועל עבור {param_name} הוא {actual}, בעוד שהערך המצופה הוא {expected}. ההגדרה תקינה לפי דרישת הבקרה.",
+                "status": status,
+                "full_description": full_desc,
             }
+            snapshots.setdefault(control_id, []).append(entry)
 
         return snapshots
 
@@ -4335,7 +4426,7 @@ class ValidationDesktopApp(QMainWindow):
             return
 
         strong_issues = [issue for issue in audit_issues if issue.control_id == control_id]
-        users_by_client: dict[str, dict[str, set[str]]] = {}
+        slot_users_by_client: dict[str, dict[str, set[str]]] = {}
         rows = list(getattr(result, "rows", []))
 
         for issue in strong_issues:
@@ -4360,10 +4451,23 @@ class ValidationDesktopApp(QMainWindow):
             if not user_name:
                 continue
 
-            client_users = users_by_client.setdefault(client_name, {})
+            client_users = slot_users_by_client.setdefault(client_name, {})
             client_users.setdefault(user_name, set())
             if profile_name:
                 client_users[user_name].add(profile_name)
+
+        # Store this source-profile's slice (replaces only data from THIS profile,
+        # preserving the OTHER profile's findings - fixes the bug where loading USH04
+        # wiped previously-loaded UST04 findings and vice versa).
+        self._strong_profile_data[detected_profile] = slot_users_by_client
+
+        # Merge UST04 + USH04 slices into a unified per-client view.
+        merged_users_by_client: dict[str, dict[str, set[str]]] = {}
+        for prof_bucket in self._strong_profile_data.values():
+            for client_name, users in prof_bucket.items():
+                client_users = merged_users_by_client.setdefault(client_name, {})
+                for user_name, profiles in users.items():
+                    client_users.setdefault(user_name, set()).update(profiles)
 
         keys_to_delete = [key for key in self.permissions_summary_records if str(key).startswith(f"{control_id}|")]
         for key in keys_to_delete:
@@ -4371,7 +4475,7 @@ class ValidationDesktopApp(QMainWindow):
             self.permissions_users_by_control.pop(key, None)
 
         control_meta = get_audit_control_definition(control_id)
-        if not users_by_client:
+        if not merged_users_by_client:
             record_key = f"{control_id}|-"
             self.permissions_summary_records[record_key] = {
                 "record_key": record_key,
@@ -4385,7 +4489,7 @@ class ValidationDesktopApp(QMainWindow):
             self.permissions_users_by_control[record_key] = []
             return
 
-        for client_name, client_users in sorted(users_by_client.items(), key=lambda item: item[0]):
+        for client_name, client_users in sorted(merged_users_by_client.items(), key=lambda item: item[0]):
             users_count = len(client_users)
             record_key = f"{control_id}|{client_name}"
             self.permissions_summary_records[record_key] = {
@@ -4524,7 +4628,16 @@ class ValidationDesktopApp(QMainWindow):
                         if row_has_finding:
                             finding_users.add(user_key)
 
-                if all_users:
+                # For AGR-based controls: population = all unique users in AGR_USERS.
+                # MA3-3_AYALON_14 uses UST04/USH04 data, so it keeps the current logic.
+                is_agr_control = (
+                    control_id != "MA3-3_AYALON_14"
+                    and bool(self.agr_users_population_by_mandt)
+                )
+                if is_agr_control:
+                    total_records = sum(self.agr_users_population_by_mandt.values())
+                    finding_records = len(all_users)
+                elif all_users:
                     total_records = len(all_users)
                     finding_records = len(finding_users)
                 else:
@@ -7120,12 +7233,24 @@ class ValidationDesktopApp(QMainWindow):
             row_index = self.audit_summary_table.rowCount()
             self.audit_summary_table.insertRow(row_index)
             values = build_audit_summary_values(row_data)
-            for column, value in enumerate(values):
+            # Insert values: cols 0..5 directly, then skip col 6 (button), shift cols 6..9 to 7..10
+            for value_index, value in enumerate(values):
+                target_col = value_index if value_index < 6 else value_index + 1
                 item = QTableWidgetItem(self.format_rtl_text(value))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if column == 0:
+                if value_index == 0:
                     item.setData(Qt.ItemDataRole.UserRole, row_data.get("control_id", ""))
-                self.audit_summary_table.setItem(row_index, column, item)
+                self.audit_summary_table.setItem(row_index, target_col, item)
+
+            # Add working-paper export button in column 6 (between סהכ רשומות and סביבת עבודה)
+            control_id_value = str(row_data.get("control_id", ""))
+            wp_button = QPushButton("📄")
+            wp_button.setToolTip(self.format_rtl_text("ייצוא נייר עבודה"))
+            wp_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            wp_button.clicked.connect(
+                lambda _checked=False, cid=control_id_value: self._export_control_working_paper(cid)
+            )
+            self.audit_summary_table.setCellWidget(row_index, 6, wp_button)
 
         if self.audit_summary_table.rowCount() > 0:
             self.audit_summary_table.selectRow(0)
@@ -7174,6 +7299,83 @@ class ValidationDesktopApp(QMainWindow):
             QMessageBox.information(self, "הייצוא הושלם", f"קובץ הממצאים נשמר בהצלחה:\n{export_path}")
 
         return export_path
+
+    def _export_control_working_paper(self, control_id: str) -> None:
+        """Export a per-control working paper Excel file."""
+        if not control_id:
+            return
+        summary_record = self.audit_summary_records.get(control_id)
+        if not summary_record:
+            QMessageBox.warning(
+                self,
+                "אין נתונים לייצוא",
+                f"לא נמצאו נתוני בקרה עבור {control_id}.",
+            )
+            return
+
+        detail_rows = list(self.audit_details_by_control.get(control_id, []))
+        raw_population_rows = list(self.control_to_slot_rows.get(control_id, []))
+
+        # Filter IPE entries by matching slot key, enriching each with extraction_date + population_count
+        slot_key = self.control_to_slot_key.get(control_id, "")
+        ipe_entries: list[dict[str, Any]] = []
+
+        def _enrich(entry: dict[str, Any], source_slot: str) -> dict[str, Any]:
+            enriched = dict(entry)
+            enriched["extraction_date"] = self._get_slot_extraction_date(source_slot) or "-"
+            enriched["population_count"] = self.slot_to_row_count.get(source_slot, "-")
+            return enriched
+
+        if slot_key:
+            for entry in (self.ipe_evidence_data.get(slot_key, []) or []):
+                ipe_entries.append(_enrich(entry, slot_key))
+        # Also include entries explicitly assigned to this control_id across other slots
+        for s_key, entries in (self.ipe_evidence_data or {}).items():
+            if s_key == slot_key:
+                continue
+            for entry in entries or []:
+                if control_id in (entry.get("control_ids") or []):
+                    ipe_entries.append(_enrich(entry, s_key))
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_id = re.sub(r"[\\/*?:\[\]&]", "_", control_id)
+        default_name = f"{safe_id}_working_paper_{timestamp}.xlsx"
+        default_path = str(self.config.output_dir / default_name)
+
+        chosen_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "שמירת נייר עבודה",
+            default_path,
+            "Excel Files (*.xlsx)",
+        )
+        if not chosen_path:
+            return
+        if not chosen_path.lower().endswith(".xlsx"):
+            chosen_path += ".xlsx"
+
+        try:
+            write_control_working_paper(
+                control_id=control_id,
+                summary_record=summary_record,
+                detail_rows=detail_rows,
+                raw_population_rows=raw_population_rows,
+                ipe_entries=ipe_entries,
+                work_environment_label=self._current_work_environment_label(),
+                output_path=Path(chosen_path),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "שגיאה בייצוא",
+                f"שגיאה ביצירת נייר העבודה:\n{exc}",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "הייצוא הושלם",
+            f"נייר העבודה נשמר בהצלחה:\n{chosen_path}",
+        )
 
     def _build_audit_detail_dialog_text(self, row_index: int) -> str:
         if row_index < 0 or row_index >= self.audit_detail_table.rowCount():
@@ -7308,6 +7510,10 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_details_by_control = {}
         self.permissions_summary_records = {}
         self.permissions_users_by_control = {}
+        self._strong_profile_data = {}
+        self.slot_to_row_count = {}
+        self.control_to_slot_rows = {}
+        self.control_to_slot_key = {}
         self.audit_summary_table.setRowCount(0)
         self.audit_detail_table.setRowCount(0)
         self.permissions_summary_table.setRowCount(0)

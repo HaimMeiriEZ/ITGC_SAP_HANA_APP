@@ -15,6 +15,7 @@ def build_audit_detail_row(
     control_snapshot: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if issue is None:
+        _snap = control_snapshot or {}
         return {
             "control_id": control_id,
             "source_file": source_file,
@@ -22,12 +23,12 @@ def build_audit_detail_row(
             "work_environment": work_environment_label,
             "category": control_meta.get("category", "-"),
             "risk_level": control_meta.get("risk_level", "-"),
-            "description": control_meta.get("description", "-"),
-            "check_type": control_meta.get("check_type", "-"),
-            "actual_value": (control_snapshot or {}).get("actual_value", "-"),
-            "expected_value": (control_snapshot or {}).get("expected_value", "-"),
-            "status": (control_snapshot or {}).get("status", "תקין"),
-            "full_description": (control_snapshot or {}).get("full_description", "לא נמצאו ממצאים עבור הבקרה."),
+            "description": _snap.get("description") or control_meta.get("description", "-"),
+            "check_type": _snap.get("check_type") or control_meta.get("check_type", "-"),
+            "actual_value": _snap.get("actual_value", "-"),
+            "expected_value": _snap.get("expected_value", "-"),
+            "status": _snap.get("status", "תקין"),
+            "full_description": _snap.get("full_description", "לא נמצאו ממצאים עבור הבקרה."),
         }
 
     return {
@@ -58,7 +59,7 @@ def upsert_audit_control_data(
     get_audit_control_definition_cb: Callable[[str], dict[str, str]],
     get_profile_audit_controls_cb: Callable[[str], list[str]],
     count_stms_control_records_cb: Callable[[list[dict[str, Any]]], int],
-    build_password_control_snapshots_cb: Callable[[list[dict[str, Any]]], dict[str, dict[str, str]]],
+    build_password_control_snapshots_cb: Callable[[list[dict[str, Any]]], dict[str, list[dict[str, str]]]],
 ) -> None:
     control_ids = [issue.control_id for issue in audit_issues if issue.control_id]
     expected_controls = get_profile_audit_controls_cb(getattr(result, "detected_profile", slot_key))
@@ -76,10 +77,13 @@ def upsert_audit_control_data(
         control_issues = [issue for issue in audit_issues if issue.control_id == control_id]
         finding_records = len(control_issues)
 
+        param_snaps: list[dict[str, str]] = password_snapshots.get(control_id, [])
         if control_id == "MC7-25_AYALON_44":
             total_records = count_stms_control_records_cb(rows)
+        elif param_snaps:
+            total_records = len(param_snaps)
         else:
-            total_records = 1
+            total_records = len(rows)
 
         if total_records <= 0:
             total_records = max(finding_records, 1)
@@ -98,18 +102,8 @@ def upsert_audit_control_data(
             "total_records": total_records,
         }
 
-        detail_rows = [
-            build_audit_detail_row(
-                issue,
-                control_id,
-                source_file_label,
-                extraction_date,
-                control_meta,
-                work_environment_label,
-            )
-            for issue in control_issues
-        ]
-        if not detail_rows:
+        if param_snaps:
+            # One detail row per RSPARAM/TPFET parameter (both passing and failing)
             detail_rows = [
                 build_audit_detail_row(
                     None,
@@ -118,9 +112,33 @@ def upsert_audit_control_data(
                     extraction_date,
                     control_meta,
                     work_environment_label,
-                    password_snapshots.get(control_id),
+                    snap,
                 )
+                for snap in param_snaps
             ]
+        else:
+            detail_rows = [
+                build_audit_detail_row(
+                    issue,
+                    control_id,
+                    source_file_label,
+                    extraction_date,
+                    control_meta,
+                    work_environment_label,
+                )
+                for issue in control_issues
+            ]
+            if not detail_rows:
+                detail_rows = [
+                    build_audit_detail_row(
+                        None,
+                        control_id,
+                        source_file_label,
+                        extraction_date,
+                        control_meta,
+                        work_environment_label,
+                    )
+                ]
         audit_details_by_control[control_id] = detail_rows
 
 
@@ -177,7 +195,10 @@ def sync_user_review_completion_finding(
 
 
 def sorted_audit_summary_rows(audit_summary_records: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(audit_summary_records.values(), key=lambda item: str(item.get("control_id", "")))
+    return sorted(
+        audit_summary_records.values(),
+        key=lambda item: (-int(item.get("finding_records", 0) or 0), str(item.get("control_id", ""))),
+    )
 
 
 def build_audit_summary_values(row_data: dict[str, Any]) -> list[str]:
