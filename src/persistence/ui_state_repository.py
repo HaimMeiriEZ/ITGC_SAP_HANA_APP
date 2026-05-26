@@ -189,7 +189,7 @@ class UiStateRepository:
 
 
 class IpeEvidenceRepository:
-    """Persists IPE (Independent Proof of Evidence) screenshot metadata and manages stored image files."""
+    """Persists IPE (Information Produced by Entity) screenshot metadata and manages stored image files."""
 
     _EVIDENCE_JSON = "ipe_evidence.json"
 

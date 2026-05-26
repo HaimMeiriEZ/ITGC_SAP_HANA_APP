@@ -177,6 +177,7 @@ class SlotValidationWorker(QObject):
         required_columns: list[str],
         output_dir: Path,
         authorized_users: list[str],
+        strong_profiles: list[str] | None = None,
     ) -> None:
         super().__init__()
         self.slot_key = slot_key
@@ -185,6 +186,7 @@ class SlotValidationWorker(QObject):
         self.required_columns = required_columns
         self.output_dir = output_dir
         self.authorized_users = authorized_users
+        self.strong_profiles = strong_profiles
 
     @Slot()
     def run(self) -> None:
@@ -195,6 +197,7 @@ class SlotValidationWorker(QObject):
                 output_dir=self.output_dir,
                 source_name_override=self.slot_key,
                 authorized_users=self.authorized_users,
+                strong_profiles=self.strong_profiles,
             )
             self.succeeded.emit(self.slot_key, list(self.file_paths), result)
         except Exception as error:
@@ -490,6 +493,8 @@ class ValidationDesktopApp(QMainWindow):
         self.control_to_slot_key: dict[str, str] = {}
         # Population count per slot_key (rows ingested) for IPE working-paper sheet
         self.slot_to_row_count: dict[str, int] = {}
+        # Per-slot, per-file row counts. Keyed slot_key -> {file_stem_upper: count}
+        self._slot_file_row_counts: dict[str, dict[str, int]] = {}
         self.permissions_summary_records: dict[str, dict[str, Any]] = {}
         self.permissions_users_by_control: dict[str, list[dict[str, Any]]] = {}
         # Per-source-profile staging for MA3-3 strong profiles control.
@@ -3316,6 +3321,25 @@ class ValidationDesktopApp(QMainWindow):
                     users.append(bname)
         return users
 
+    def _get_critical_roles(self) -> list[str]:
+        """Return the user-configured "פרופילים משתמשיי על" (strong profiles)
+        from the system settings panel.
+
+        An empty list is returned when the user cleared the configuration -
+        downstream validators will then skip the strong-profile check entirely
+        and the working paper will note that the check was not performed.
+        """
+        settings = self._current_system_settings() if hasattr(self, "_current_system_settings") else {}
+        raw = settings.get("critical_roles", []) if isinstance(settings, dict) else []
+        if isinstance(raw, str):
+            raw = [raw]
+        cleaned: list[str] = []
+        for value in raw or []:
+            text = str(value).strip()
+            if text and text not in cleaned:
+                cleaned.append(text)
+        return cleaned
+
     def _load_preview_rows(self, slot_key: str) -> list[dict[str, Any]]:
         file_paths = list(self.slot_widgets.get(slot_key, {}).get("selected_paths", []))
         if not file_paths:
@@ -3533,6 +3557,7 @@ class ValidationDesktopApp(QMainWindow):
         }
         required_columns = self._required_columns_for_slot(slot_key)
         authorized_users = self._get_authorized_stms_users()
+        strong_profiles = self._get_critical_roles()
 
         self.validation_thread = QThread(self)
         self.validation_worker = SlotValidationWorker(
@@ -3542,6 +3567,7 @@ class ValidationDesktopApp(QMainWindow):
             required_columns=required_columns,
             output_dir=self.config.output_dir,
             authorized_users=authorized_users,
+            strong_profiles=strong_profiles,
         )
         self.validation_worker.moveToThread(self.validation_thread)
 
@@ -3741,6 +3767,14 @@ class ValidationDesktopApp(QMainWindow):
         self.summary_group.show()
         self.results_group.show()
 
+        # Auto-export the intake log to Excel at the end of a domain run so the
+        # auditor has an immediate record of what was processed.
+        try:
+            self.export_run_log_to_excel(open_after_export=False)
+        except Exception:
+            # Auto-export must never block the run summary dialog.
+            pass
+
         if invalid_slots or failed_slots:
             QMessageBox.warning(self, "בדיקת תחום הושלמה עם ממצאים", "\n".join(summary_lines))
         else:
@@ -3833,6 +3867,12 @@ class ValidationDesktopApp(QMainWindow):
         self.summary_group.show()
         self.results_group.show()
 
+        # Auto-export the intake log to Excel at the end of a category run.
+        try:
+            self.export_run_log_to_excel(open_after_export=False)
+        except Exception:
+            pass
+
         if invalid_slots or failed_slots:
             QMessageBox.warning(self, "בדיקת קבוצה הושלמה עם ממצאים", "\n".join(summary_lines))
         else:
@@ -3879,6 +3919,7 @@ class ValidationDesktopApp(QMainWindow):
             output_dir=self.config.output_dir,
             source_name_override=slot_key,
             authorized_users=self._get_authorized_stms_users(),
+            strong_profiles=self._get_critical_roles(),
         )
 
     def _handle_slot_validation_error(
@@ -3967,13 +4008,39 @@ class ValidationDesktopApp(QMainWindow):
 
         # Capture raw rows per control for working-paper export
         try:
-            slot_rows = list(getattr(result, "rows", []) or [])
+            detected_profile = str(getattr(result, "detected_profile", "") or slot_key).upper()
+            slot_rows_raw = list(getattr(result, "rows", []) or [])
+            # Tag each row with __profile so downstream report code (and the
+            # MA3-3 working paper specifically) can render a per-row
+            # "טבלת מקור" when multiple slots are merged into one control.
+            slot_rows: list[dict[str, Any]] = []
+            for r in slot_rows_raw:
+                if isinstance(r, dict):
+                    if not r.get("__profile"):
+                        r = {**r, "__profile": detected_profile}
+                    slot_rows.append(r)
+                else:
+                    slot_rows.append(r)
             self.slot_to_row_count[slot_key] = len(slot_rows)
             expected_controls = get_profile_audit_controls(getattr(result, "detected_profile", slot_key))
             control_ids = sorted(set([iss.control_id for iss in audit_issues if iss.control_id] + expected_controls))
             for cid in control_ids:
-                self.control_to_slot_rows[cid] = slot_rows
-                self.control_to_slot_key[cid] = slot_key
+                # Aggregate rows across all slots that map to this control
+                # (e.g. MA3-3_AYALON_14 receives both UST04 and USH04 rows).
+                existing = self.control_to_slot_rows.get(cid)
+                if existing is None:
+                    self.control_to_slot_rows[cid] = list(slot_rows)
+                else:
+                    # Replace rows that came from THIS slot key (re-run support),
+                    # while preserving rows from other slots.
+                    other_slot_rows = [
+                        r for r in existing
+                        if not (isinstance(r, dict) and str(r.get("__profile", "")).upper() == detected_profile)
+                    ]
+                    self.control_to_slot_rows[cid] = other_slot_rows + list(slot_rows)
+                # Keep the *first* slot key encountered for a control — IPE
+                # enrichment iterates all slots anyway via control_ids filter.
+                self.control_to_slot_key.setdefault(cid, slot_key)
         except Exception:
             pass
 
@@ -4091,6 +4158,12 @@ class ValidationDesktopApp(QMainWindow):
             status_text = "שגוי" if intake_file_issues else "תקין"
             checked_at = datetime.now()
             row_count = row_counts_by_file.get(file_name, 0)
+            # Track per-file counts so the working-paper IPE sheet can show the
+            # rows for the specific file referenced by a screenshot (stem match)
+            # instead of summing across all files in the slot.
+            file_stem_upper = Path(file_name).stem.upper()
+            per_file_map = self._slot_file_row_counts.setdefault(slot_key, {})
+            per_file_map[file_stem_upper] = row_count
             record = {
                 "slot_key": display_slot_name,
                 "report_group": report_group,
@@ -4679,6 +4752,56 @@ class ValidationDesktopApp(QMainWindow):
                     for user_data in sorted_users:
                         client_name = str(user_data.get("client", "-") or "-")
                         user_name = str(user_data.get("user_name", "-") or "-")
+                        profiles_list = list(user_data.get("profiles") or [])
+                        roles_list = list(user_data.get("roles") or [])
+                        if profiles_list:
+                            profiles_block = "\n".join(f"- {name}" for name in profiles_list)
+                            full_desc_text = (
+                                f"קליינט: {client_name}\n"
+                                f"משתמש: {user_name}\n\n"
+                                f"פרופילים חזקים:\n{profiles_block}"
+                            )
+                            expected_value_text = ", ".join(profiles_list)
+                        elif roles_list:
+                            role_lines: list[str] = []
+                            role_names: list[str] = []
+                            for role_entry in roles_list:
+                                if isinstance(role_entry, dict):
+                                    agr_name = str(role_entry.get("agr_name", "-") or "-")
+                                    objects_seq = role_entry.get("objects") or []
+                                else:
+                                    agr_name = str(role_entry or "-")
+                                    objects_seq = []
+                                role_names.append(agr_name)
+                                role_lines.append(f"- {agr_name}")
+                                for obj_item in objects_seq:
+                                    if isinstance(obj_item, (list, tuple)) and len(obj_item) >= 3:
+                                        role_lines.append(
+                                            f"    {obj_item[0]} | {obj_item[1]} | {obj_item[2]}"
+                                        )
+                                    elif isinstance(obj_item, dict):
+                                        role_lines.append(
+                                            "    "
+                                            + " | ".join(
+                                                str(obj_item.get(k, "-"))
+                                                for k in ("object", "field", "low")
+                                            )
+                                        )
+                                    else:
+                                        role_lines.append(f"    {obj_item}")
+                            roles_block = "\n".join(role_lines)
+                            full_desc_text = (
+                                f"קליינט: {client_name}\n"
+                                f"משתמש: {user_name}\n\n"
+                                f"רולים ואובייקטי הרשאה:\n{roles_block}"
+                            )
+                            expected_value_text = ", ".join(role_names) if role_names else "-"
+                        else:
+                            full_desc_text = (
+                                f"משתמש: {user_name}. קליינט: {client_name}. "
+                                f"{row.get('finding_text', '-')}."
+                            )
+                            expected_value_text = "לא נמצאו משתמשים"
                         detail_rows.append(
                             {
                                 "control_id": control_id,
@@ -4690,12 +4813,9 @@ class ValidationDesktopApp(QMainWindow):
                                 "description": control_meta.get("description", "-"),
                                 "check_type": control_meta.get("check_type", "סקירת הרשאות"),
                                 "actual_value": user_name,
-                                "expected_value": "לא נמצאו משתמשים",
+                                "expected_value": expected_value_text,
                                 "status": "עם ממצא",
-                                "full_description": (
-                                    f"משתמש: {user_name}. קליינט: {client_name}. "
-                                    f"{row.get('finding_text', '-')}."
-                                ),
+                                "full_description": full_desc_text,
                             }
                         )
 
@@ -7323,7 +7443,33 @@ class ValidationDesktopApp(QMainWindow):
         def _enrich(entry: dict[str, Any], source_slot: str) -> dict[str, Any]:
             enriched = dict(entry)
             enriched["extraction_date"] = self._get_slot_extraction_date(source_slot) or "-"
-            enriched["population_count"] = self.slot_to_row_count.get(source_slot, "-")
+            # Match the screenshot's stem to the data-file row count so each
+            # IPE entry reflects the population_count of *its own* source file.
+            per_file_map = self._slot_file_row_counts.get(source_slot, {}) or {}
+            screenshot_stem = Path(
+                str(entry.get("original_filename") or entry.get("stored_filename") or "")
+            ).stem
+
+            def _norm(s: Any) -> str:
+                return re.sub(r"[_\-.]+", " ", str(s).strip().lower()).strip()
+
+            screenshot_norm = _norm(screenshot_stem)
+            per_file_norm = {_norm(k): v for k, v in per_file_map.items() if k}
+
+            matched_count: Any = None
+            if screenshot_norm and per_file_norm:
+                # Exact normalized match first
+                if screenshot_norm in per_file_norm:
+                    matched_count = per_file_norm[screenshot_norm]
+                else:
+                    # Fall back to substring match on normalized stems.
+                    for data_norm, count in per_file_norm.items():
+                        if data_norm and (data_norm in screenshot_norm or screenshot_norm in data_norm):
+                            matched_count = count
+                            break
+            if matched_count is None:
+                matched_count = self.slot_to_row_count.get(source_slot, "-")
+            enriched["population_count"] = matched_count
             return enriched
 
         if slot_key:
@@ -7354,6 +7500,12 @@ class ValidationDesktopApp(QMainWindow):
             chosen_path += ".xlsx"
 
         try:
+            notes: list[str] = []
+            if control_id == "MA3-3_AYALON_14" and not self._get_critical_roles():
+                notes.append(
+                    "לא הוגדרו פרופילי משתמשיי על בהגדרות המערכת - "
+                    "בדיקת פרופילים חזקים לא בוצעה."
+                )
             write_control_working_paper(
                 control_id=control_id,
                 summary_record=summary_record,
@@ -7362,6 +7514,8 @@ class ValidationDesktopApp(QMainWindow):
                 ipe_entries=ipe_entries,
                 work_environment_label=self._current_work_environment_label(),
                 output_path=Path(chosen_path),
+                notes=notes,
+                critical_roles=self._get_critical_roles(),
             )
         except Exception as exc:
             QMessageBox.critical(
@@ -7512,6 +7666,7 @@ class ValidationDesktopApp(QMainWindow):
         self.permissions_users_by_control = {}
         self._strong_profile_data = {}
         self.slot_to_row_count = {}
+        self._slot_file_row_counts = {}
         self.control_to_slot_rows = {}
         self.control_to_slot_key = {}
         self.audit_summary_table.setRowCount(0)

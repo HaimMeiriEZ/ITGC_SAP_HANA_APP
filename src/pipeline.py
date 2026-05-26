@@ -21,6 +21,7 @@ def process_file(
     source_name_override: str | None = None,
     input_files: dict[str, list[str | Path]] | None = None,
     authorized_users: list[str] | None = None,
+    strong_profiles: list[str] | None = None,
 ) -> ValidationResult:
     # Prefer input_files when provided and non-empty
     if input_files:
@@ -36,6 +37,7 @@ def process_file(
                 output_dir,
                 source_name_override,
                 authorized_users,
+                strong_profiles,
             )
 
     # Legacy path: file_path
@@ -43,6 +45,8 @@ def process_file(
     engine = ValidationEngine(required_columns=required_columns or [])
     if authorized_users:
         engine.set_authorized_users(authorized_users)
+    if strong_profiles is not None:
+        engine.set_strong_profiles(strong_profiles)
     source_name = source_name_override or paths[0].name
 
     if source_name_override == "AGR_1251":
@@ -74,6 +78,7 @@ def _process_source_map(
     output_dir: str | Path | None,
     source_name_override: str | None,
     authorized_users: list[str] | None = None,
+    strong_profiles: list[str] | None = None,
 ) -> ValidationResult:
     """Process a source_key → paths mapping, populating data_map per key."""
     first_key = next(iter(source_map))
@@ -82,6 +87,8 @@ def _process_source_map(
     engine = ValidationEngine(required_columns=required_columns or [])
     if authorized_users:
         engine.set_authorized_users(authorized_users)
+    if strong_profiles is not None:
+        engine.set_strong_profiles(strong_profiles)
 
     if source_name == "AGR_1251":
         result = _process_agr1251_in_batches(all_paths, engine, source_name)

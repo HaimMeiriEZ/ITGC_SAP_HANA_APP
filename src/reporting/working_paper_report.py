@@ -73,6 +73,8 @@ def write_control_working_paper(
     ipe_entries: list[dict[str, Any]],
     work_environment_label: str,
     output_path: Path,
+    notes: list[str] | None = None,
+    critical_roles: list[str] | None = None,
 ) -> Path:
     """Build the working-paper workbook and save to *output_path*.
 
@@ -104,6 +106,8 @@ def write_control_working_paper(
         control_id=control_id,
         summary_record=summary_record,
         work_environment_label=work_environment_label,
+        notes=notes,
+        critical_roles=critical_roles,
     )
 
     ipe_sheet = workbook.create_sheet("IPE")
@@ -126,6 +130,8 @@ def _write_overview_sheet(
     control_id: str,
     summary_record: dict[str, Any],
     work_environment_label: str,
+    notes: list[str] | None = None,
+    critical_roles: list[str] | None = None,
 ) -> None:
     _set_rtl(sheet)
     sheet.column_dimensions["A"].width = 26
@@ -138,7 +144,9 @@ def _write_overview_sheet(
 
     # Test steps: prefer CSV override if present, otherwise dynamic template
     test_steps_override = meta.get("test_steps_override", "").strip()
-    test_steps = test_steps_override or build_test_steps_for_control(control_id)
+    test_steps = test_steps_override or build_test_steps_for_control(
+        control_id, critical_roles=critical_roles
+    )
 
     docs = (
         CONTROL_REQUIRED_TABLES.get(control_id)
@@ -169,6 +177,9 @@ def _write_overview_sheet(
         ("תיעוד נדרש", docs),
         ("סיכום ממצאים", summary_text),
     ]
+    cleaned_notes = [str(note).strip() for note in (notes or []) if str(note).strip()]
+    if cleaned_notes:
+        rows.append(("הערות", "\n".join(cleaned_notes)))
 
     # Title row
     sheet.cell(row=1, column=1, value="פרטי הבקרה")
@@ -185,6 +196,15 @@ def _write_overview_sheet(
         _apply_value_cell(key_cell, fill=_KEY_FILL, font=_KEY_FONT)
         value_cell = sheet.cell(row=idx, column=2, value=value)
         _apply_value_cell(value_cell)
+        if key == "צעדי טסט":
+            # Force right-to-left reading order on this specific cell value
+            # (openpyxl uses readingOrder=2 for RTL).
+            value_cell.alignment = Alignment(
+                horizontal="right",
+                vertical="top",
+                wrap_text=True,
+                readingOrder=2,
+            )
         # Allow tall multiline cells (esp. test steps)
         line_count = max(1, str(value).count("\n") + 1)
         sheet.row_dimensions[idx].height = max(22, min(line_count * 16, 420))
@@ -290,11 +310,17 @@ def _write_ipe_sheet(sheet, ipe_entries: list[dict[str, Any]]) -> None:
 _INTERNAL_KEYS = {"__source_file", "__row_number", "__profile"}
 
 
-def _ordered_keys(rows: Iterable[dict[str, Any]]) -> list[str]:
+def _ordered_keys(
+    rows: Iterable[dict[str, Any]],
+    drop_columns: set[str] | None = None,
+) -> list[str]:
     seen: list[str] = []
+    drop = drop_columns or set()
     for row in rows:
         for k in row.keys():
             if k in _INTERNAL_KEYS:
+                continue
+            if k in drop:
                 continue
             if k not in seen:
                 seen.append(k)
@@ -310,6 +336,7 @@ def _write_table_block(
     finding_keys: set[tuple[str, ...]] | None,
     key_columns: list[str] | None,
     use_status_column: bool = False,
+    drop_columns: set[str] | None = None,
 ) -> int:
     """Write a titled table to *sheet* starting at *start_row*. Returns next free row."""
     section_cell = sheet.cell(row=start_row, column=1, value=title)
@@ -325,7 +352,7 @@ def _write_table_block(
         _apply_value_cell(empty_cell)
         return start_row + 3
 
-    columns = _ordered_keys(rows)
+    columns = _ordered_keys(rows, drop_columns=drop_columns)
     columns_with_status = columns + ["סטטוס"]
 
     sheet.merge_cells(
@@ -432,7 +459,8 @@ def _write_detail_sheet(
 ) -> None:
     _set_rtl(sheet)
 
-    # Try to detect profile from raw rows
+    # Detect a fallback profile (used only for key-column heuristic, not for
+    # the per-row "טבלת מקור" column — which is now derived per row).
     profile = ""
     if raw_population_rows:
         profile = str(raw_population_rows[0].get("__profile", "") or "").upper()
@@ -447,11 +475,42 @@ def _write_detail_sheet(
     key_columns = _detect_key_columns(profile, raw_columns)
     finding_keys = _build_finding_keys(detail_rows, key_columns)
 
+    def _row_profile(row: dict[str, Any]) -> str:
+        p = str(row.get("__profile", "") or "").upper()
+        if p:
+            return p
+        src = str(row.get("__source_file", "") or "").upper()
+        for key in ("RSPARAM", "TPFET", "USR02", "AGR_1251", "AGR_USERS", "UST04", "USH04", "STMS"):
+            if key in src:
+                return key
+        return profile  # last-resort fallback
+
+    # Enrich raw rows with per-row source-table name so mixed populations
+    # (e.g. UST04 + USH04 merged into one control) display correctly.
+    if raw_population_rows:
+        enriched_raw: list[dict[str, Any]] = []
+        for row in raw_population_rows:
+            enriched_raw.append({"טבלת מקור": _row_profile(row), **row})
+        raw_for_table = enriched_raw
+    else:
+        raw_for_table = raw_population_rows
+
+    # Enrich detail rows with the authorization-object that triggered the
+    # finding (if available) so the lower table explains *why* each user is
+    # flagged. We also drop the verbose "description" column from this lower
+    # table per spec.
+    enriched_detail: list[dict[str, Any]] = []
+    for row in detail_rows:
+        copy = dict(row)
+        copy["אובייקט הרשאה"] = row.get("auth_object", "-") or "-"
+        copy.pop("auth_object", None)
+        enriched_detail.append(copy)
+
     next_row = _write_table_block(
         sheet,
         start_row=1,
         title="אוכלוסייה גולמית - כל הרשומות שנקלטו",
-        rows=raw_population_rows,
+        rows=raw_for_table,
         finding_keys=finding_keys,
         key_columns=key_columns,
     )
@@ -460,8 +519,9 @@ def _write_detail_sheet(
         sheet,
         start_row=next_row,
         title="אוכלוסייה רלוונטית / רשומות לפי כללי הבקרה",
-        rows=detail_rows,
+        rows=enriched_detail,
         finding_keys=None,
         key_columns=None,
         use_status_column=True,
+        drop_columns={"description"},
     )

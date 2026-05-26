@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Any
+from typing import Any, Iterable
 
 from src.models.validation_result import ValidationIssue
 
@@ -376,7 +376,7 @@ CONTROL_FILTER_CRITERIA: dict[str, str] = {
     "MC7-25_AYALON_44": "סינון רשומות בטבלת E070/STMS לפי שדה משתמש שביצע Import לסביבת ייצור, והשוואה לרשימת המורשים שהוגדרה בהגדרות המערכת.",
     "MA1-1_AYALON_5": "סינון רשומת הפרמטר login/no_automatic_user_sapstar והשוואת הערך לערך הנדרש (1).",
     "MA2-2_AYALON_6": "סינון 11 הפרמטרים הרלוונטיים בלבד מתוך RSPARAM/TPFET, והשוואת ערכיהם לערכי הסף שהוגדרו במסך 'הגדרות מערכת לביקורת'.",
-    "MA3-3_AYALON_14": "סינון רשומות מ-UST04/USH04 שהפרופיל המוקצה הוא SAP_ALL / SAP_NEW / S_A.SYSTEM.",
+    "MA3-3_AYALON_14": "סינון רשומות מ-UST04/USH04 שהפרופיל המוקצה הוא {profiles}.",
     "MA1-1_AYALON_10": "סינון רולים (AGR_NAME) שמכילים את אובייקטי ההרשאה לניהול משתמשים, ומשם מיפוי המשתמשים (UNAME) דרך AGR_USERS.",
     "MA1-1_AYALON_11": "סינון רולים שמכילים את אובייקטי ההרשאה לניהול הרשאות (PFCG וכו'), ומיפוי משתמשים דרך AGR_USERS.",
     "MA1-1_AYALON_12": "סינון רולים שמכילים AT-once את שני הקריטריונים: S_PROGRAM/P_GROUP=RSCDOK99 וגם S_PROGRAM/P_ACTION=SUB.",
@@ -400,26 +400,51 @@ TEST_STEPS_TEMPLATE = (
     "4. סינון הרשומות לפי כללי הבקרה:\n"
     "   {filter_criteria}\n"
     "5. איסוף ממצאים: השוואת תוצאות לציפיות, סימון רשומות חורגות והפקת רשימת ממצאים.\n"
-    "6. תיעוד IPE (Independent Proof of Evidence) המצורף לקליטת הקבצים, כולל צילומי מסך והוכחת מקור הנתונים."
+    "6. תיעוד IPE (Information Produced by Entity) המצורף לקליטת הקבצים, כולל צילומי מסך והוכחת מקור הנתונים."
 )
 
 
-def build_test_steps_for_control(control_id: str) -> str:
+def build_test_steps_for_control(
+    control_id: str,
+    critical_roles: "Iterable[str] | None" = None,
+) -> str:
     """Return the dynamic 'צעדי טסט' text for a given control_id.
 
     Uses TEST_STEPS_TEMPLATE plus per-control validation params and filter criteria.
     Appends 'הערות נוספות' from AUDIT_CONTROL_DEFINITIONS (loaded from CSV) when present.
-    """
-    params = CONTROL_VALIDATION_PARAMS.get(control_id, [])
-    if params:
-        params_block = "\n".join(f"   - {p}" for p in params)
-    else:
-        params_block = "   - בהתאם להגדרות הולידציה של פרופיל הקובץ"
 
-    filters = CONTROL_FILTER_CRITERIA.get(
+    When *critical_roles* is provided and the control is MA3-3_AYALON_14, the
+    validation-params block and the filter-criteria line are rendered
+    dynamically from the supplied list (matches the user-configured
+    "פרופילי משתמשיי על" setting).
+    """
+    cleaned_roles: list[str] = []
+    if critical_roles is not None:
+        cleaned_roles = [str(r).strip() for r in critical_roles if str(r).strip()]
+
+    if control_id == "MA3-3_AYALON_14" and critical_roles is not None:
+        if cleaned_roles:
+            params_block = "\n".join(f"   - {r}" for r in cleaned_roles)
+            filter_profiles = " / ".join(cleaned_roles)
+        else:
+            params_block = "   - (לא הוגדרו פרופילים חזקים בהגדרות המערכת)"
+            filter_profiles = "(לא הוגדרו פרופילים חזקים)"
+    else:
+        params = CONTROL_VALIDATION_PARAMS.get(control_id, [])
+        if params:
+            params_block = "\n".join(f"   - {p}" for p in params)
+        else:
+            params_block = "   - בהתאם להגדרות הולידציה של פרופיל הקובץ"
+        filter_profiles = ""
+
+    filters_template = CONTROL_FILTER_CRITERIA.get(
         control_id,
         "סינון בהתאם לכללי הבקרה והפרופיל שנקלט.",
     )
+    if "{profiles}" in filters_template:
+        filters = filters_template.format(profiles=filter_profiles or "-")
+    else:
+        filters = filters_template
 
     text = TEST_STEPS_TEMPLATE.format(
         validation_params=params_block,
@@ -766,15 +791,36 @@ def build_control_44_issues(
 def build_strong_profile_issues(
     profile: str | None,
     rows: list[dict[str, Any]],
+    strong_profiles_override: "Iterable[str] | None" = None,
 ) -> list[ValidationIssue]:
-    """Detect users with strong system profiles from UST04 or USH04 rows."""
+    """Detect users with strong system profiles from UST04 or USH04 rows.
+
+    When *strong_profiles_override* is provided it replaces the built-in
+    ``STRONG_PERMISSION_PROFILES`` list. An override consisting only of blank
+    entries is treated as "no list configured" and the check is skipped
+    entirely (the caller is expected to surface a note to the end-user).
+    """
     if profile not in ("UST04", "USH04") or not rows:
         return []
 
-    strong_profiles = {normalize_name(value) for value in STRONG_PERMISSION_PROFILES}
+    if strong_profiles_override is not None:
+        cleaned_override = [
+            str(value).strip()
+            for value in strong_profiles_override
+            if str(value).strip()
+        ]
+        if not cleaned_override:
+            return []
+        strong_profiles = {normalize_name(value) for value in cleaned_override}
+    else:
+        strong_profiles = {normalize_name(value) for value in STRONG_PERMISSION_PROFILES}
     control_meta = AUDIT_CONTROL_DEFINITIONS.get("MA3-3_AYALON_14", {})
     issues: list[ValidationIssue] = []
-    reported: set[tuple[str, str]] = set()  # deduplicate by (user_name, profile_name)
+    # Aggregate by (user_name, MANDT, __source_file) so we emit a *single*
+    # finding per user-on-client that lists ALL strong profiles assigned to
+    # that user. Matches the in-app drill-down dialog layout.
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str, str]] = []
 
     for row_index, row in enumerate(rows, start=1):
         normalized_row = {
@@ -792,6 +838,13 @@ def build_strong_profile_issues(
 
         if not user_name:
             continue
+
+        mandt = ""
+        for candidate in get_column_aliases("MANDT"):
+            if candidate in normalized_row:
+                mandt = str(normalized_row.get(candidate, "")).strip()
+                if mandt:
+                    break
 
         if profile == "UST04":
             profile_name = ""
@@ -819,32 +872,57 @@ def build_strong_profile_issues(
                 if p.strip()
             ]
 
-        for profile_name in profiles_to_check:
-            if profile_name not in strong_profiles:
-                continue
-            dedup_key = (user_name, profile_name)
-            if dedup_key in reported:
-                continue
-            reported.add(dedup_key)
+        matched_strong = [p for p in profiles_to_check if p in strong_profiles]
+        if not matched_strong:
+            continue
 
-            col_name = "PROFILE" if profile == "UST04" else "PROFS"
-            issues.append(
-                ValidationIssue(
-                    row_number=row_index,
-                    column_name=col_name,
-                    message=f"זוהה פרופיל חזק {profile_name} למשתמש {user_name}",
-                    source_file=str(row.get("__source_file", "")),
-                    control_id="MA3-3_AYALON_14",
-                    category=control_meta.get("category", ""),
-                    risk_level=control_meta.get("risk_level", ""),
-                    check_type=control_meta.get("check_type", ""),
-                    description=control_meta.get("description", ""),
-                    actual_value=user_name,
-                    expected_value=profile_name,
-                    status="עם ממצא",
-                    full_description=f"למשתמש {user_name} הוקצה הפרופיל החזק {profile_name}.",
-                )
+        source_file = str(row.get("__source_file", ""))
+        key = (user_name, mandt, source_file)
+        if key not in grouped:
+            grouped[key] = {
+                "row_number": row_index,
+                "user_name": user_name,
+                "mandt": mandt,
+                "source_file": source_file,
+                "profiles": [],
+            }
+            order.append(key)
+        entry = grouped[key]
+        for profile_name in matched_strong:
+            if profile_name not in entry["profiles"]:
+                entry["profiles"].append(profile_name)
+
+    col_name = "PROFILE" if profile == "UST04" else "PROFS"
+    for key in order:
+        entry = grouped[key]
+        profile_list = entry["profiles"]
+        profiles_block = "\n".join(f"- {name}" for name in profile_list)
+        mandt_line = f"קליינט: {entry['mandt']}\n" if entry["mandt"] else ""
+        full_description = (
+            f"{mandt_line}"
+            f"משתמש: {entry['user_name']}\n\n"
+            f"פרופילים חזקים:\n{profiles_block}\n\n"
+            f"טבלת מקור: {profile}"
+        )
+        issues.append(
+            ValidationIssue(
+                row_number=entry["row_number"],
+                column_name=col_name,
+                message=(
+                    f"זוהו {len(profile_list)} פרופילים חזקים למשתמש {entry['user_name']}"
+                ),
+                source_file=entry["source_file"],
+                control_id="MA3-3_AYALON_14",
+                category=control_meta.get("category", ""),
+                risk_level=control_meta.get("risk_level", ""),
+                check_type=control_meta.get("check_type", ""),
+                description=control_meta.get("description", ""),
+                actual_value=entry["user_name"],
+                expected_value=", ".join(profile_list),
+                status="עם ממצא",
+                full_description=full_description,
             )
+        )
 
     return issues
 

@@ -27,6 +27,7 @@ def build_audit_detail_row(
             "check_type": _snap.get("check_type") or control_meta.get("check_type", "-"),
             "actual_value": _snap.get("actual_value", "-"),
             "expected_value": _snap.get("expected_value", "-"),
+            "auth_object": _snap.get("auth_object", "-"),
             "status": _snap.get("status", "תקין"),
             "full_description": _snap.get("full_description", "לא נמצאו ממצאים עבור הבקרה."),
         }
@@ -42,6 +43,7 @@ def build_audit_detail_row(
         "check_type": issue.check_type or control_meta.get("check_type", "-"),
         "actual_value": issue.actual_value or "-",
         "expected_value": issue.expected_value or "-",
+        "auth_object": issue.column_name or "-",
         "status": issue.status or "עם ממצא",
         "full_description": issue.full_description or issue.message,
     }
@@ -187,6 +189,7 @@ def sync_user_review_completion_finding(
             "check_type": control_meta.get("check_type", "השלמת סקירת משתמשים"),
             "actual_value": str(preview_row.get("BNAME", "-")) or "-",
             "expected_value": "השלמת סקירה בהתאם לכלל ההשלמה",
+            "auth_object": "-",
             "status": "עם ממצא",
             "full_description": build_incomplete_reason_cb(preview_row),
         }

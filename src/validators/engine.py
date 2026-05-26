@@ -18,6 +18,9 @@ class ValidationEngine:
     def __init__(self, required_columns: list[str] | None = None) -> None:
         self.required_columns = required_columns or []
         self.authorized_users: set[str] = set()
+        # When None the built-in STRONG_PERMISSION_PROFILES list is used.
+        # When set (even to an empty list) it overrides the defaults.
+        self.strong_profiles_override: list[str] | None = None
 
     def set_authorized_users(self, authorized_users: list[str]) -> None:
         self.authorized_users = {
@@ -25,6 +28,16 @@ class ValidationEngine:
             for user in authorized_users
             if str(user).strip()
         }
+
+    def set_strong_profiles(self, strong_profiles: list[str] | None) -> None:
+        if strong_profiles is None:
+            self.strong_profiles_override = None
+            return
+        self.strong_profiles_override = [
+            str(value).strip()
+            for value in strong_profiles
+            if str(value).strip()
+        ]
 
     def run_all(
         self,
@@ -116,6 +129,12 @@ class ValidationEngine:
                 self.authorized_users,
             )
         )
-        issues.extend(build_strong_profile_issues(detected_profile, rows))
+        issues.extend(
+            build_strong_profile_issues(
+                detected_profile,
+                rows,
+                strong_profiles_override=self.strong_profiles_override,
+            )
+        )
 
         return ValidationResult(rows=rows, issues=issues, detected_profile=detected_profile)
