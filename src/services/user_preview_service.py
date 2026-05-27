@@ -209,6 +209,7 @@ def build_user_preview_rows(
                 "FINDINGS_DESCRIPTION": findings_description,
                 "TECH_REVIEW_NOTES": review_values.get("TECH_REVIEW_NOTES", ""),
                 "BUS_REVIEW_NOTES": review_values.get("BUS_REVIEW_NOTES", ""),
+                "LAST_IMPORT_DATE": review_values.get("LAST_IMPORT_DATE", ""),
             }
         )
 

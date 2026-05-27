@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QTextEdit,
     QProgressBar,
+    QRadioButton,
     QVBoxLayout,
     QWidget,
     QHeaderView,
@@ -206,6 +207,224 @@ class SlotValidationWorker(QObject):
             self.finished.emit()
 
 
+class _ImportReviewConfirmDialog(QDialog):
+    """Confirmation dialog displayed before applying an imported review Excel file.
+
+    Shows import statistics and any integrity warnings (missing records with
+    reviewed data, notes that will be erased).  The user chooses how to proceed.
+    """
+
+    MODE_ALL = "all"              # apply every value from the file, including empty notes
+    MODE_PRESERVE_NOTES = "preserve_notes"  # keep existing notes when the imported value is empty
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        total_in_file: int,
+        missing_with_data: list[str],   # BNAME values absent from the file but with reviewed data
+        notes_cleared: list[tuple[str, list[str]]],  # (BNAME, [formal field names]) for notes that will be erased
+    ) -> None:
+        super().__init__(
+            parent,
+            Qt.WindowType.Dialog
+            | Qt.WindowType.CustomizeWindowHint
+            | Qt.WindowType.WindowTitleHint,
+        )
+        self.setWindowTitle("אישור ייבוא סקירת משתמשים")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        self.setMinimumWidth(500)
+
+        self._mode = self.MODE_ALL
+        has_issues = bool(missing_with_data or notes_cleared)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 14, 16, 14)
+
+        # ── Summary ────────────────────────────────────────────────────────
+        summary_label = QLabel(f"נמצאו <b>{total_in_file}</b> רשומות בקובץ לעדכון.")
+        summary_label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        summary_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(summary_label)
+
+        # ── Warning section (shown only when issues exist) ─────────────────
+        if has_issues:
+            warn_widget = QWidget()
+            warn_widget.setStyleSheet(
+                "background-color:#FFF3CD; border:1px solid #FFC107; border-radius:4px;"
+            )
+            warn_layout = QVBoxLayout(warn_widget)
+            warn_layout.setContentsMargins(10, 8, 10, 8)
+            warn_layout.setSpacing(6)
+
+            if missing_with_data:
+                max_shown = 8
+                display_names = missing_with_data[:max_shown]
+                extra = len(missing_with_data) - max_shown
+                miss_header = QLabel(
+                    f"<b>⚠ {len(missing_with_data)} רשומות עם נתונים קיימים אינן מופיעות בקובץ (לא ישתנו):</b>"
+                )
+                miss_header.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                miss_header.setAlignment(Qt.AlignmentFlag.AlignRight)
+                miss_header.setWordWrap(True)
+                miss_header.setStyleSheet("color:#856404;")
+                names_text = ", ".join(display_names)
+                if extra > 0:
+                    names_text += f" ועוד {extra} נוספים..."
+                miss_names = QLabel(names_text)
+                miss_names.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                miss_names.setAlignment(Qt.AlignmentFlag.AlignRight)
+                miss_names.setWordWrap(True)
+                miss_names.setStyleSheet("color:#856404;")
+                warn_layout.addWidget(miss_header)
+                warn_layout.addWidget(miss_names)
+
+            if notes_cleared:
+                cleared_lbl = QLabel(
+                    f"<b>⚠ {len(notes_cleared)} רשומות שבהן הערות שאוכלסו יימחקו אם תבחר 'כל השינויים'.</b>"
+                )
+                cleared_lbl.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                cleared_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+                cleared_lbl.setWordWrap(True)
+                cleared_lbl.setStyleSheet("color:#856404;")
+                warn_layout.addWidget(cleared_lbl)
+
+            layout.addWidget(warn_widget)
+
+            # ── Radio options ────────────────────────────────────────────────
+            options_lbl = QLabel("<b>כיצד ברצונך להמשיך?</b>")
+            options_lbl.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            options_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+            layout.addWidget(options_lbl)
+
+            self._radio_all = QRadioButton("המשך עם כל השינויים (הערות ריקות בקובץ יימחקו)")
+            self._radio_all.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            self._radio_all.setChecked(True)
+            self._radio_preserve = QRadioButton("המשך ושמור הערות קיימות (הערות לא יימחקו אם הקובץ ריק בשדה זה)")
+            self._radio_preserve.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            layout.addWidget(self._radio_all)
+            layout.addWidget(self._radio_preserve)
+        else:
+            self._radio_all = None
+            self._radio_preserve = None
+
+        # ── Buttons ──────────────────────────────────────────────────────────
+        btn_box = QDialogButtonBox()
+        btn_box.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        confirm_btn = btn_box.addButton("אשר ייבוא", QDialogButtonBox.ButtonRole.AcceptRole)
+        confirm_btn.setDefault(True)
+        btn_box.addButton("ביטול", QDialogButtonBox.ButtonRole.RejectRole)
+        btn_box.accepted.connect(self._on_confirm)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+        self.adjustSize()
+
+    def _on_confirm(self) -> None:
+        if self._radio_preserve is not None and self._radio_preserve.isChecked():
+            self._mode = self.MODE_PRESERVE_NOTES
+        else:
+            self._mode = self.MODE_ALL
+        self.accept()
+
+    @property
+    def selected_mode(self) -> str:
+        return self._mode
+
+
+class _LoadingProgressDialog(QDialog):
+    """Non-closable modal progress dialog shown while a slot validation worker is running."""
+
+    def __init__(self, parent: QWidget | None, slot_label: str) -> None:
+        super().__init__(
+            parent,
+            Qt.WindowType.Dialog
+            | Qt.WindowType.CustomizeWindowHint
+            | Qt.WindowType.WindowTitleHint,
+        )
+        self.setWindowTitle("טעינת נתונים")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.resize(360, 130)
+        self.setMinimumWidth(300)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(14)
+
+        label_text = f"טוען נתוני משבצת: {slot_label}\nאנא המתן לסיום הטעינה..."
+        msg_label = QLabel(label_text)
+        msg_label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        msg_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        msg_label.setWordWrap(True)
+        msg_label.setStyleSheet("font-size: 13px; color: #16325c;")
+        layout.addWidget(msg_label)
+
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 0)  # indeterminate / animated
+        progress_bar.setTextVisible(False)
+        progress_bar.setMinimumHeight(16)
+        layout.addWidget(progress_bar)
+
+    def closeEvent(self, event: Any) -> None:  # type: ignore[override]
+        """Prevent the user from manually closing the dialog."""
+        event.ignore()
+
+
+class _FilterableHeaderView(QHeaderView):
+    """QHeaderView subclass that renders a per-section filter (▼) button and emits filterRequested(int)."""
+
+    filterRequested = Signal(int)  # emits logicalIndex
+
+    _ICON_WIDTH = 18
+
+    def __init__(self, orientation: Qt.Orientation, parent: QWidget | None = None) -> None:
+        super().__init__(orientation, parent)
+        self._active_filter_sections: set[int] = set()
+
+    def set_active_filter_sections(self, sections: set[int]) -> None:
+        self._active_filter_sections = set(sections)
+        self.viewport().update()
+
+    def paintSection(self, painter: Any, rect: Any, logicalIndex: int) -> None:  # type: ignore[override]
+        painter.save()
+        super().paintSection(painter, rect, logicalIndex)
+        painter.restore()
+
+        is_active = logicalIndex in self._active_filter_sections
+        icon_rect_type = rect.__class__
+        from PySide6.QtCore import QRect  # noqa: PLC0415
+        icon_rect = QRect(rect.left(), rect.top() + 2, self._ICON_WIDTH, rect.height() - 4)
+
+        painter.save()
+        if is_active:
+            from PySide6.QtGui import QBrush as _Brush  # noqa: PLC0415
+            painter.setBrush(_Brush(QColor("#c8dff8")))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(icon_rect, 3, 3)
+            painter.setPen(QColor("#1a5da8"))
+        else:
+            painter.setPen(QColor("#8899aa"))
+
+        f = painter.font()
+        f.setPointSize(7)
+        painter.setFont(f)
+        painter.drawText(icon_rect, Qt.AlignmentFlag.AlignCenter, "▼")
+        painter.restore()
+
+    def mousePressEvent(self, event: Any) -> None:  # type: ignore[override]
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            logical_index = self.logicalIndexAt(pos)
+            if logical_index >= 0:
+                section_left = self.sectionViewportPosition(logical_index)
+                if section_left <= pos.x() < section_left + self._ICON_WIDTH:
+                    self.filterRequested.emit(logical_index)
+                    return
+        super().mousePressEvent(event)
+
+
 class ValidationDesktopApp(QMainWindow):
     USER_PREVIEW_SLOTS = {"USR02", "ADR6_USR21"}
 
@@ -251,7 +470,8 @@ class ValidationDesktopApp(QMainWindow):
         {"field": "REVIEW_STATUS", "formal": "בוצעה סקירה", "technical": "REVIEW_STATUS", "source": "סוקר", "default": True, "width": 165},
         {"field": "FINDINGS_DESCRIPTION", "formal": "תיאור ממצאים", "technical": "FINDINGS_DESCRIPTION", "source": "מערכת", "default": True, "width": 280},
         {"field": "TECH_REVIEW_NOTES", "formal": "הערות סוקר גורם טכני", "technical": "TECH_REVIEW_NOTES", "source": "סוקר טכני", "default": True, "width": 240},
-        {"field": "BUS_REVIEW_NOTES", "formal": "הערות סוקר גורם עסקי", "technical": "BUS_REVIEW_NOTES", "source": "סוקר עסקי", "default": True, "width": 240},
+        {"field": "BUS_REVIEW_NOTES", "formal": "הערות סוקר גורם מהכספים", "technical": "BUS_REVIEW_NOTES", "source": "סוקר מהכספים", "default": True, "width": 240},
+        {"field": "LAST_IMPORT_DATE", "formal": "עודכן לאחרונה", "technical": "LAST_IMPORT_DATE", "source": "ייבוא סקירה", "default": True, "width": 145},
         {"field": "UFLAG", "formal": "קוד נעילה", "technical": "UFLAG", "source": "USR02", "default": False, "width": 100},
     ]
     DEFAULT_USER_PREVIEW_COLUMNS = [
@@ -259,7 +479,7 @@ class ValidationDesktopApp(QMainWindow):
         for column in USER_PREVIEW_COLUMN_DEFINITIONS
         if bool(column.get("default"))
     ]
-    CURRENT_USER_PREVIEW_SETTINGS_VERSION = 7
+    CURRENT_USER_PREVIEW_SETTINGS_VERSION = 8
     USER_PREVIEW_SETTINGS_MIGRATIONS = {
         2: ["PWDINITIAL", "PWDCHGDATE", "PWDSETDATE"],
         3: ["DEPARTMENT", "GLTGV", "GLTGB", "USTYP", "LOCNT", "OCOD1", "PASSCODE", "PWDSALTEDHASH", "SECURITY_POLICY"],
@@ -267,6 +487,7 @@ class ValidationDesktopApp(QMainWindow):
         5: ["FINDINGS_DESCRIPTION"],
         6: ["TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES"],
         7: ["WORK_ENVIRONMENT"],
+        8: ["LAST_IMPORT_DATE"],
     }
     USER_PREVIEW_FILTER_OPTIONS = [
         ("all", "כלל האוכלוסייה"),
@@ -295,6 +516,7 @@ class ValidationDesktopApp(QMainWindow):
         ("PFT", "PFT - PRE PROD - סביבת קדם ייצור"),
         ("FPP", "FPP - PROD - סביבת ייצור"),
         ("FPQ", "FPQ - QA - סביבת בדיקות"),
+        ("FDR", "FDR - DR - סביבת התאוששות מאסון"),
     ]
 
     SLOT_DEFINITIONS = {
@@ -526,6 +748,8 @@ class ValidationDesktopApp(QMainWindow):
         self.user_preview_export_path: Path | None = None
         self.user_reviewer_state = self._load_user_reviewer_state()
         self.user_preview_visible_columns = self._load_user_preview_column_selection()
+        self.user_preview_column_filters: dict[str, set[str]] = self._load_user_preview_column_filters()
+        self._loading_dialog: QDialog | None = None
         self.system_settings_widgets: dict[str, Any] = {}
         self.system_settings_sections: dict[str, QGroupBox] = {}
         self.system_settings_unavailable_labels: dict[str, QLabel] = {}
@@ -563,6 +787,38 @@ class ValidationDesktopApp(QMainWindow):
         self.resize(1280, 860)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
+    def _log_to_console(self, message: str, level: str = "info") -> None:
+        """Append a timestamped message to the activity console and yield the event loop."""
+        _colors: dict[str, str] = {
+            "info":  "#90c090",
+            "warn":  "#e0c860",
+            "error": "#e07070",
+            "title": "#60b0e0",
+            "dim":   "#556677",
+        }
+        color = _colors.get(level, "#cccccc")
+        ts = datetime.now().strftime("%H:%M:%S")
+        escaped = (
+            message
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        html = (
+            f'<p dir="rtl" style="margin:0;">'
+            f'<span style="color:#445566;">[{ts}]</span>'
+            f'&nbsp;<span style="color:{color};">{escaped}</span>'
+            f'</p>'
+        )
+        if hasattr(self, "console_output"):
+            self.console_output.append(html)
+            self.console_output.ensureCursorVisible()
+        QApplication.processEvents()
+
+    def _enter_intake_stage_b(self) -> None:
+        """Show the run-log table (Stage B of progressive intake UI). Console is always visible."""
+        self.run_log_group.show()
+
     def _build_ui(self) -> None:
         central_widget = QWidget()
         central_widget.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -576,10 +832,24 @@ class ValidationDesktopApp(QMainWindow):
         _title_container.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         _title_row = QHBoxLayout(_title_container)
         _title_row.setContentsMargins(0, 0, 0, 0)
-        _title_row.setSpacing(0)
+        _title_row.setSpacing(12)
+
+        # ── Company logo (left-aligned) ────────────────────────────────────
+        _logo_path = Path(__file__).parent / "assets" / "ayalon_logo.png"
+        if _logo_path.exists():
+            _logo_pixmap = QPixmap(str(_logo_path))
+            if not _logo_pixmap.isNull():
+                _logo_label = QLabel()
+                _logo_label.setPixmap(
+                    _logo_pixmap.scaledToHeight(36, Qt.TransformationMode.SmoothTransformation)
+                )
+                _logo_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                _logo_label.setContentsMargins(0, 0, 0, 0)
+                _title_row.addWidget(_logo_label)
+
+        _title_row.addStretch(1)
         self.app_title_label = QLabel("כלי להערכת בקרות ITGC בסביבת SAP HANA APP")
         self.app_title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #16325c;")
-        _title_row.addStretch(1)
         _title_row.addWidget(self.app_title_label)
         main_layout.addWidget(_title_container)
 
@@ -943,6 +1213,50 @@ class ValidationDesktopApp(QMainWindow):
         self.tabs.addTab(self.permissions_review_tab, self.format_rtl_text("סקירת הרשאות"))
         self.tabs.addTab(self.analysis_tab, self.format_rtl_text("ביצוע ניתוח לביקורת"))
         main_layout.addWidget(self.tabs)
+
+        # ── Activity console ──────────────────────────────────────────────
+        self._console_container = QWidget()
+        self._console_container.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        _console_vlayout = QVBoxLayout(self._console_container)
+        _console_vlayout.setContentsMargins(0, 2, 0, 0)
+        _console_vlayout.setSpacing(2)
+
+        _console_header = QWidget()
+        _console_header_layout = QHBoxLayout(_console_header)
+        _console_header_layout.setContentsMargins(0, 0, 0, 0)
+        _console_header_layout.setSpacing(6)
+        _console_title_lbl = QLabel("◈ לוג פעולות")
+        _console_title_lbl.setStyleSheet(
+            "color: #667788; font-size: 10px; font-family: Consolas, monospace;"
+        )
+        self.console_clear_btn = QPushButton("נקה")
+        self.console_clear_btn.setFixedSize(46, 18)
+        self.console_clear_btn.setStyleSheet(
+            "QPushButton { font-size: 9px; padding: 0 4px; color: #889; background: #252535;"
+            " border: 1px solid #444; border-radius: 2px; }"
+            "QPushButton:hover { background: #353545; color: #aab; }"
+        )
+        self.console_clear_btn.clicked.connect(lambda: self.console_output.clear())
+        _console_header_layout.addStretch(1)
+        _console_header_layout.addWidget(_console_title_lbl)
+        _console_header_layout.addWidget(self.console_clear_btn)
+        _console_vlayout.addWidget(_console_header)
+
+        self.console_output = QTextEdit()
+        self.console_output.setReadOnly(True)
+        self.console_output.setFixedHeight(105)
+        self.console_output.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.console_output.setStyleSheet(
+            "QTextEdit {"
+            "  background-color: #181826;"
+            "  color: #90c090;"
+            "  font-family: Consolas, 'Courier New', monospace;"
+            "  font-size: 11px;"
+            "  border: 1px solid #2c3c4c;"
+            "  padding: 4px 6px;"
+            "}"
+        )
+        _console_vlayout.addWidget(self.console_output)
 
         self.slots_group = QGroupBox(self.format_ui_rtl_text("מקורות קלט לבדיקת SAP HANA APP"))
         self.slots_group.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -1325,7 +1639,7 @@ class ValidationDesktopApp(QMainWindow):
         self.user_preview_import_button.clicked.connect(self.import_user_review_from_excel)
         user_preview_actions_layout.addWidget(self.user_preview_import_button, 0, Qt.AlignmentFlag.AlignRight)
 
-        self.user_preview_send_business_button = QPushButton("שליחת הדוח לגורם עסקי")
+        self.user_preview_send_business_button = QPushButton("שליחת הדוח לגורם מהכספים")
         self.user_preview_send_business_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.user_preview_send_business_button.clicked.connect(self.draft_user_review_email_to_business)
         user_preview_actions_layout.addWidget(self.user_preview_send_business_button, 0, Qt.AlignmentFlag.AlignRight)
@@ -1353,32 +1667,13 @@ class ValidationDesktopApp(QMainWindow):
         user_preview_filter_layout.setSpacing(8)
         user_preview_filter_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        self.user_preview_filter_label = QLabel(self.format_ui_rtl_text("סינון משתמשים:"))
-        self.user_preview_status_filter = QComboBox()
-        self.user_preview_status_filter.setMinimumWidth(220)
-        self.user_preview_status_filter.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        for filter_value, filter_label in self.USER_PREVIEW_FILTER_OPTIONS:
-            self.user_preview_status_filter.addItem(self.format_rtl_text(filter_label), filter_value)
-
-        self.audit_period_from_label = QLabel(self.format_ui_rtl_text("מתאריך:"))
-        self.audit_period_from_edit = QLineEdit("")
-        self.audit_period_from_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.audit_period_from_edit.setPlaceholderText("YYYY-MM-DD")
-        self.audit_period_from_edit.setMaximumWidth(130)
-
-        self.audit_period_to_label = QLabel(self.format_ui_rtl_text("עד תאריך:"))
-        self.audit_period_to_edit = QLineEdit("")
-        self.audit_period_to_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.audit_period_to_edit.setPlaceholderText("YYYY-MM-DD")
-        self.audit_period_to_edit.setMaximumWidth(130)
-
-        user_preview_filter_layout.addWidget(self.user_preview_filter_label, 0, Qt.AlignmentFlag.AlignRight)
-        user_preview_filter_layout.addWidget(self.user_preview_status_filter, 0, Qt.AlignmentFlag.AlignRight)
-        user_preview_filter_layout.addWidget(self.audit_period_from_label, 0, Qt.AlignmentFlag.AlignRight)
-        user_preview_filter_layout.addWidget(self.audit_period_from_edit, 0, Qt.AlignmentFlag.AlignRight)
-        user_preview_filter_layout.addWidget(self.audit_period_to_label, 0, Qt.AlignmentFlag.AlignRight)
-        user_preview_filter_layout.addWidget(self.audit_period_to_edit, 0, Qt.AlignmentFlag.AlignRight)
         user_preview_filter_layout.addStretch(1)
+
+        self.clear_column_filters_button = QPushButton(self.format_ui_rtl_text("נקה סינוני עמודות"))
+        self.clear_column_filters_button.setToolTip(self.format_rtl_text("נקה את כל סינוני העמודות הפעילים"))
+        self.clear_column_filters_button.clicked.connect(self._clear_all_user_preview_column_filters)
+        user_preview_filter_layout.addWidget(self.clear_column_filters_button, 0, Qt.AlignmentFlag.AlignLeft)
+
         user_preview_layout.addWidget(self.user_preview_filter_row, 0, Qt.AlignmentFlag.AlignTop)
 
         self.user_preview_hint = QLabel(
@@ -1406,9 +1701,6 @@ class ValidationDesktopApp(QMainWindow):
         self.user_preview_table.setMaximumHeight(16777215)
         self._configure_user_preview_table()
         self.user_preview_table.itemChanged.connect(self._handle_user_preview_item_changed)
-        self.user_preview_status_filter.currentIndexChanged.connect(self.refresh_user_preview)
-        self.audit_period_from_edit.editingFinished.connect(self.refresh_user_preview)
-        self.audit_period_to_edit.editingFinished.connect(self.refresh_user_preview)
         user_preview_layout.addWidget(self.user_preview_table, 1)
         self.review_layout.addWidget(self.user_preview_group, 1)
 
@@ -1437,8 +1729,8 @@ class ValidationDesktopApp(QMainWindow):
         self.run_log_table.cellDoubleClicked.connect(self.show_log_details)
         run_log_layout.addWidget(self.run_log_table)
         self.run_log_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.run_log_group.setMaximumHeight(320)
-        self.intake_layout.addWidget(self.run_log_group, 0)
+        self.intake_layout.addWidget(self.run_log_group)
+        self.run_log_group.hide()
 
         self.required_columns_group = QGroupBox(self.format_ui_rtl_text("עמודות חובה לבדיקה"))
         self.required_columns_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -1467,12 +1759,12 @@ class ValidationDesktopApp(QMainWindow):
             title_label.setStyleSheet("font-weight: bold; qproperty-alignment: 'AlignCenter|AlignVCenter';")
             value_label = QLabel(default_value)
             value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            value_label.setStyleSheet("font-size: 18px; padding: 6px; qproperty-alignment: 'AlignCenter|AlignVCenter';")
+            value_label.setStyleSheet("font-size: 13px; padding: 2px; qproperty-alignment: 'AlignCenter|AlignVCenter';")
             summary_layout.addWidget(title_label, 0, column)
             summary_layout.addWidget(value_label, 1, column)
             self.summary_labels[key] = value_label
         self.summary_group.hide()
-        self.intake_layout.addWidget(self.summary_group)
+        self.intake_layout.insertWidget(4, self.summary_group)
 
         self.results_group = QGroupBox(self.format_ui_rtl_text("שגיאות קליטה"))
         self.results_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -1493,6 +1785,7 @@ class ValidationDesktopApp(QMainWindow):
         self.issues_table.setMinimumHeight(180)
         self.results_group.hide()
         self.intake_layout.addWidget(self.results_group)
+        self.intake_layout.addWidget(self._console_container)
 
         central_widget.setStyleSheet(
             """
@@ -1569,6 +1862,7 @@ class ValidationDesktopApp(QMainWindow):
             }
             """
         )
+        self._log_to_console("מוכן לקליטה...", "dim")
 
     def _ordered_categories(self) -> list[str]:
         return list(self.DOMAIN_DEFINITIONS.keys())
@@ -1741,7 +2035,7 @@ class ValidationDesktopApp(QMainWindow):
 
         email_group, email_layout, email_unavailable_label = self._build_settings_group(
             "הגדרות תפוצת מייל",
-            "הגדר כתובות מייל של גורם עסקי וגורם טכני עבור יצירת טיוטות שליחת דוח סקירת משתמשים.",
+            "הגדר כתובות מייל של גורם מהכספים וגורם טכני עבור יצירת טיוטות שליחת דוח סקירת משתמשים.",
         )
         email_form = QFormLayout()
         email_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -1757,7 +2051,7 @@ class ValidationDesktopApp(QMainWindow):
         self.system_settings_widgets["business_reviewer_email"] = business_email_widget
         self.system_settings_widgets["technical_reviewer_email"] = technical_email_widget
 
-        email_form.addRow("כתובת מייל גורם עסקי", business_email_widget)
+        email_form.addRow("כתובת מייל גורם מהכספים", business_email_widget)
         email_form.addRow("כתובת מייל גורם טכני", technical_email_widget)
         email_layout.addLayout(email_form)
         self.settings_layout.addWidget(email_group)
@@ -3122,6 +3416,7 @@ class ValidationDesktopApp(QMainWindow):
             "REVIEW_STATUS": self._normalize_reviewer_status(stored_values.get("REVIEW_STATUS")),
             "TECH_REVIEW_NOTES": str(stored_values.get("TECH_REVIEW_NOTES", "")).strip() or legacy_notes,
             "BUS_REVIEW_NOTES": str(stored_values.get("BUS_REVIEW_NOTES", "")).strip(),
+            "LAST_IMPORT_DATE": str(stored_values.get("LAST_IMPORT_DATE", "")).strip(),
         }
 
     def _update_reviewer_value(self, review_key: str, field_name: str, value: object) -> None:
@@ -3161,6 +3456,24 @@ class ValidationDesktopApp(QMainWindow):
             self.user_preview_visible_columns,
         )
 
+    def _load_user_preview_column_filters(self) -> dict[str, set[str]]:
+        return self.ui_state_repository.load_user_preview_column_filters(
+            self._allow_user_preview_persistence,
+        )
+
+    def _persist_user_preview_column_filters(self) -> None:
+        self.ui_state_repository.save_user_preview_column_filters(
+            self._allow_user_preview_persistence,
+            self.user_preview_column_filters,
+        )
+
+    def _clear_all_user_preview_column_filters(self) -> None:
+        """Remove all active per-column filters and refresh the user preview table."""
+        self.user_preview_column_filters.clear()
+        self._persist_user_preview_column_filters()
+        self._update_header_filter_icons()
+        self.refresh_user_preview()
+
     def _get_user_preview_column_definition(self, field_name: str) -> dict[str, Any]:
         for column in self.USER_PREVIEW_COLUMN_DEFINITIONS:
             if column["field"] == field_name:
@@ -3194,6 +3507,13 @@ class ValidationDesktopApp(QMainWindow):
     def _configure_user_preview_table(self) -> None:
         self.user_preview_visible_columns = self._normalize_user_preview_columns(self.user_preview_visible_columns)
         self.user_preview_table.setColumnCount(len(self.user_preview_visible_columns))
+
+        # Install the filterable header once (on first configure call)
+        if not isinstance(self.user_preview_table.horizontalHeader(), _FilterableHeaderView):
+            filterable_header = _FilterableHeaderView(Qt.Orientation.Horizontal, self.user_preview_table)
+            self.user_preview_table.setHorizontalHeader(filterable_header)
+            filterable_header.filterRequested.connect(self._on_user_preview_header_filter_requested)
+
         self.user_preview_table.setHorizontalHeaderLabels([
             str(self._get_user_preview_column_definition(field_name).get("formal", field_name))
             for field_name in self.user_preview_visible_columns
@@ -3209,6 +3529,18 @@ class ValidationDesktopApp(QMainWindow):
             default_width = int(self._get_user_preview_column_definition(field_name).get("width", 120))
             self.user_preview_table.setColumnWidth(column_index, default_width)
         self.user_preview_table.setSortingEnabled(True)
+        self._update_header_filter_icons()
+
+    def _update_header_filter_icons(self) -> None:
+        """Refresh the ▼ icon state (active/inactive) on the filterable header."""
+        header = self.user_preview_table.horizontalHeader()
+        if not isinstance(header, _FilterableHeaderView):
+            return
+        active_columns: set[int] = set()
+        for column_index, field_name in enumerate(self.user_preview_visible_columns):
+            if field_name in self.user_preview_column_filters and self.user_preview_column_filters[field_name]:
+                active_columns.add(column_index)
+        header.set_active_filter_sections(active_columns)
 
     def _create_user_preview_columns_dialog(self) -> tuple[QDialog, QTableWidget]:
         dialog = QDialog(self)
@@ -3274,6 +3606,13 @@ class ValidationDesktopApp(QMainWindow):
 
         self.user_preview_visible_columns = normalized_columns
         self._save_user_preview_column_selection()
+
+        # Prune column filters for columns no longer visible
+        pruned = {k: v for k, v in self.user_preview_column_filters.items() if k in normalized_columns}
+        if pruned != self.user_preview_column_filters:
+            self.user_preview_column_filters = pruned
+            self._persist_user_preview_column_filters()
+
         self._configure_user_preview_table()
         self.refresh_user_preview()
 
@@ -3425,6 +3764,179 @@ class ValidationDesktopApp(QMainWindow):
             self.DEFAULT_REVIEW_STATUS,
         )
 
+    def _apply_column_filters_to_rows(self, rows: list[dict[str, str]]) -> list[dict[str, str]]:
+        """Filter rows by active per-column value sets. Empty/absent filters pass all rows."""
+        active = {f: v for f, v in self.user_preview_column_filters.items() if v}
+        if not active:
+            return rows
+        result = []
+        for row in rows:
+            match = True
+            for field_name, allowed_values in active.items():
+                raw_value = row.get(field_name, "") or ""
+                display_value = self._format_user_preview_value_for_display(field_name, raw_value)
+                cell_text = display_value.strip()
+                if not cell_text:
+                    cell_text = "(ריקים)"
+                if cell_text not in allowed_values:
+                    match = False
+                    break
+            if match:
+                result.append(row)
+        return result
+
+    def _on_user_preview_header_filter_requested(self, logical_index: int) -> None:
+        """Called when the ▼ filter icon in a column header is clicked."""
+        if logical_index < 0 or logical_index >= len(self.user_preview_visible_columns):
+            return
+        self._show_user_preview_column_filter_popup(logical_index)
+
+    def _show_user_preview_column_filter_popup(self, column_index: int) -> None:
+        """Open an Excel-style filter popup for the given column."""
+        if column_index >= len(self.user_preview_visible_columns):
+            return
+
+        field_name = self.user_preview_visible_columns[column_index]
+        col_def = self._get_user_preview_column_definition(field_name)
+        formal_name = str(col_def.get("formal", field_name))
+
+        # Build all unique display values across the current base-filtered population (no column filters)
+        usr02_rows = self._load_preview_rows("USR02")
+        combined_rows = self._load_preview_rows("ADR6_USR21")
+        preview_rows = self._build_user_preview_rows(usr02_rows, combined_rows)
+        base_filtered, _ = self._filter_user_preview_rows(preview_rows)
+
+        # Collect unique display values for THIS column from base-filtered rows
+        all_display_values: set[str] = set()
+        for row in base_filtered:
+            raw = row.get(field_name, "") or ""
+            display = self._format_user_preview_value_for_display(field_name, raw).strip()
+            all_display_values.add(display if display else "(ריקים)")
+
+        sorted_values = sorted(all_display_values, key=lambda x: ("" if x == "(ריקים)" else x))
+
+        # Current selection for this field (None means "show all")
+        current_selected: set[str] | None = self.user_preview_column_filters.get(field_name)
+
+        # Build dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.format_rtl_text(f"סינון לפי: {formal_name}"))
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dialog.resize(320, 440)
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(6)
+
+        # Search box
+        search_edit = QLineEdit()
+        search_edit.setPlaceholderText("חיפוש...")
+        search_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        search_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(search_edit)
+
+        # "Select All" checkbox
+        from PySide6.QtWidgets import QCheckBox, QListWidget, QListWidgetItem  # noqa: PLC0415
+        select_all_cb = QCheckBox(self.format_rtl_text("(בחר הכל)"))
+        select_all_cb.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        layout.addWidget(select_all_cb)
+
+        # Values list
+        values_list = QListWidget()
+        values_list.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        values_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+
+        def _populate_list(filter_text: str = "") -> None:
+            values_list.blockSignals(True)
+            values_list.clear()
+            for val in sorted_values:
+                if filter_text and filter_text.lower() not in val.lower():
+                    continue
+                item = QListWidgetItem(self.format_rtl_text(val))
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                checked = (
+                    Qt.CheckState.Checked
+                    if (current_selected is None or val in current_selected)
+                    else Qt.CheckState.Unchecked
+                )
+                item.setCheckState(checked)
+                values_list.addItem(item)
+            values_list.blockSignals(False)
+            _sync_select_all()
+
+        def _sync_select_all() -> None:
+            total = values_list.count()
+            checked_count = sum(
+                1 for i in range(total)
+                if values_list.item(i) and values_list.item(i).checkState() == Qt.CheckState.Checked
+            )
+            select_all_cb.blockSignals(True)
+            if checked_count == 0:
+                select_all_cb.setCheckState(Qt.CheckState.Unchecked)
+            elif checked_count == total:
+                select_all_cb.setCheckState(Qt.CheckState.Checked)
+            else:
+                select_all_cb.setCheckState(Qt.CheckState.PartiallyChecked)
+            select_all_cb.blockSignals(False)
+
+        def _on_select_all(state: int) -> None:
+            new_state = Qt.CheckState.Checked if state == Qt.CheckState.Checked.value else Qt.CheckState.Unchecked
+            values_list.blockSignals(True)
+            for i in range(values_list.count()):
+                item = values_list.item(i)
+                if item:
+                    item.setCheckState(new_state)
+            values_list.blockSignals(False)
+
+        def _on_item_changed(_item: Any) -> None:
+            _sync_select_all()
+
+        select_all_cb.setTristate(True)
+        select_all_cb.stateChanged.connect(_on_select_all)
+        values_list.itemChanged.connect(_on_item_changed)
+        search_edit.textChanged.connect(_populate_list)
+
+        _populate_list()
+        layout.addWidget(values_list)
+
+        # Buttons
+        btn_row = QHBoxLayout()
+        ok_btn = QPushButton(self.format_rtl_text("אישור"))
+        cancel_btn = QPushButton(self.format_rtl_text("ביטול"))
+        clear_btn = QPushButton(self.format_rtl_text("נקה סינון"))
+        clear_btn.setToolTip(self.format_rtl_text("הסר את סינון העמודה הזו"))
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(clear_btn)
+        layout.addLayout(btn_row)
+
+        def _on_ok() -> None:
+            selected_vals: set[str] = set()
+            for i in range(values_list.count()):
+                item = values_list.item(i)
+                if item and item.checkState() == Qt.CheckState.Checked:
+                    selected_vals.add(item.text().strip())
+            # If all values selected → no filter active (same as "show all")
+            if selected_vals >= all_display_values:
+                self.user_preview_column_filters.pop(field_name, None)
+            else:
+                self.user_preview_column_filters[field_name] = selected_vals
+            self._persist_user_preview_column_filters()
+            self._update_header_filter_icons()
+            self.refresh_user_preview()
+            dialog.accept()
+
+        def _on_clear() -> None:
+            self.user_preview_column_filters.pop(field_name, None)
+            self._persist_user_preview_column_filters()
+            self._update_header_filter_icons()
+            self.refresh_user_preview()
+            dialog.accept()
+
+        ok_btn.clicked.connect(_on_ok)
+        cancel_btn.clicked.connect(dialog.reject)
+        clear_btn.clicked.connect(_on_clear)
+
+        dialog.exec()
+
     def refresh_user_preview(self) -> None:
         # Prevent nested refresh calls from transient Qt events while the table is rebuilding.
         if self._refreshing_user_preview:
@@ -3472,6 +3984,17 @@ class ValidationDesktopApp(QMainWindow):
                             f"הטבלה מציגה כעת {len(rows_to_display)} משתמשים מתוך {len(preview_rows)} בהתאם לטווח התאריכים שנבחר."
                         )
                     )
+
+            # Apply per-column filters (display-only; does not affect export or progress summary)
+            col_filtered = self._apply_column_filters_to_rows(rows_to_display)
+            if len(col_filtered) < len(rows_to_display):
+                active_count = sum(1 for f in self.user_preview_column_filters.values() if f)
+                self.user_preview_hint.setText(
+                    self.format_ui_rtl_text(
+                        f"הטבלה מציגה כעת {len(col_filtered)} משתמשים לאחר סינון עמודות ({active_count} סינון/ים פעיל/ים)."
+                    )
+                )
+            rows_to_display = col_filtered
 
             if not rows_to_display:
                 self._update_user_review_progress_summary(0, 0, 0)
@@ -3543,13 +4066,57 @@ class ValidationDesktopApp(QMainWindow):
     def _set_validation_running_state(self, is_running: bool, slot_key: str | None = None) -> None:
         self.audit_run_button.setEnabled(not is_running)
         self.audit_export_button.setEnabled(not is_running)
+
+        # Disable / re-enable the top-bar action buttons
+        self.clear_button.setEnabled(not is_running)
+        self.export_log_button.setEnabled(not is_running)
+        self.output_button.setEnabled(not is_running)
+
+        # Disable / re-enable every slot's file-chooser and clear button
+        for slot_entry in self.slot_widgets.values():
+            btn = slot_entry.get("button")
+            clr = slot_entry.get("clear_button")
+            if isinstance(btn, QPushButton):
+                btn.setEnabled(not is_running)
+            if isinstance(clr, QPushButton):
+                clr.setEnabled(not is_running)
+
         if is_running:
             slot_text = slot_key or ""
             self.analysis_progress_label.setText(self.format_ui_rtl_text(f"מעבד כעת את המשבצת {slot_text}..."))
             self.analysis_progress_bar.setRange(0, 0)
             self.analysis_progress_container.show()
+
+            # Show a window-modal loading dialog so the user knows to wait
+            if self._loading_dialog is not None:
+                try:
+                    self._loading_dialog.close()
+                except Exception:
+                    pass
+            dialog = _LoadingProgressDialog(self, slot_text)
+            self._loading_dialog = dialog
+            # Centre over the main window
+            dialog.adjustSize()
+            dialog.move(
+                self.geometry().center().x() - dialog.width() // 2,
+                self.geometry().center().y() - dialog.height() // 2,
+            )
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
+            QApplication.processEvents()  # force the dialog to render before the thread starts
         else:
             self.analysis_progress_container.hide()
+
+            # Close the loading dialog
+            if self._loading_dialog is not None:
+                try:
+                    # Temporarily allow close so our programmatic close works
+                    self._loading_dialog.closeEvent = lambda e: e.accept()  # type: ignore[method-assign]
+                    self._loading_dialog.close()
+                except Exception:
+                    pass
+                self._loading_dialog = None
 
     def _start_slot_validation_async(self, slot_key: str, file_paths: list[str]) -> None:
         input_files_dict: dict[str, list[str | Path]] = {
@@ -3765,7 +4332,10 @@ class ValidationDesktopApp(QMainWindow):
         self.issues_table.resizeColumnsToContents()
 
         self.summary_group.show()
-        self.results_group.show()
+        if total_invalid_rows > 0 or bool(failed_slots):
+            self.results_group.show()
+        else:
+            self.results_group.hide()
 
         # Auto-export the intake log to Excel at the end of a domain run so the
         # auditor has an immediate record of what was processed.
@@ -3811,6 +4381,7 @@ class ValidationDesktopApp(QMainWindow):
         invalid_slots = 0
         failed_slots: list[str] = []
 
+        self._enter_intake_stage_b()
         # Keep the intake summary hidden while multiple slots are still processing.
         self.summary_group.hide()
         self.results_group.hide()
@@ -3865,7 +4436,10 @@ class ValidationDesktopApp(QMainWindow):
         self.issues_table.resizeColumnsToContents()
 
         self.summary_group.show()
-        self.results_group.show()
+        if total_invalid_rows > 0 or bool(failed_slots):
+            self.results_group.show()
+        else:
+            self.results_group.hide()
 
         # Auto-export the intake log to Excel at the end of a category run.
         try:
@@ -3885,9 +4459,12 @@ class ValidationDesktopApp(QMainWindow):
         show_feedback: bool = True,
         update_summary_ui: bool = True,
     ) -> dict[str, Any]:
+        file_names = ", ".join(Path(p).name for p in file_paths)
+        self._log_to_console(f"קולט: {slot_key}  ▸  {file_names}", "title")
         try:
             result = self._process_slot_validation(slot_key, file_paths)
         except Exception as error:
+            self._log_to_console(f"שגיאה בעיבוד {slot_key}: {error}", "error")
             return self._handle_slot_validation_error(
                 slot_key,
                 file_paths,
@@ -3907,6 +4484,7 @@ class ValidationDesktopApp(QMainWindow):
     def _process_slot_validation(self, slot_key: str, file_paths: list[str]) -> Any:
         if slot_key == "AGR_1251":
             self.summary_labels["status"].setText("מעבד קובצי הרשאות גדולים במנות...")
+            self._log_to_console("AGR_1251: קובצי הרשאות גדולים — מעבד במנות, אנא המתן...", "warn")
             QApplication.processEvents()
 
         input_files_dict: dict[str, list[str | Path]] = {
@@ -3965,8 +4543,12 @@ class ValidationDesktopApp(QMainWindow):
         valid_rows, invalid_rows = self._compute_intake_summary(result.summary.total_rows, intake_issues)
 
         if update_summary_ui:
+            self._enter_intake_stage_b()
             self.summary_group.show()
-            self.results_group.show()
+            if intake_issues:
+                self.results_group.show()
+            else:
+                self.results_group.hide()
             self.summary_labels["total"].setText(str(result.summary.total_rows))
             self.summary_labels["valid"].setText(str(valid_rows))
             self.summary_labels["invalid"].setText(str(invalid_rows))
@@ -4120,6 +4702,11 @@ class ValidationDesktopApp(QMainWindow):
                     f"בדיקת המשבצת {slot_key} הסתיימה עם שגיאות קליטה.\n\n{summary_text}\n\nממצאי ביקורת יוצגו בטאב 'ביצוע ניתוח לביקורת'.",
                 )
 
+        self._log_to_console(
+            f"הושלם: {slot_key}  ◂  {result.summary.total_rows} שורות"
+            + (f"  |  {len(intake_issues)} שגיאות קליטה" if intake_issues else "  |  תקין"),
+            "warn" if intake_issues else "info",
+        )
         return {
             "slot_key": slot_key,
             "status": "ok",
@@ -7655,6 +8242,10 @@ class ValidationDesktopApp(QMainWindow):
         self.summary_labels["status"].setText("ממתין להרצה")
         self.summary_group.hide()
         self.results_group.hide()
+        self.run_log_group.hide()
+        if hasattr(self, "console_output"):
+            self.console_output.clear()
+            self._log_to_console("מוכן לקליטה...", "dim")
         self.report_path = None
         self.log_export_path = None
         self.audit_findings_export_path = None
@@ -7873,7 +8464,8 @@ class ValidationDesktopApp(QMainWindow):
             tech_notes_col = col_map.get("REVIEW_NOTES")
         business_notes_col = col_map.get("BUS_REVIEW_NOTES")
 
-        imported_count = 0
+        # ── Phase 1: Parse all rows from the file ──────────────────────────
+        imported_data: dict[str, dict[str, str]] = {}
         for row_values in rows_iter:
             bname = str(row_values[bname_col]).strip() if bname_col < len(row_values) and row_values[bname_col] is not None else ""
             if not bname:
@@ -7884,25 +8476,150 @@ class ValidationDesktopApp(QMainWindow):
             raw_status = row_values[status_col] if status_col < len(row_values) else None
             status_value = self._normalize_reviewer_status(str(raw_status).strip() if raw_status is not None else "")
 
-            raw_tech_notes = row_values[tech_notes_col] if tech_notes_col is not None and tech_notes_col < len(row_values) else None
-            tech_notes_value = str(raw_tech_notes).strip() if raw_tech_notes is not None else ""
-            raw_business_notes = row_values[business_notes_col] if business_notes_col is not None and business_notes_col < len(row_values) else None
-            business_notes_value = str(raw_business_notes).strip() if raw_business_notes is not None else ""
+            raw_tech = row_values[tech_notes_col] if tech_notes_col is not None and tech_notes_col < len(row_values) else None
+            tech_notes_value = str(raw_tech).strip() if raw_tech is not None else ""
+            raw_bus = row_values[business_notes_col] if business_notes_col is not None and business_notes_col < len(row_values) else None
+            bus_notes_value = str(raw_bus).strip() if raw_bus is not None else ""
 
-            current = self.user_reviewer_state.setdefault(review_key, self._default_reviewer_values().copy())
-            current["REVIEW_STATUS"] = status_value
-            current["TECH_REVIEW_NOTES"] = tech_notes_value
-            current["BUS_REVIEW_NOTES"] = business_notes_value
-            imported_count += 1
+            imported_data[review_key] = {
+                "BNAME": bname,
+                "REVIEW_STATUS": status_value,
+                "TECH_REVIEW_NOTES": tech_notes_value,
+                "BUS_REVIEW_NOTES": bus_notes_value,
+            }
 
         workbook.close()
+
+        # ── Phase 2: Integrity analysis ────────────────────────────────────
+        default_status = self.DEFAULT_REVIEW_STATUS
+        imported_keys = set(imported_data.keys())
+
+        # Records with non-default reviewer data absent from the imported file
+        missing_with_data: list[str] = []
+        for key, state in self.user_reviewer_state.items():
+            if key in imported_keys or not isinstance(state, dict):
+                continue
+            has_non_default = (
+                state.get("REVIEW_STATUS", default_status) != default_status
+                or bool(str(state.get("TECH_REVIEW_NOTES", "")).strip())
+                or bool(str(state.get("BUS_REVIEW_NOTES", "")).strip())
+            )
+            if has_non_default:
+                bname_part = key.split("|", 1)[-1] if "|" in key else key
+                missing_with_data.append(bname_part)
+
+        # Notes that were populated and will be erased by the import
+        notes_cleared: list[tuple[str, list[str]]] = []
+        for key, new_vals in imported_data.items():
+            old_state = self.user_reviewer_state.get(key)
+            if not isinstance(old_state, dict):
+                continue
+            cleared_fields: list[str] = []
+            for note_field in ("TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES"):
+                old_val = str(old_state.get(note_field, "")).strip()
+                new_val = new_vals.get(note_field, "")
+                if old_val and not new_val:
+                    formal = str(self._get_user_preview_column_definition(note_field).get("formal", note_field))
+                    cleared_fields.append(formal)
+            if cleared_fields:
+                notes_cleared.append((new_vals["BNAME"], cleared_fields))
+
+        # ── Phase 3: Confirmation dialog ───────────────────────────────────
+        confirm_dialog = _ImportReviewConfirmDialog(
+            self,
+            total_in_file=len(imported_data),
+            missing_with_data=sorted(missing_with_data),
+            notes_cleared=notes_cleared,
+        )
+        if confirm_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        selected_mode = confirm_dialog.selected_mode
+        import_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        # ── Phase 4: Apply ─────────────────────────────────────────────────
+        imported_count = 0
+        for key, new_vals in imported_data.items():
+            current = self.user_reviewer_state.setdefault(key, self._default_reviewer_values().copy())
+            current["REVIEW_STATUS"] = new_vals["REVIEW_STATUS"]
+            if selected_mode == _ImportReviewConfirmDialog.MODE_PRESERVE_NOTES:
+                for note_field in ("TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES"):
+                    new_val = new_vals.get(note_field, "")
+                    if new_val or not str(current.get(note_field, "")).strip():
+                        current[note_field] = new_val
+            else:
+                current["TECH_REVIEW_NOTES"] = new_vals["TECH_REVIEW_NOTES"]
+                current["BUS_REVIEW_NOTES"] = new_vals["BUS_REVIEW_NOTES"]
+            current["LAST_IMPORT_DATE"] = import_timestamp
+            imported_count += 1
+
+        # ── Phase 5: Persist, log and refresh ─────────────────────────────
         self._save_user_reviewer_state()
+
+        mode_label = "שמור הערות קיימות" if selected_mode == _ImportReviewConfirmDialog.MODE_PRESERVE_NOTES else "כל השינויים"
+        summary_parts = [f"עודכנו: {imported_count}"]
+        if missing_with_data:
+            summary_parts.append(f"לא בקובץ: {len(missing_with_data)}")
+        if notes_cleared:
+            summary_parts.append(f"הערות שנמחקו: {len(notes_cleared)}")
+        summary_parts.append(f"מצב: {mode_label}")
+        error_preview = " | ".join(summary_parts)
+
+        import_now = datetime.now()
+        record: dict[str, Any] = {
+            "slot_key": "ייבוא סקירה",
+            "report_group": "סקירת משתמשים",
+            "file_name": Path(file_path).name,
+            "extraction_date": "",
+            "row_count": imported_count,
+            "status": "יובא",
+            "error_count": 0,
+            "error_preview": error_preview,
+            "date": import_now.strftime("%Y-%m-%d"),
+            "time": import_now.strftime("%H:%M:%S"),
+            "issues": [],
+        }
+        self.run_log_records.append(record)
+
+        row_index = self.run_log_table.rowCount()
+        self.run_log_table.insertRow(row_index)
+        log_values = [
+            record["slot_key"],
+            record["report_group"],
+            record["file_name"],
+            record["extraction_date"],
+            str(record["row_count"]),
+            record["status"],
+            str(record["error_count"]),
+            record["error_preview"],
+            record["date"],
+            record["time"],
+        ]
+        for column, value in enumerate(log_values):
+            item = QTableWidgetItem(self.format_rtl_text(value))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            item.setToolTip(self.format_rtl_text(value))
+            if column == 5:
+                item.setBackground(QColor("#e8f4fd"))
+            self.run_log_table.setItem(row_index, column, item)
+        self.run_log_table.resizeColumnsToContents()
+
         self.refresh_user_preview()
 
+        notes_warn = (
+            f"\n⚠ {len(notes_cleared)} הערות שאוכלסו נמחקו."
+            if notes_cleared and selected_mode != _ImportReviewConfirmDialog.MODE_PRESERVE_NOTES
+            else ""
+        )
+        missing_warn = (
+            f"\n⚠ {len(missing_with_data)} רשומות עם נתונים קיימים לא נמצאו בקובץ (נשמרו ללא שינוי)."
+            if missing_with_data
+            else ""
+        )
         QMessageBox.information(
             self,
             "הייבוא הושלם",
-            f"יובאו בהצלחה {imported_count} שורות מקובץ הסקירה.",
+            f"יובאו בהצלחה {imported_count} שורות מקובץ הסקירה.{notes_warn}{missing_warn}",
         )
 
     def _email_from_settings(self, settings_key: str) -> str:
@@ -7970,7 +8687,7 @@ class ValidationDesktopApp(QMainWindow):
     def draft_user_review_email_to_business(self) -> None:
         self._create_outlook_review_draft(
             recipient_email=self._email_from_settings("business_reviewer_email"),
-            role_label="גורם עסקי",
+            role_label="גורם מהכספים",
         )
 
     def draft_user_review_email_to_technical(self) -> None:

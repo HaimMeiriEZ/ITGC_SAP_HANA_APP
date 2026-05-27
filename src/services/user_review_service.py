@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Iterable
 
 
-ALLOWED_REVIEW_FIELDS = {"REVIEW_STATUS", "TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES"}
+ALLOWED_REVIEW_FIELDS = {"REVIEW_STATUS", "TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES", "LAST_IMPORT_DATE"}
 
 
 def reviewer_state_key(mandt: object, bname: object) -> str:
@@ -24,6 +24,7 @@ def default_reviewer_values(default_status: str) -> dict[str, str]:
         "REVIEW_STATUS": default_status,
         "TECH_REVIEW_NOTES": "",
         "BUS_REVIEW_NOTES": "",
+        "LAST_IMPORT_DATE": "",
     }
 
 

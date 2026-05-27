@@ -96,7 +96,16 @@ class UiStateRepository:
             return candidate_directory
 
         state_path = self.file_dialog_state_path()
-        payload = {"last_directory": str(candidate_directory)}
+        # Merge into existing state so other keys (collapse/splitter) are preserved
+        payload: dict = {}
+        if state_path.exists():
+            try:
+                raw = json.loads(state_path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    payload = raw
+            except Exception:
+                pass
+        payload["last_directory"] = str(candidate_directory)
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return candidate_directory
@@ -186,6 +195,35 @@ class UiStateRepository:
         }
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def user_preview_column_filters_path(self) -> Path:
+        return self._output_dir / "user_preview_column_filters.json"
+
+    def load_user_preview_column_filters(self, allow_persistence: bool) -> dict[str, set[str]]:
+        if not allow_persistence:
+            return {}
+        path = self.user_preview_column_filters_path()
+        if not path.exists():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        return {str(k): set(v) for k, v in raw.items() if isinstance(v, list)}
+
+    def save_user_preview_column_filters(
+        self,
+        allow_persistence: bool,
+        filters: dict[str, set[str]],
+    ) -> None:
+        if not allow_persistence:
+            return
+        path = self.user_preview_column_filters_path()
+        payload = {k: sorted(v) for k, v in filters.items() if v}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 class IpeEvidenceRepository:
