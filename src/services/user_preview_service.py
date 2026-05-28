@@ -78,6 +78,8 @@ def build_user_preview_rows(
     get_reviewer_values: Callable[[object, object], dict[str, str]],
     build_user_findings_description: Callable[[dict[str, str], str], str],
     default_review_status: str,
+    get_anomaly_data: Callable[[dict[str, str]], tuple[str, str]] | None = None,
+    get_ai_narration: Callable[[dict[str, str], str], str] | None = None,
 ) -> list[dict[str, str]]:
     usr02_map: dict[tuple[str, str], dict[str, str]] = {}
     addr_users_map: dict[tuple[str, str], dict[str, str]] = {}
@@ -177,6 +179,24 @@ def build_user_preview_rows(
             or email_by_addr.get(addr_entry.get("ADDRNUMBER", ""), "")
             or email_by_pers.get(addr_entry.get("PERSNUMBER", ""), "")
         )
+
+        # Anomaly detection (statistical — no LLM)
+        anomaly_score = ""
+        anomaly_codes = ""
+        if get_anomaly_data is not None:
+            try:
+                anomaly_score, anomaly_codes = get_anomaly_data(usr_entry)
+            except Exception:
+                pass
+
+        # AI narration of findings
+        findings_description_ai = ""
+        if get_ai_narration is not None and findings_description:
+            try:
+                findings_description_ai = get_ai_narration(usr_entry, findings_description)
+            except Exception:
+                pass
+
         preview_rows.append(
             {
                 "MANDT": merged_mandt,
@@ -207,6 +227,9 @@ def build_user_preview_rows(
                 "SECURITY_POLICY": usr_entry.get("SECURITY_POLICY", ""),
                 "REVIEW_STATUS": review_values.get("REVIEW_STATUS", default_review_status),
                 "FINDINGS_DESCRIPTION": findings_description,
+                "FINDINGS_DESCRIPTION_AI": findings_description_ai,
+                "ANOMALY_SCORE": anomaly_score,
+                "ANOMALY_CODES": anomaly_codes,
                 "TECH_REVIEW_NOTES": review_values.get("TECH_REVIEW_NOTES", ""),
                 "BUS_REVIEW_NOTES": review_values.get("BUS_REVIEW_NOTES", ""),
                 "LAST_IMPORT_DATE": review_values.get("LAST_IMPORT_DATE", ""),

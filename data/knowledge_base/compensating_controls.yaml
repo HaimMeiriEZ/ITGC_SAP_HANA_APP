@@ -1,0 +1,184 @@
+# Compensating Controls Knowledge Base
+# ITGC SAP HANA — Hebrew UI application
+#
+# Each entry describes a compensating control that can be recommended when a
+# specific ITGC finding is identified.  The "applies_when" block is used by the
+# advisor to pre-filter relevant candidates before ranking with the LLM.
+
+compensating_controls:
+
+  # -----------------------------------------------------------------------
+  # JML — Joiner / Mover / Leaver (MA1-*)
+  # -----------------------------------------------------------------------
+
+  - id: CC-JML-01
+    title_he: "סקירת משתמשים תקופתית (User Access Review)"
+    description_he: >
+      ביצוע סקירה תקופתית (לפחות רבעונית) של כלל משתמשי SAP על ידי מנהלי
+      מערכות ועסק, לצורך זיהוי חשבונות מיותרים, לא פעילים או בעלי הרשאות
+      עודפות.  הסקירה מתועדת ומאושרת על ידי הגורם המוסמך.
+    frameworks: [SOX, COBIT, ISAE3402]
+    applies_when:
+      control_ids: [MA1-1, MA1-2, MA1-3, MA1-4, MA1-5]
+      risk_levels: [medium, high]
+    evidence_needed:
+      - "דו''ח מרכז משתמשים מ-SU10 / SUIM עם חתימת מנהל"
+      - "רשימת משתמשים שנסגרו / הוקפאו בעקבות הסקירה"
+      - "תיעוד אישורים (טופס או מייל) מגורם עסקי"
+
+  - id: CC-JML-02
+    title_he: "בקרת כניסה אחרונה ונעילה אוטומטית"
+    description_he: >
+      הגדרת פרמטרים מערכתיים (LOGIN/NO_AUTO_USER_SAPSTAR, rdisp/gui_auto_logout)
+      לנעילה אוטומטית של חשבונות לא פעילים אחרי X ימים.
+      משלים את הבקרה הידנית בסקירה תקופתית.
+    frameworks: [SOX, COBIT]
+    applies_when:
+      control_ids: [MA1-1, MA1-3]
+      risk_levels: [medium, high]
+    evidence_needed:
+      - "צילום מסך פרמטרים RZ10 עם ערכי ה-threshold"
+      - "לוג חשבונות שננעלו אוטומטית בתקופת הביקורת"
+
+  - id: CC-JML-03
+    title_he: "תהליך Offboarding מבוסס HR"
+    description_he: >
+      הבטחת ממשק בין מערכת HR לבין SAP לצורך נעילה מיידית של
+      חשבונות עובדים שסיימו העסקתם.  כולל בדיקה שבועית/יומית של
+      פערים בין רשימת עובדים פעילים ב-HR לבין משתמשים פתוחים ב-SAP.
+    frameworks: [SOX, COBIT, ISAE3402]
+    applies_when:
+      control_ids: [MA1-1, MA1-2, MA1-4, MA1-5]
+      risk_levels: [high]
+    evidence_needed:
+      - "הוכחת ממשק HR-SAP (תיעוד טכני או workflow)"
+      - "לוג הפרשים HR/SAP שנבדק ותוקן"
+      - "טופס אישור סיום העסקה חתום"
+
+  # -----------------------------------------------------------------------
+  # Segregation of Duties / Critical Profiles (MA3-*)
+  # -----------------------------------------------------------------------
+
+  - id: CC-SOD-01
+    title_he: "מיפוי ומעקב אחר פרופילי SAP_ALL ו-SAP_NEW"
+    description_he: >
+      הכנת רשימה מאושרת של משתמשים בעלי פרופיל SAP_ALL/SAP_NEW עם
+      הצדקה עסקית מתועדת.  סקירה שנתית של ההצדקה על ידי CISO / מנהל IT.
+      בנוסף, ניטור אוטומטי של שינויים בהרשאות קריטיות.
+    frameworks: [SOX, COBIT, ISAE3402]
+    applies_when:
+      control_ids: [MA3-3, MA3-1, MA3-2]
+      risk_levels: [high]
+    evidence_needed:
+      - "רשימה חתומה של משתמשים בעלי SAP_ALL/SAP_NEW"
+      - "הצדקה עסקית לכל משתמש"
+      - "תיעוד סקירה שנתית"
+
+  - id: CC-SOD-02
+    title_he: "בקרת ניגוד עניינים (SoD Matrix)"
+    description_he: >
+      הטמעת מטריצת ניגוד עניינים (SoD) לזיהוי פעילויות קונפליקטיות
+      בין אובייקטי הרשאה.  ביצוע ניתוח SoD אחת לתקופה וטיפול בחריגות.
+    frameworks: [SOX, COBIT]
+    applies_when:
+      control_ids: [MA3-1, MA3-2, MA3-3, MA3-4]
+      risk_levels: [medium, high]
+    evidence_needed:
+      - "מטריצת SoD עדכנית"
+      - "דו''ח ניתוח SoD לתקופת הביקורת"
+      - "תיעוד פתרון חריגות (Mitigation Controls)"
+
+  # -----------------------------------------------------------------------
+  # Password Policy (MA7-*)
+  # -----------------------------------------------------------------------
+
+  - id: CC-PWD-01
+    title_he: "אכיפת מדיניות סיסמאות חזקה ב-RZ10"
+    description_he: >
+      הגדרה ואכיפת פרמטרי סיסמה תקינים ב-RZ10:
+      login/min_password_lng ≥ 8, login/password_max_idle_initial ≤ 2,
+      login/fails_to_user_lock ≤ 5, login/password_expiration_time ≤ 90.
+    frameworks: [SOX, COBIT, ISAE3402]
+    applies_when:
+      control_ids: [MA7-1, MA7-2, MA7-3, MA7-4, MA7-5]
+      risk_levels: [medium, high]
+    evidence_needed:
+      - "צילום מסך RSPARAM / RZ10 עם ערכים בפועל"
+      - "תיעוד שינויים אם בוצעו תיקונים"
+
+  - id: CC-PWD-02
+    title_he: "שימוש ב-Single Sign-On (SSO) או MFA"
+    description_he: >
+      הטמעת מנגנון SSO (Kerberos, SAP Logon Ticket) או אימות דו-שלבי (MFA)
+      לצמצום התלות בסיסמאות מקומיות חלשות.
+    frameworks: [SOX, COBIT]
+    applies_when:
+      control_ids: [MA7-1, MA7-2]
+      risk_levels: [high]
+    evidence_needed:
+      - "תיעוד ארכיטקטורת SSO/MFA"
+      - "אחוז משתמשים מחוברים דרך SSO"
+
+  # -----------------------------------------------------------------------
+  # Transport Management / Change Management (MC-*)
+  # -----------------------------------------------------------------------
+
+  - id: CC-TMS-01
+    title_he: "בקרת Dual-Control בתהליך Transport"
+    description_he: >
+      הטמעת עיקרון four-eyes: כל Transport לפרודקשן דורש אישור של לפחות
+      שני גורמים (מפתח + מנהל שינויים או Change Advisory Board).
+      תועד ב-STMS ובמערכת Change Management.
+    frameworks: [SOX, COBIT, ISAE3402]
+    applies_when:
+      control_ids: [MC-1, MC-2, MC-3, MC-4]
+      risk_levels: [medium, high]
+    evidence_needed:
+      - "Log STMS עם אישורים לתקופת הביקורת"
+      - "תיעוד Change Management (כרטיסי שינוי)"
+      - "רשימת משתמשים מורשים לביצוע Transport"
+
+  - id: CC-TMS-02
+    title_he: "הפרדת סביבות פיתוח / QA / פרודקשן"
+    description_he: >
+      אכיפת הפרדה ברורה בין סביבת הפיתוח, QA ופרודקשן.
+      הגבלת גישה ישירה לפרודקשן למספר מינימלי של משתמשים מורשים.
+    frameworks: [SOX, COBIT, ISAE3402]
+    applies_when:
+      control_ids: [MC-1, MC-2, MC-3]
+      risk_levels: [high]
+    evidence_needed:
+      - "מפת סביבות SAP (DEV/QA/PRD)"
+      - "רשימת משתמשי Developer בפרודקשן"
+
+  # -----------------------------------------------------------------------
+  # Debug / Emergency Access (MA4-* / emergency)
+  # -----------------------------------------------------------------------
+
+  - id: CC-DEBUG-01
+    title_he: "ניטור ולוג גישת Debug בפרודקשן"
+    description_he: >
+      הגדרת SM20 לתיעוד אירועי Debug.  ביצוע סקירה שנתית של log ה-Debug
+      ובדיקה שכל גישה מוצדקת בכרטיס Incident/Change.
+    frameworks: [SOX, COBIT]
+    applies_when:
+      control_ids: [MA4-1, MA4-2, MA4-3, DEBUG]
+      risk_levels: [medium, high]
+    evidence_needed:
+      - "הגדרות SM19 — אירועי Debug מסומנים לתיעוד"
+      - "דוח SM20 לתקופת הביקורת"
+      - "כרטיסי Incident/Change לגישות Debug שתועדו"
+
+  - id: CC-DEBUG-02
+    title_he: "FireFighter / Emergency Access Management"
+    description_he: >
+      שימוש בפתרון Emergency Access Management (EAM / GRC Firefighter)
+      לניהול גישת חירום מבוקרת: הזמנה, אישור, שימוש וסקירה אחורית.
+    frameworks: [SOX, COBIT, ISAE3402]
+    applies_when:
+      control_ids: [MA4-1, MA4-2, MA4-3, DEBUG, MA3-3]
+      risk_levels: [high]
+    evidence_needed:
+      - "לוג EAM/Firefighter לתקופת הביקורת"
+      - "אישורי גישת חירום חתומים"
+      - "סקירה אחורית של פעולות בזמן גישת חירום"

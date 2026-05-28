@@ -17,6 +17,8 @@ from PySide6.QtCore import QCoreApplication, QDate, QEvent, QObject, QThread, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
+    QDoubleSpinBox,
     QStyledItemDelegate,
     QSizePolicy,
     QTabWidget,
@@ -41,6 +43,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QTextEdit,
     QProgressBar,
+    QProgressDialog,
     QRadioButton,
     QVBoxLayout,
     QWidget,
@@ -59,6 +62,7 @@ from src.readers.excel_reader import ExcelFileReader
 from src.readers.text_reader import TextFileReader
 from src.reporting.excel_report import ExcelReportWriter
 from src.reporting.working_paper_report import write_control_working_paper
+from src.services.ai_service import OllamaClient, RECOMMENDED_MODELS
 from src.services.audit_service import (
     build_audit_detail_row,
     build_audit_detail_values,
@@ -205,6 +209,66 @@ class SlotValidationWorker(QObject):
             self.failed.emit(self.slot_key, list(self.file_paths), str(error))
         finally:
             self.finished.emit()
+
+
+class BatchNarrationWorker(QObject):
+    """Background worker that generates AI narrations for a list of user findings.
+
+    Emits ``progress(done, total, bname)`` per processed row and ``finished(processed, skipped, failed)``
+    at the end.  Designed to be moved to a ``QThread`` and connected via signals.
+    """
+
+    progress = Signal(int, int, str)
+    finished = Signal(int, int, int)
+
+    def __init__(
+        self,
+        items: list[dict[str, Any]],
+        ai_settings: dict[str, Any],
+        work_environment: str,
+    ) -> None:
+        super().__init__()
+        self._items = items
+        self._ai_settings = ai_settings
+        self._work_environment = work_environment
+        self._cancel_requested = False
+
+    @Slot()
+    def request_cancel(self) -> None:
+        self._cancel_requested = True
+
+    @Slot()
+    def run(self) -> None:
+        processed = 0
+        skipped = 0
+        failed = 0
+        total = len(self._items)
+        try:
+            from src.services.findings_narrator import narrate_user_finding
+            client = OllamaClient(self._ai_settings)
+        except Exception:
+            self.finished.emit(0, 0, total)
+            return
+
+        for idx, item in enumerate(self._items, start=1):
+            if self._cancel_requested:
+                break
+            row = item.get("row", {})
+            raw_findings = str(item.get("raw_findings", "") or "")
+            bname = str(row.get("BNAME", ""))
+            self.progress.emit(idx, total, bname)
+            if not raw_findings.strip():
+                skipped += 1
+                continue
+            try:
+                result = narrate_user_finding(row, raw_findings, client, self._work_environment)
+                if result and result != raw_findings:
+                    processed += 1
+                else:
+                    skipped += 1
+            except Exception:
+                failed += 1
+        self.finished.emit(processed, skipped, failed)
 
 
 class _ImportReviewConfirmDialog(QDialog):
@@ -469,6 +533,9 @@ class ValidationDesktopApp(QMainWindow):
         {"field": "SECURITY_POLICY", "formal": "מדיניות אבטחה", "technical": "SECURITY_POLICY", "source": "USR02", "default": True, "width": 160},
         {"field": "REVIEW_STATUS", "formal": "בוצעה סקירה", "technical": "REVIEW_STATUS", "source": "סוקר", "default": True, "width": 165},
         {"field": "FINDINGS_DESCRIPTION", "formal": "תיאור ממצאים", "technical": "FINDINGS_DESCRIPTION", "source": "מערכת", "default": True, "width": 280},
+        {"field": "FINDINGS_DESCRIPTION_AI", "formal": "נרטיב AI לממצאים", "technical": "FINDINGS_DESCRIPTION_AI", "source": "AI", "default": False, "width": 340},
+        {"field": "ANOMALY_SCORE", "formal": "ציון אנומליה", "technical": "ANOMALY_SCORE", "source": "ניתוח סטטיסטי", "default": False, "width": 110},
+        {"field": "ANOMALY_CODES", "formal": "קודי אנומליה", "technical": "ANOMALY_CODES", "source": "ניתוח סטטיסטי", "default": False, "width": 200},
         {"field": "TECH_REVIEW_NOTES", "formal": "הערות סוקר גורם טכני", "technical": "TECH_REVIEW_NOTES", "source": "סוקר טכני", "default": True, "width": 240},
         {"field": "BUS_REVIEW_NOTES", "formal": "הערות סוקר גורם מהכספים", "technical": "BUS_REVIEW_NOTES", "source": "סוקר מהכספים", "default": True, "width": 240},
         {"field": "LAST_IMPORT_DATE", "formal": "עודכן לאחרונה", "technical": "LAST_IMPORT_DATE", "source": "ייבוא סקירה", "default": True, "width": 145},
@@ -479,7 +546,7 @@ class ValidationDesktopApp(QMainWindow):
         for column in USER_PREVIEW_COLUMN_DEFINITIONS
         if bool(column.get("default"))
     ]
-    CURRENT_USER_PREVIEW_SETTINGS_VERSION = 8
+    CURRENT_USER_PREVIEW_SETTINGS_VERSION = 10
     USER_PREVIEW_SETTINGS_MIGRATIONS = {
         2: ["PWDINITIAL", "PWDCHGDATE", "PWDSETDATE"],
         3: ["DEPARTMENT", "GLTGV", "GLTGB", "USTYP", "LOCNT", "OCOD1", "PASSCODE", "PWDSALTEDHASH", "SECURITY_POLICY"],
@@ -488,6 +555,8 @@ class ValidationDesktopApp(QMainWindow):
         6: ["TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES"],
         7: ["WORK_ENVIRONMENT"],
         8: ["LAST_IMPORT_DATE"],
+        9: ["FINDINGS_DESCRIPTION_AI"],
+        10: ["ANOMALY_SCORE", "ANOMALY_CODES"],
     }
     USER_PREVIEW_FILTER_OPTIONS = [
         ("all", "כלל האוכלוסייה"),
@@ -742,6 +811,9 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_findings_export_path: Path | None = None
         self.validation_thread: QThread | None = None
         self.validation_worker: SlotValidationWorker | None = None
+        self.batch_narration_thread: QThread | None = None
+        self.batch_narration_worker: BatchNarrationWorker | None = None
+        self.batch_narration_progress_dialog: QProgressDialog | None = None
         self._allow_user_preview_persistence = base_dir is not None or "unittest" not in sys.modules
         self.last_file_dialog_directory = self._load_last_file_dialog_directory()
         self._refreshing_user_preview = False
@@ -1639,6 +1711,14 @@ class ValidationDesktopApp(QMainWindow):
         self.user_preview_import_button.clicked.connect(self.import_user_review_from_excel)
         user_preview_actions_layout.addWidget(self.user_preview_import_button, 0, Qt.AlignmentFlag.AlignRight)
 
+        self.user_preview_ai_narrate_button = QPushButton("הפק נרטיב AI לכל הממצאים")
+        self.user_preview_ai_narrate_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.user_preview_ai_narrate_button.setToolTip(
+            "מפיק תיאור ממצאים מנוסח על-ידי מודל AI מקומי (Ollama) לכל המשתמשים עם ממצאים. דורש שה-AI מופעל בהגדרות המערכת."
+        )
+        self.user_preview_ai_narrate_button.clicked.connect(self.generate_ai_narration_for_all_findings)
+        user_preview_actions_layout.addWidget(self.user_preview_ai_narrate_button, 0, Qt.AlignmentFlag.AlignRight)
+
         self.user_preview_send_business_button = QPushButton("שליחת הדוח לגורם מהכספים")
         self.user_preview_send_business_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.user_preview_send_business_button.clicked.connect(self.draft_user_review_email_to_business)
@@ -2139,6 +2219,167 @@ class ValidationDesktopApp(QMainWindow):
         ipe_group_layout.addWidget(self.ipe_mapping_table)
         self.settings_layout.addWidget(ipe_group)
 
+        # ---- AI Settings Section ----
+        self._build_ai_settings_section()
+
+    def _build_ai_settings_section(self) -> None:
+        """Build the 'הגדרות AI' settings group and register its widgets."""
+        ai_group, ai_layout, ai_unavailable_label = self._build_settings_group(
+            "הגדרות AI — Ollama LLM מקומי",
+            "כל עיבוד ה-AI מתבצע באופן מקומי בלבד. אין שליחת נתונים לרשת חיצונית.",
+        )
+
+        # Enable / disable toggle
+        ai_enable_cb = self._build_checkbox(self.format_ui_rtl_text("הפעל יכולות AI (Ollama נדרש)"))
+        self.system_settings_widgets["ai_settings.enabled"] = ai_enable_cb
+        ai_layout.addWidget(ai_enable_cb)
+
+        # Ollama host
+        host_form = QFormLayout()
+        host_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        host_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+        host_edit = QLineEdit()
+        host_edit.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        host_edit.setPlaceholderText("http://localhost:11434")
+        self.system_settings_widgets["ai_settings.ollama_host"] = host_edit
+        host_form.addRow(self.format_ui_rtl_text("כתובת שרת Ollama"), host_edit)
+        ai_layout.addLayout(host_form)
+
+        # Model combo
+        model_row = QWidget()
+        model_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        model_row_layout = QHBoxLayout(model_row)
+        model_row_layout.setContentsMargins(0, 0, 0, 0)
+        model_row_layout.setSpacing(8)
+
+        model_label = QLabel(self.format_ui_rtl_text("מודל:"))
+        model_combo = QComboBox()
+        model_combo.setEditable(True)
+        model_combo.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        for m in RECOMMENDED_MODELS:
+            model_combo.addItem(m)
+        model_combo.setMinimumWidth(220)
+        self.system_settings_widgets["ai_settings.model"] = model_combo
+
+        model_row_layout.addStretch(1)
+        model_row_layout.addWidget(model_combo)
+        model_row_layout.addWidget(model_label)
+        ai_layout.addWidget(model_row)
+
+        # Temperature
+        temp_form = QFormLayout()
+        temp_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        temp_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+        from PySide6.QtWidgets import QDoubleSpinBox
+        temp_spin = QDoubleSpinBox()
+        temp_spin.setRange(0.0, 1.0)
+        temp_spin.setSingleStep(0.1)
+        temp_spin.setDecimals(1)
+        temp_spin.setValue(0.3)
+        temp_spin.setMaximumWidth(80)
+        temp_spin.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.system_settings_widgets["ai_settings.temperature"] = temp_spin
+        temp_form.addRow(self.format_ui_rtl_text("טמפרטורה (יצירתיות 0.0–1.0)"), temp_spin)
+        ai_layout.addLayout(temp_form)
+
+        # Timeout
+        timeout_form = QFormLayout()
+        timeout_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        timeout_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+        timeout_edit = QLineEdit()
+        timeout_edit.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        timeout_edit.setMaximumWidth(80)
+        timeout_edit.setPlaceholderText("60")
+        self.system_settings_widgets["ai_settings.timeout_seconds"] = timeout_edit
+        timeout_form.addRow(self.format_ui_rtl_text("Timeout (שניות)"), timeout_edit)
+        ai_layout.addLayout(timeout_form)
+
+        # Feature toggles
+        feat_narration_cb = self._build_checkbox(self.format_ui_rtl_text("נרטיב AI לממצאי בקרות (Feature 2.1)"))
+        feat_compensating_cb = self._build_checkbox(self.format_ui_rtl_text("המלצות בקרות מפצות (Feature 2.2)"))
+        feat_anomaly_cb = self._build_checkbox(self.format_ui_rtl_text("זיהוי אנומליות סטטיסטיות במשתמשים (Feature 2.4)"))
+        self.system_settings_widgets["ai_settings.features.findings_narration"] = feat_narration_cb
+        self.system_settings_widgets["ai_settings.features.compensating_controls"] = feat_compensating_cb
+        self.system_settings_widgets["ai_settings.features.anomaly_detection"] = feat_anomaly_cb
+        ai_layout.addWidget(feat_narration_cb)
+        ai_layout.addWidget(feat_compensating_cb)
+        ai_layout.addWidget(feat_anomaly_cb)
+
+        # Connection test button + status label
+        test_row = QWidget()
+        test_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        test_row_layout = QHBoxLayout(test_row)
+        test_row_layout.setContentsMargins(0, 0, 0, 0)
+        test_row_layout.setSpacing(8)
+
+        test_btn = QPushButton(self.format_ui_rtl_text("בדוק חיבור ל-Ollama"))
+        test_btn.setMaximumWidth(200)
+        self._ai_connection_status_label = QLabel("")
+        self._ai_connection_status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        def _on_test_connection() -> None:
+            ai_cfg = self._collect_ai_settings_from_widgets()
+            client = OllamaClient(ai_cfg)
+            if client.is_available():
+                local_models = client.list_local_models()
+                models_str = ", ".join(local_models[:5]) if local_models else "(לא נמצאו מודלים)"
+                self._ai_connection_status_label.setText(
+                    self.format_ui_rtl_text(f"✓ חיבור תקין | מודלים: {models_str}")
+                )
+                self._ai_connection_status_label.setStyleSheet("color: #2e7d32; font-weight: bold;")
+            else:
+                self._ai_connection_status_label.setText(
+                    self.format_ui_rtl_text("✗ לא ניתן להתחבר לשרת Ollama")
+                )
+                self._ai_connection_status_label.setStyleSheet("color: #c62828; font-weight: bold;")
+
+        test_btn.clicked.connect(_on_test_connection)
+        test_row_layout.addStretch(1)
+        test_row_layout.addWidget(self._ai_connection_status_label)
+        test_row_layout.addWidget(test_btn)
+        ai_layout.addWidget(test_row)
+
+        self.settings_layout.addWidget(ai_group)
+        self.system_settings_sections["ai_settings"] = ai_group
+        self.system_settings_unavailable_labels["ai_settings"] = ai_unavailable_label
+
+    def _build_checkbox(self, label_text: str) -> Any:
+        from PySide6.QtWidgets import QCheckBox
+        cb = QCheckBox(label_text)
+        cb.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        return cb
+
+    def _collect_ai_settings_from_widgets(self) -> dict[str, Any]:
+        """Read current widget values for ai_settings and return as dict."""
+        ai = {}
+        enabled_cb = self.system_settings_widgets.get("ai_settings.enabled")
+        from PySide6.QtWidgets import QCheckBox, QDoubleSpinBox
+        if isinstance(enabled_cb, QCheckBox):
+            ai["enabled"] = enabled_cb.isChecked()
+        host_w = self.system_settings_widgets.get("ai_settings.ollama_host")
+        if isinstance(host_w, QLineEdit):
+            ai["ollama_host"] = host_w.text().strip() or "http://localhost:11434"
+        model_w = self.system_settings_widgets.get("ai_settings.model")
+        if isinstance(model_w, QComboBox):
+            ai["model"] = model_w.currentText().strip()
+        temp_w = self.system_settings_widgets.get("ai_settings.temperature")
+        if isinstance(temp_w, QDoubleSpinBox):
+            ai["temperature"] = temp_w.value()
+        timeout_w = self.system_settings_widgets.get("ai_settings.timeout_seconds")
+        if isinstance(timeout_w, QLineEdit):
+            ai["timeout_seconds"] = self._safe_int(timeout_w.text(), 60)
+        feat = {}
+        for feat_key in ("findings_narration", "compensating_controls", "anomaly_detection"):
+            cb = self.system_settings_widgets.get(f"ai_settings.features.{feat_key}")
+            if isinstance(cb, QCheckBox):
+                feat[feat_key] = cb.isChecked()
+        if feat:
+            ai["features"] = feat
+        return ai
+
     def _build_settings_group(self, title: str, description: str | None = None) -> tuple[QGroupBox, QVBoxLayout, QLabel]:
         group = QGroupBox(self.format_ui_rtl_text(title))
         group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -2302,6 +2543,18 @@ class ValidationDesktopApp(QMainWindow):
                 for slot_key, metadata in self.SLOT_DEFINITIONS.items()
             },
             "slot_ipe_control_mapping": {k: list(v) for k, v in SLOT_DEFAULT_CONTROLS.items()},
+            "ai_settings": {
+                "enabled": False,
+                "ollama_host": "http://localhost:11434",
+                "model": "aya-expanse:8b",
+                "temperature": 0.3,
+                "timeout_seconds": 60,
+                "features": {
+                    "findings_narration": True,
+                    "compensating_controls": True,
+                    "anomaly_detection": True,
+                },
+            },
         }
 
     def _current_system_settings(self) -> dict[str, Any]:
@@ -2424,6 +2677,37 @@ class ValidationDesktopApp(QMainWindow):
                         item.setBackground(QBrush(QColor("#6d002f")) if is_checked else QBrush())
             self.ipe_mapping_table.blockSignals(False)
 
+        # Load AI settings
+        ai_cfg = settings.get("ai_settings", {}) if isinstance(settings, dict) else {}
+        if isinstance(ai_cfg, dict):
+            from PySide6.QtWidgets import QCheckBox, QDoubleSpinBox
+            enabled_cb = self.system_settings_widgets.get("ai_settings.enabled")
+            if isinstance(enabled_cb, QCheckBox):
+                enabled_cb.setChecked(bool(ai_cfg.get("enabled", False)))
+            host_w = self.system_settings_widgets.get("ai_settings.ollama_host")
+            if isinstance(host_w, QLineEdit):
+                host_w.setText(str(ai_cfg.get("ollama_host", "http://localhost:11434")))
+            model_w = self.system_settings_widgets.get("ai_settings.model")
+            if isinstance(model_w, QComboBox):
+                model_val = str(ai_cfg.get("model", "aya-expanse:8b"))
+                idx = model_w.findText(model_val)
+                if idx >= 0:
+                    model_w.setCurrentIndex(idx)
+                else:
+                    model_w.setCurrentText(model_val)
+            temp_w = self.system_settings_widgets.get("ai_settings.temperature")
+            if isinstance(temp_w, QDoubleSpinBox):
+                temp_w.setValue(float(ai_cfg.get("temperature", 0.3)))
+            timeout_w = self.system_settings_widgets.get("ai_settings.timeout_seconds")
+            if isinstance(timeout_w, QLineEdit):
+                timeout_w.setText(str(ai_cfg.get("timeout_seconds", 60)))
+            features = ai_cfg.get("features", {})
+            if isinstance(features, dict):
+                for feat_key in ("findings_narration", "compensating_controls", "anomaly_detection"):
+                    cb = self.system_settings_widgets.get(f"ai_settings.features.{feat_key}")
+                    if isinstance(cb, QCheckBox):
+                        cb.setChecked(bool(features.get(feat_key, True)))
+
     def _collect_system_settings_from_form(self) -> dict[str, Any]:
         def _lines_from_editor(editor: object) -> list[str]:
             if not isinstance(editor, QPlainTextEdit):
@@ -2537,6 +2821,9 @@ class ValidationDesktopApp(QMainWindow):
                         checked.append(ctrl_id)
                 ipe_mapping[slot_key] = checked
             settings["slot_ipe_control_mapping"] = ipe_mapping
+
+        # Collect AI settings
+        settings["ai_settings"] = self._collect_ai_settings_from_widgets()
 
         return settings
 
@@ -3752,6 +4039,46 @@ class ValidationDesktopApp(QMainWindow):
         usr02_rows: list[dict[str, Any]],
         combined_rows: list[dict[str, Any]],
     ) -> list[dict[str, str]]:
+        settings = self._current_system_settings()
+        ai_cfg = settings.get("ai_settings", {}) if isinstance(settings, dict) else {}
+        ai_enabled = bool(ai_cfg.get("enabled", False))
+        features = ai_cfg.get("features", {}) if isinstance(ai_cfg, dict) else {}
+
+        # --- Anomaly detection callback ---
+        get_anomaly_data: Any = None
+        if ai_enabled and bool(features.get("anomaly_detection", True)):
+            try:
+                from src.services.user_anomaly_detector import (
+                    UserAnomalyDetector,
+                    anomaly_score,
+                    anomaly_codes,
+                )
+                detector = UserAnomalyDetector(settings)
+                cohort = detector.build_cohort_stats(usr02_rows)
+
+                def _anomaly_cb(row: dict[str, Any]) -> tuple[str, str]:
+                    findings = detector.score_user(row, cohort)
+                    return str(anomaly_score(findings)), anomaly_codes(findings)
+
+                get_anomaly_data = _anomaly_cb
+            except Exception:
+                get_anomaly_data = None
+
+        # --- AI narration callback ---
+        get_ai_narration: Any = None
+        if ai_enabled and bool(features.get("findings_narration", True)):
+            try:
+                from src.services.findings_narrator import narrate_user_finding
+                _client = OllamaClient(ai_cfg)
+                _work_env = self._current_work_environment_label()
+
+                def _narration_cb(row: dict[str, Any], raw_findings: str) -> str:
+                    return narrate_user_finding(row, raw_findings, _client, _work_env)
+
+                get_ai_narration = _narration_cb
+            except Exception:
+                get_ai_narration = None
+
         return build_user_preview_rows(
             usr02_rows,
             combined_rows,
@@ -3762,6 +4089,8 @@ class ValidationDesktopApp(QMainWindow):
             self._get_reviewer_values,
             self._build_user_findings_description,
             self.DEFAULT_REVIEW_STATUS,
+            get_anomaly_data=get_anomaly_data,
+            get_ai_narration=get_ai_narration,
         )
 
     def _apply_column_filters_to_rows(self, rows: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -8241,6 +8570,68 @@ class ValidationDesktopApp(QMainWindow):
         details_box.setPlainText(self._build_audit_detail_dialog_text(row_index))
         layout.addWidget(details_box)
 
+        # Compensating controls button — only shown when AI is enabled
+        settings = self._current_system_settings()
+        ai_cfg = settings.get("ai_settings", {}) if isinstance(settings, dict) else {}
+        ai_enabled = bool(ai_cfg.get("enabled", False))
+        features = ai_cfg.get("features", {}) if isinstance(ai_cfg, dict) else {}
+        compensating_enabled = ai_enabled and bool(features.get("compensating_controls", True))
+
+        if compensating_enabled:
+            comp_btn_row = QWidget()
+            comp_btn_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            comp_btn_layout = QHBoxLayout(comp_btn_row)
+            comp_btn_layout.setContentsMargins(0, 0, 0, 0)
+            comp_btn = QPushButton(self.format_ui_rtl_text("המלצות בקרות מפצות (AI)"))
+            comp_btn.setMaximumWidth(240)
+            comp_result_label = QLabel("")
+            comp_result_label.setWordWrap(True)
+            comp_result_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+
+            def _on_compensating_controls() -> None:
+                comp_btn.setEnabled(False)
+                comp_btn.setText(self.format_ui_rtl_text("מחשב המלצות..."))
+                try:
+                    from src.services.compensating_advisor import CompensatingAdvisor
+                    # Extract fields from dialog text
+                    _item_risk = self.audit_detail_table.item(row_index, 4)
+                    _item_desc = self.audit_detail_table.item(row_index, 5)
+                    _item_actual = self.audit_detail_table.item(row_index, 7)
+                    _item_expected = self.audit_detail_table.item(row_index, 8)
+                    _selected = self.audit_summary_table.selectedItems()
+                    _ctrl_item = self.audit_summary_table.item(_selected[0].row(), 0) if _selected else None
+                    control_id = str(_ctrl_item.data(Qt.ItemDataRole.UserRole) or (_ctrl_item.text() if _ctrl_item else "")) if _ctrl_item else ""
+                    control_desc = _item_desc.text() if _item_desc else ""
+                    risk_level = _item_risk.text().strip().lower() if _item_risk else "high"
+                    risk_map = {"גבוה": "high", "בינוני": "medium", "נמוך": "low", "high": "high", "medium": "medium", "low": "low"}
+                    risk_level = risk_map.get(risk_level, "high")
+
+                    client = OllamaClient(ai_cfg)
+                    advisor = CompensatingAdvisor(client, work_environment=self._current_work_environment_label())
+                    recs = advisor.recommend(control_id, control_desc, risk_level=risk_level)
+
+                    if recs:
+                        lines = ["המלצות בקרות מפצות:", ""]
+                        for rec in recs:
+                            lines.append(f"#{rec.get('rank','')}. {rec.get('title','')}")
+                            lines.append(f"   נימוק: {rec.get('rationale','')}")
+                            lines.append(f"   עדות: {rec.get('evidence_needed','')}")
+                            lines.append("")
+                        comp_result_label.setText(self.format_rtl_text("\n".join(lines)))
+                    else:
+                        comp_result_label.setText(self.format_rtl_text("לא נמצאו המלצות רלוונטיות לבקרה זו."))
+                except Exception as exc:
+                    comp_result_label.setText(self.format_rtl_text(f"שגיאה בקבלת המלצות: {exc}"))
+                finally:
+                    comp_btn.setEnabled(True)
+                    comp_btn.setText(self.format_ui_rtl_text("המלצות בקרות מפצות (AI)"))
+
+            comp_btn.clicked.connect(_on_compensating_controls)
+            comp_btn_layout.addStretch(1)
+            comp_btn_layout.addWidget(comp_btn)
+            layout.addWidget(comp_btn_row)
+            layout.addWidget(comp_result_label)
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         buttons.accepted.connect(dialog.accept)
         layout.addWidget(buttons)
@@ -8704,6 +9095,176 @@ class ValidationDesktopApp(QMainWindow):
             self,
             "הייבוא הושלם",
             f"יובאו בהצלחה {imported_count} שורות מקובץ הסקירה.{notes_warn}{missing_warn}",
+        )
+
+    # ------------------------------------------------------------------
+    # Batch AI narration for user findings (Phase 1 batch flow)
+    # ------------------------------------------------------------------
+    def generate_ai_narration_for_all_findings(self) -> None:
+        """Run AI narration on every user with findings, using a background QThread.
+
+        Pre-checks: AI must be enabled in system settings, the findings_narration feature
+        must be on, and Ollama must be reachable.  Results are cached so the next
+        ``refresh_user_preview()`` picks them up automatically into the
+        ``FINDINGS_DESCRIPTION_AI`` column.
+        """
+        if self.batch_narration_thread is not None:
+            QMessageBox.information(self, "פעולה כבר רצה", "כבר רץ תהליך הפקת נרטיב ברקע. נא להמתין לסיומו.")
+            return
+
+        settings = self._current_system_settings()
+        ai_cfg = settings.get("ai_settings", {}) if isinstance(settings, dict) else {}
+        if not bool(ai_cfg.get("enabled", False)):
+            QMessageBox.warning(
+                self,
+                "AI לא מופעל",
+                "כדי להפיק נרטיב ממצאים יש להפעיל את ה-AI בהגדרות המערכת (טאב הגדרות → הגדרות AI).",
+            )
+            return
+        features = ai_cfg.get("features", {}) if isinstance(ai_cfg, dict) else {}
+        if not bool(features.get("findings_narration", True)):
+            QMessageBox.warning(
+                self,
+                "תכונת AI כבויה",
+                "תכונת 'נרטיב ממצאים AI' אינה מסומנת בהגדרות. נא להפעילה ולנסות שוב.",
+            )
+            return
+
+        try:
+            client_check = OllamaClient(ai_cfg)
+            if not client_check.is_available():
+                QMessageBox.warning(
+                    self,
+                    "Ollama אינו זמין",
+                    f"לא ניתן להתחבר לשרת Ollama בכתובת {ai_cfg.get('ollama_host', '')}\n"
+                    "ודא ש-Ollama פועל מקומית ושהמודל המוגדר מותקן.",
+                )
+                return
+        except Exception as error:
+            QMessageBox.warning(self, "שגיאת חיבור", f"בדיקת זמינות Ollama נכשלה:\n{error}")
+            return
+
+        # Build list of items {row, raw_findings} from preview data
+        try:
+            usr02_rows = self._load_preview_rows("USR02")
+            combined_rows = self._load_preview_rows("ADR6_USR21")
+        except Exception as error:
+            QMessageBox.warning(self, "אין נתונים", f"טעינת נתוני המשתמשים נכשלה:\n{error}")
+            return
+
+        if not usr02_rows:
+            QMessageBox.warning(self, "אין נתונים", "טרם נטענו משתמשים. נא לבחור ולעבד את קובץ USR02 בלשונית קליטת קבצים.")
+            return
+
+        # Index ADR6 rows by BNAME for quick merge
+        combined_by_bname: dict[str, dict[str, Any]] = {}
+        for entry in combined_rows:
+            key = str(entry.get("BNAME", "")).strip().upper()
+            if key:
+                combined_by_bname[key] = entry
+
+        extraction_date = self._get_slot_extraction_date("USR02")
+        items: list[dict[str, Any]] = []
+        for usr in usr02_rows:
+            merged = dict(usr)
+            bname_key = str(usr.get("BNAME", "")).strip().upper()
+            if bname_key and bname_key in combined_by_bname:
+                for k, v in combined_by_bname[bname_key].items():
+                    merged.setdefault(k, v)
+            raw_findings = self._build_user_findings_description(merged, extraction_date)
+            if raw_findings and raw_findings.strip():
+                items.append({"row": merged, "raw_findings": raw_findings})
+
+        if not items:
+            QMessageBox.information(self, "אין ממצאים", "לא נמצאו משתמשים עם ממצאים שדורשים נרטיב AI.")
+            return
+
+        total = len(items)
+        progress = QProgressDialog(
+            self.format_rtl_text(f"מפיק נרטיב AI לכל הממצאים... (0 / {total})"),
+            "ביטול",
+            0,
+            total,
+            self,
+        )
+        progress.setWindowTitle("הפקת נרטיב AI")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        self.batch_narration_progress_dialog = progress
+
+        self.batch_narration_thread = QThread(self)
+        self.batch_narration_worker = BatchNarrationWorker(
+            items=items,
+            ai_settings=dict(ai_cfg),
+            work_environment=self._current_work_environment_label(),
+        )
+        self.batch_narration_worker.moveToThread(self.batch_narration_thread)
+
+        self.batch_narration_thread.started.connect(self.batch_narration_worker.run)
+        self.batch_narration_worker.progress.connect(self._on_batch_narration_progress)
+        self.batch_narration_worker.finished.connect(self._on_batch_narration_finished)
+        self.batch_narration_worker.finished.connect(self.batch_narration_thread.quit)
+        self.batch_narration_worker.finished.connect(self.batch_narration_worker.deleteLater)
+        self.batch_narration_thread.finished.connect(self.batch_narration_thread.deleteLater)
+
+        progress.canceled.connect(self._on_batch_narration_cancel)
+
+        self.user_preview_ai_narrate_button.setEnabled(False)
+        self.batch_narration_thread.start()
+
+    @Slot(int, int, str)
+    def _on_batch_narration_progress(self, done: int, total: int, bname: str) -> None:
+        dialog = self.batch_narration_progress_dialog
+        if dialog is None:
+            return
+        try:
+            dialog.setValue(done)
+            label = f"מפיק נרטיב AI לכל הממצאים... ({done} / {total})"
+            if bname:
+                label += f"  -  {bname}"
+            dialog.setLabelText(self.format_rtl_text(label))
+        except Exception:
+            pass
+
+    @Slot()
+    def _on_batch_narration_cancel(self) -> None:
+        worker = self.batch_narration_worker
+        if worker is not None:
+            try:
+                worker.request_cancel()
+            except Exception:
+                pass
+
+    @Slot(int, int, int)
+    def _on_batch_narration_finished(self, processed: int, skipped: int, failed: int) -> None:
+        dialog = self.batch_narration_progress_dialog
+        if dialog is not None:
+            try:
+                dialog.close()
+            except Exception:
+                pass
+        self.batch_narration_progress_dialog = None
+        self.batch_narration_worker = None
+        self.batch_narration_thread = None
+        try:
+            self.user_preview_ai_narrate_button.setEnabled(True)
+        except Exception:
+            pass
+
+        # Refresh preview so cached narrations populate FINDINGS_DESCRIPTION_AI
+        try:
+            self.refresh_user_preview()
+        except Exception:
+            pass
+
+        QMessageBox.information(
+            self,
+            "הפקת נרטיב AI הסתיימה",
+            f"הופקו: {processed}\nדולגו: {skipped}\nנכשלו: {failed}\n\n"
+            "התוצאות נשמרות במטמון מקומי וניתן לראותן בעמודה 'תיאור ממצאים (AI)'.",
         )
 
     def _email_from_settings(self, settings_key: str) -> str:
