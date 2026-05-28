@@ -4603,7 +4603,9 @@ class ValidationDesktopApp(QMainWindow):
                     slot_rows.append(r)
                 else:
                     slot_rows.append(r)
-            self.slot_to_row_count[slot_key] = len(slot_rows)
+            self.slot_to_row_count[slot_key] = (
+                getattr(result, "total_rows_override", None) or len(slot_rows)
+            )
             expected_controls = get_profile_audit_controls(getattr(result, "detected_profile", slot_key))
             control_ids = sorted(set([iss.control_id for iss in audit_issues if iss.control_id] + expected_controls))
             for cid in control_ids:
@@ -5389,6 +5391,18 @@ class ValidationDesktopApp(QMainWindow):
                                 f"{row.get('finding_text', '-')}."
                             )
                             expected_value_text = "לא נמצאו משתמשים"
+                        # Extract unique auth objects from roles for working-paper "אובייקט הרשאה" column
+                        _auth_objects: set[str] = set()
+                        for _role in roles_list:
+                            if isinstance(_role, dict):
+                                for _obj_item in (_role.get("objects") or []):
+                                    if isinstance(_obj_item, (list, tuple)) and len(_obj_item) > 0:
+                                        _auth_objects.add(str(_obj_item[0]))
+                                    elif isinstance(_obj_item, dict):
+                                        _v = _obj_item.get("object") or _obj_item.get("OBJECT", "")
+                                        if _v:
+                                            _auth_objects.add(str(_v))
+                        _auth_object_value = ", ".join(sorted(_auth_objects)) if _auth_objects else "-"
                         detail_rows.append(
                             {
                                 "control_id": control_id,
@@ -5401,6 +5415,7 @@ class ValidationDesktopApp(QMainWindow):
                                 "check_type": control_meta.get("check_type", "סקירת הרשאות"),
                                 "actual_value": user_name,
                                 "expected_value": expected_value_text,
+                                "auth_object": _auth_object_value,
                                 "status": "עם ממצא",
                                 "full_description": full_desc_text,
                             }
@@ -8023,6 +8038,62 @@ class ValidationDesktopApp(QMainWindow):
         detail_rows = list(self.audit_details_by_control.get(control_id, []))
         raw_population_rows = list(self.control_to_slot_rows.get(control_id, []))
 
+        # For cross-join controls (AGR_1251 × AGR_USERS), the raw population is
+        # never stored in control_to_slot_rows. Build it on-demand from cached rows.
+        _AGR_CROSS_JOIN_CONTROLS = frozenset({
+            "MA1-1_AYALON_10", "MA1-1_AYALON_11", "MA1-1_AYALON_12",
+            "MA1-1_AYALON_16", "MA1-1_AYALON_43", "MA1-1_AYALON_45",
+            "MA1-1_AYALON_67", "MA5.1-13_AYALON_24", "MA7-17_AYALON_30",
+        })
+        raw_population_note: str | None = None
+        if not raw_population_rows and control_id in _AGR_CROSS_JOIN_CONTROLS:
+            # Build AGR_1251 lookup by role (O(m))
+            _agr1251_by_role: dict[str, list[dict[str, Any]]] = {}
+            for _r in self.agr_1251_cached_rows:
+                _k = str(_r.get("AGR_NAME") or "").strip().upper()
+                if _k:
+                    _agr1251_by_role.setdefault(_k, []).append(_r)
+
+            # Count cross-join total in O(n)
+            _cross_total = sum(
+                len(_agr1251_by_role.get(str(r.get("AGR_NAME") or "").strip().upper(), []))
+                for r in self.agr_users_cached_rows
+            )
+
+            if _cross_total > 100_000:
+                # Large population: show only findings, add note with total count
+                raw_population_rows = [
+                    r for r in detail_rows
+                    if str(r.get("status", "")).strip() == "עם ממצא"
+                ]
+                raw_population_note = (
+                    f"לא כל האוכלוסייה נשלפה מפאת היקף גדול של נתונים"
+                    f" (סה\u05f4כ אוכלוסייה: {_cross_total:,} רשומות)"
+                )
+            else:
+                # Small population: build full cross-join
+                raw_population_rows = []
+                for _u_row in self.agr_users_cached_rows:
+                    _agr_name = str(_u_row.get("AGR_NAME") or "").strip().upper()
+                    for _a_row in _agr1251_by_role.get(_agr_name, []):
+                        raw_population_rows.append({
+                            "MANDT":    _u_row.get("MANDT", "-"),
+                            "UNAME":    _u_row.get("UNAME", "-"),
+                            "AGR_NAME": _u_row.get("AGR_NAME", "-"),
+                            "OBJECT":   _a_row.get("OBJECT", "-"),
+                            "FIELD":    _a_row.get("FIELD", "-"),
+                            "LOW":      _a_row.get("LOW", "-"),
+                            "HIGH":     _a_row.get("HIGH", "-"),
+                        })
+
+        # For the user-review completion control, the raw population is the full review report
+        if not raw_population_rows and control_id == self.REVIEW_COMPLETION_CONTROL_ID:
+            _review_preview_rows, _, _ = self._get_user_review_completion_snapshot()
+            raw_population_rows = [
+                {field: row.get(field, "-") for field in self.EXPORT_REVIEW_FIELDS}
+                for row in _review_preview_rows
+            ]
+
         # Filter IPE entries by matching slot key, enriching each with extraction_date + population_count
         slot_key = self.control_to_slot_key.get(control_id, "")
         ipe_entries: list[dict[str, Any]] = []
@@ -8054,6 +8125,18 @@ class ValidationDesktopApp(QMainWindow):
                         if data_norm and (data_norm in screenshot_norm or screenshot_norm in data_norm):
                             matched_count = count
                             break
+                if matched_count is None:
+                    # Numeric-token fallback: match when both stems share the same
+                    # set of digit-sequences, e.g. screenshot "AGR_1251_100" →
+                    # {1251, 100} uniquely matches data file "UGR_1251_100".
+                    _screenshot_nums = frozenset(re.findall(r"\d+", screenshot_norm))
+                    if _screenshot_nums:
+                        _num_candidates = [
+                            cnt for dn, cnt in per_file_norm.items()
+                            if _screenshot_nums == frozenset(re.findall(r"\d+", dn))
+                        ]
+                        if len(_num_candidates) == 1:
+                            matched_count = _num_candidates[0]
             if matched_count is None:
                 matched_count = self.slot_to_row_count.get(source_slot, "-")
             enriched["population_count"] = matched_count
@@ -8103,6 +8186,7 @@ class ValidationDesktopApp(QMainWindow):
                 output_path=Path(chosen_path),
                 notes=notes,
                 critical_roles=self._get_critical_roles(),
+                raw_population_note=raw_population_note,
             )
         except Exception as exc:
             QMessageBox.critical(

@@ -75,6 +75,7 @@ def write_control_working_paper(
     output_path: Path,
     notes: list[str] | None = None,
     critical_roles: list[str] | None = None,
+    raw_population_note: str | None = None,
 ) -> Path:
     """Build the working-paper workbook and save to *output_path*.
 
@@ -114,7 +115,7 @@ def write_control_working_paper(
     _write_ipe_sheet(ipe_sheet, ipe_entries)
 
     detail_sheet = workbook.create_sheet("פירוט הבדיקה")
-    _write_detail_sheet(detail_sheet, detail_rows, raw_population_rows)
+    _write_detail_sheet(detail_sheet, detail_rows, raw_population_rows, raw_population_note=raw_population_note)
 
     workbook.save(output_path)
     return output_path
@@ -456,6 +457,8 @@ def _write_detail_sheet(
     sheet,
     detail_rows: list[dict[str, Any]],
     raw_population_rows: list[dict[str, Any]],
+    *,
+    raw_population_note: str | None = None,
 ) -> None:
     _set_rtl(sheet)
 
@@ -514,6 +517,15 @@ def _write_detail_sheet(
         finding_keys=finding_keys,
         key_columns=key_columns,
     )
+
+    if raw_population_note:
+        note_cell = sheet.cell(row=next_row, column=1, value=raw_population_note)
+        sheet.merge_cells(
+            start_row=next_row, start_column=1, end_row=next_row, end_column=6
+        )
+        note_cell.font = Font(italic=True, color="FFC00000", size=9)
+        note_cell.alignment = Alignment(horizontal="right", vertical="center")
+        next_row += 2
 
     _write_table_block(
         sheet,
