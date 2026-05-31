@@ -1114,7 +1114,7 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_detail_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         audit_detail_layout = QVBoxLayout(self.audit_detail_group)
         audit_detail_layout.setContentsMargins(8, 14, 8, 8)
-        self.audit_detail_table = QTableWidget(0, 11)
+        self.audit_detail_table = QTableWidget(0, 13)
         self.audit_detail_table.setItemDelegate(_RightAlignDelegate(self.audit_detail_table))
         self.audit_detail_table.setHorizontalHeaderLabels([
             self.format_rtl_text("קובץ מקור"),
@@ -1124,6 +1124,8 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("רמת סיכון"),
             self.format_rtl_text("תיאור"),
             self.format_rtl_text("סוג בדיקה"),
+            self.format_rtl_text("קליינט"),
+            self.format_rtl_text("משתמש"),
             self.format_rtl_text("ערך בפועל"),
             self.format_rtl_text("ערך מצופה"),
             self.format_rtl_text("סטטוס"),
@@ -5422,30 +5424,46 @@ class ValidationDesktopApp(QMainWindow):
 
         for issue in strong_issues:
             client_name = "-"
-            user_name = str(issue.actual_value or "").strip().upper()
-            profile_name = str(issue.expected_value or "").strip().upper()
+            user_name = ""
+            profile_names = {
+                profile.strip().upper()
+                for profile in str(issue.actual_value or "").split(",")
+                if profile.strip()
+            }
 
             if issue.row_number > 0 and issue.row_number <= len(rows):
                 row = rows[issue.row_number - 1]
                 row_client = self._resolve_row_value_by_priority(row, "MANDT")
                 if row_client is not None and str(row_client).strip():
                     client_name = str(row_client).strip()
-                if not user_name:
-                    row_user = self._resolve_row_value_by_priority(row, "BNAME")
-                    if row_user is not None:
-                        user_name = str(row_user).strip().upper()
-                if not profile_name:
+                row_user = self._resolve_row_value_by_priority(row, "BNAME")
+                if row_user is not None:
+                    user_name = str(row_user).strip().upper()
+                if not profile_names:
                     row_profile = self._resolve_row_value_by_priority(row, "PROFILE")
                     if row_profile is not None:
-                        profile_name = str(row_profile).strip().upper()
+                        profile_names.add(str(row_profile).strip().upper())
+                    row_profiles = self._resolve_row_value_by_priority(row, "PROFS")
+                    if row_profiles is not None:
+                        profile_names.update(
+                            profile.strip().upper()
+                            for profile in str(row_profiles).split()
+                            if profile.strip()
+                        )
+                    row_profiles_modbe = self._resolve_row_value_by_priority(row, "MODBE")
+                    if row_profiles_modbe is not None:
+                        profile_names.update(
+                            profile.strip().upper()
+                            for profile in str(row_profiles_modbe).split()
+                            if profile.strip()
+                        )
 
             if not user_name:
                 continue
 
             client_users = slot_users_by_client.setdefault(client_name, {})
             client_users.setdefault(user_name, set())
-            if profile_name:
-                client_users[user_name].add(profile_name)
+            client_users[user_name].update(profile_names)
 
         # Store this source-profile's slice (replaces only data from THIS profile,
         # preserving the OTHER profile's findings - fixes the bug where loading USH04
@@ -5679,7 +5697,8 @@ class ValidationDesktopApp(QMainWindow):
                                 f"משתמש: {user_name}\n\n"
                                 f"פרופילים חזקים:\n{profiles_block}"
                             )
-                            expected_value_text = ", ".join(profiles_list)
+                            actual_value_text = ", ".join(profiles_list)
+                            expected_value_text = ""
                         elif roles_list:
                             role_lines: list[str] = []
                             role_names: list[str] = []
@@ -5713,13 +5732,15 @@ class ValidationDesktopApp(QMainWindow):
                                 f"משתמש: {user_name}\n\n"
                                 f"רולים ואובייקטי הרשאה:\n{roles_block}"
                             )
-                            expected_value_text = ", ".join(role_names) if role_names else "-"
+                            actual_value_text = ", ".join(role_names) if role_names else "-"
+                            expected_value_text = ""
                         else:
                             full_desc_text = (
                                 f"משתמש: {user_name}. קליינט: {client_name}. "
                                 f"{row.get('finding_text', '-')}."
                             )
-                            expected_value_text = "לא נמצאו משתמשים"
+                            actual_value_text = str(row.get("finding_text", "-") or "-")
+                            expected_value_text = ""
                         # Extract unique auth objects from roles for working-paper "אובייקט הרשאה" column
                         _auth_objects: set[str] = set()
                         for _role in roles_list:
@@ -5742,7 +5763,9 @@ class ValidationDesktopApp(QMainWindow):
                                 "risk_level": row.get("risk_level", control_meta.get("risk_level", "-")),
                                 "description": control_meta.get("description", "-"),
                                 "check_type": control_meta.get("check_type", "סקירת הרשאות"),
-                                "actual_value": user_name,
+                                "client": client_name,
+                                "user_name": user_name,
+                                "actual_value": actual_value_text,
                                 "expected_value": expected_value_text,
                                 "auth_object": _auth_object_value,
                                 "status": "עם ממצא",
@@ -5761,6 +5784,8 @@ class ValidationDesktopApp(QMainWindow):
                             "risk_level": control_meta.get("risk_level", "-"),
                             "description": control_meta.get("description", "-"),
                             "check_type": control_meta.get("check_type", "סקירת הרשאות"),
+                            "client": "-",
+                            "user_name": "-",
                             "actual_value": "-",
                             "expected_value": "לא נמצאו משתמשים",
                             "status": "תקין",
@@ -8543,6 +8568,8 @@ class ValidationDesktopApp(QMainWindow):
             "רמת סיכון",
             "תיאור",
             "סוג בדיקה",
+            "קליינט",
+            "משתמש",
             "ערך בפועל",
             "ערך מצופה",
             "סטטוס",

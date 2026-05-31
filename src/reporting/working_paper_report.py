@@ -3,13 +3,14 @@
 Each working paper Excel file contains 3 sheets:
 1. {control_id} (sanitized) - general details (key-value layout)
 2. IPE - metadata table + embedded screenshot images
-3. פירוט הבדיקה - raw population + filtered (relevant) population with finding highlights
+3. אוכלוסיה נבחנת - raw population with finding highlights
+4. ריכוז ממצאים - filtered (relevant) population
 """
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
@@ -106,6 +107,8 @@ def write_control_working_paper(
         overview_sheet,
         control_id=control_id,
         summary_record=summary_record,
+        detail_rows=detail_rows,
+        raw_population_rows=raw_population_rows,
         work_environment_label=work_environment_label,
         notes=notes,
         critical_roles=critical_roles,
@@ -114,8 +117,16 @@ def write_control_working_paper(
     ipe_sheet = workbook.create_sheet("IPE")
     _write_ipe_sheet(ipe_sheet, ipe_entries)
 
-    detail_sheet = workbook.create_sheet("פירוט הבדיקה")
-    _write_detail_sheet(detail_sheet, detail_rows, raw_population_rows, raw_population_note=raw_population_note)
+    examined_population_sheet = workbook.create_sheet("אוכלוסיה נבחנת")
+    _write_examined_population_sheet(
+        examined_population_sheet,
+        detail_rows,
+        raw_population_rows,
+        raw_population_note=raw_population_note,
+    )
+
+    findings_sheet = workbook.create_sheet("ריכוז ממצאים")
+    _write_findings_sheet(findings_sheet, detail_rows)
 
     workbook.save(output_path)
     return output_path
@@ -130,6 +141,8 @@ def _write_overview_sheet(
     *,
     control_id: str,
     summary_record: dict[str, Any],
+    detail_rows: list[dict[str, Any]],
+    raw_population_rows: list[dict[str, Any]],
     work_environment_label: str,
     notes: list[str] | None = None,
     critical_roles: list[str] | None = None,
@@ -155,14 +168,32 @@ def _write_overview_sheet(
         or "-"
     )
 
-    total = int(summary_record.get("total_records", 0) or 0)
-    findings = int(summary_record.get("finding_records", 0) or 0)
-    pct = (findings / total * 100.0) if total > 0 else 0.0
-    summary_text = (
-        f"נמצאו {findings} ממצאים מתוך {total} רשומות שנבדקו ({pct:.1f}%)."
-        if total > 0
-        else "לא בוצעה בדיקה / אין רשומות."
+    examined_user_pairs = _distinct_user_pairs(
+        raw_population_rows,
+        client_columns=("MANDT", "CLIENT"),
+        user_columns=("BNAME", "UNAME", "USER", "USER_NAME"),
     )
+    finding_user_pairs = _distinct_user_pairs(
+        detail_rows,
+        client_columns=("client", "MANDT", "CLIENT"),
+        user_columns=("user_name", "BNAME", "UNAME", "USER"),
+        finding_only=True,
+    )
+
+    if examined_user_pairs:
+        total = len(examined_user_pairs)
+        findings = len(finding_user_pairs)
+        pct = (findings / total * 100.0) if total > 0 else 0.0
+        summary_text = f"נמצאו {findings} מתוך {total} מקרים שנבדקו ({pct:.1f}%)."
+    else:
+        total = int(summary_record.get("total_records", 0) or 0)
+        findings = int(summary_record.get("finding_records", 0) or 0)
+        pct = (findings / total * 100.0) if total > 0 else 0.0
+        summary_text = (
+            f"נמצאו {findings} ממצאים מתוך {total} רשומות שנבדקו ({pct:.1f}%)."
+            if total > 0
+            else "לא בוצעה בדיקה / אין רשומות."
+        )
 
     extraction_date = str(summary_record.get("extraction_date", "-") or "-")
 
@@ -338,6 +369,7 @@ def _write_table_block(
     key_columns: list[str] | None,
     use_status_column: bool = False,
     drop_columns: set[str] | None = None,
+    row_status_matcher: Callable[[dict[str, Any]], bool] | None = None,
 ) -> int:
     """Write a titled table to *sheet* starting at *start_row*. Returns next free row."""
     section_cell = sheet.cell(row=start_row, column=1, value=title)
@@ -374,6 +406,8 @@ def _write_table_block(
     for row_offset, row in enumerate(rows, start=header_row + 1):
         if use_status_column:
             is_finding = str(row.get("status", "")).strip() == "עם ממצא"
+        elif row_status_matcher is not None:
+            is_finding = row_status_matcher(row)
         else:
             is_finding = _row_is_finding(row, finding_keys, key_columns)
         row_fill = _FINDING_FILL if is_finding else None
@@ -425,12 +459,94 @@ def _build_finding_keys(
     for row in detail_rows:
         if str(row.get("status", "")).strip() != "עם ממצא":
             continue
-        # detail rows have flat schema, not source columns - so look for actual_value matches
-        # Convention: actual_value carries the identifier (param name / BNAME)
+        # Generic fallback for controls whose detail rows still carry the source
+        # row identifier in actual_value (for example parameter name / BNAME).
         actual = str(row.get("actual_value", "") or "").strip().upper()
         if actual:
             keys.add((actual,) * len(key_columns) if len(key_columns) > 1 else (actual,))
     return keys
+
+
+def _split_profile_values(value: object) -> set[str]:
+    return {
+        part.strip().upper()
+        for part in re.split(r"[,\s]+", str(value or ""))
+        if part.strip()
+    }
+
+
+def _row_value(row: dict[str, Any], *column_names: str) -> str:
+    lookup = {str(key).upper(): value for key, value in row.items()}
+    for column_name in column_names:
+        value = lookup.get(column_name.upper())
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _is_valid_identifier(value: str) -> bool:
+    normalized = str(value or "").strip()
+    return bool(normalized and normalized.lower() not in {"-", "nan", "none"})
+
+
+def _distinct_user_pairs(
+    rows: Iterable[dict[str, Any]],
+    *,
+    client_columns: tuple[str, ...],
+    user_columns: tuple[str, ...],
+    finding_only: bool = False,
+) -> set[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    for row in rows:
+        if finding_only and str(row.get("status", "") or "").strip() != "עם ממצא":
+            continue
+        client = _row_value(row, *client_columns)
+        user_name = _row_value(row, *user_columns)
+        if not (_is_valid_identifier(client) and _is_valid_identifier(user_name)):
+            continue
+        pairs.add((client.strip().upper(), user_name.strip().upper()))
+    return pairs
+
+
+def _build_strong_profile_finding_lookup(
+    detail_rows: list[dict[str, Any]],
+) -> dict[tuple[str, str], set[str]]:
+    lookup: dict[tuple[str, str], set[str]] = {}
+    for row in detail_rows:
+        if str(row.get("status", "")).strip() != "עם ממצא":
+            continue
+        control_id = str(row.get("control_id", "") or "").strip()
+        if control_id and control_id != "MA3-3_AYALON_14":
+            continue
+        client = str(row.get("client", "") or "").strip().upper()
+        user_name = str(row.get("user_name", "") or "").strip().upper()
+        profiles = _split_profile_values(row.get("actual_value", ""))
+        if client and user_name and profiles:
+            lookup.setdefault((client, user_name), set()).update(profiles)
+    return lookup
+
+
+def _row_matches_strong_profile_finding(
+    row: dict[str, Any],
+    row_profile: str,
+    finding_lookup: dict[tuple[str, str], set[str]],
+) -> bool:
+    if row_profile not in {"UST04", "USH04"}:
+        return False
+    client = _row_value(row, "MANDT", "CLIENT").upper()
+    user_name = _row_value(row, "BNAME", "UNAME", "USER").upper()
+    if not client or not user_name:
+        return False
+    finding_profiles = finding_lookup.get((client, user_name), set())
+    if not finding_profiles:
+        return False
+    if row_profile == "UST04":
+        row_profiles = {_row_value(row, "PROFILE").upper()}
+    else:
+        row_profiles = _split_profile_values(_row_value(row, "PROFS"))
+        row_profiles.update(_split_profile_values(_row_value(row, "MODBE")))
+    row_profiles.discard("")
+    return bool(row_profiles & finding_profiles)
 
 
 def _detect_key_columns(profile: str, available_columns: list[str]) -> list[str]:
@@ -453,7 +569,7 @@ def _detect_key_columns(profile: str, available_columns: list[str]) -> list[str]
     return []
 
 
-def _write_detail_sheet(
+def _write_examined_population_sheet(
     sheet,
     detail_rows: list[dict[str, Any]],
     raw_population_rows: list[dict[str, Any]],
@@ -477,6 +593,7 @@ def _write_detail_sheet(
     raw_columns = _ordered_keys(raw_population_rows) if raw_population_rows else []
     key_columns = _detect_key_columns(profile, raw_columns)
     finding_keys = _build_finding_keys(detail_rows, key_columns)
+    strong_profile_lookup = _build_strong_profile_finding_lookup(detail_rows)
 
     def _row_profile(row: dict[str, Any]) -> str:
         p = str(row.get("__profile", "") or "").upper()
@@ -488,6 +605,12 @@ def _write_detail_sheet(
                 return key
         return profile  # last-resort fallback
 
+    def _raw_status_matcher(row: dict[str, Any]) -> bool:
+        row_profile = _row_profile(row)
+        if strong_profile_lookup and row_profile in {"UST04", "USH04"}:
+            return _row_matches_strong_profile_finding(row, row_profile, strong_profile_lookup)
+        return _row_is_finding(row, finding_keys, key_columns)
+
     # Enrich raw rows with per-row source-table name so mixed populations
     # (e.g. UST04 + USH04 merged into one control) display correctly.
     if raw_population_rows:
@@ -498,17 +621,6 @@ def _write_detail_sheet(
     else:
         raw_for_table = raw_population_rows
 
-    # Enrich detail rows with the authorization-object that triggered the
-    # finding (if available) so the lower table explains *why* each user is
-    # flagged. We also drop the verbose "description" column from this lower
-    # table per spec.
-    enriched_detail: list[dict[str, Any]] = []
-    for row in detail_rows:
-        copy = dict(row)
-        copy["אובייקט הרשאה"] = row.get("auth_object", "-") or "-"
-        copy.pop("auth_object", None)
-        enriched_detail.append(copy)
-
     next_row = _write_table_block(
         sheet,
         start_row=1,
@@ -516,6 +628,7 @@ def _write_detail_sheet(
         rows=raw_for_table,
         finding_keys=finding_keys,
         key_columns=key_columns,
+        row_status_matcher=_raw_status_matcher,
     )
 
     if raw_population_note:
@@ -527,9 +640,26 @@ def _write_detail_sheet(
         note_cell.alignment = Alignment(horizontal="right", vertical="center")
         next_row += 2
 
+
+def _write_findings_sheet(
+    sheet,
+    detail_rows: list[dict[str, Any]],
+) -> None:
+    _set_rtl(sheet)
+
+    # Enrich detail rows with the authorization-object that triggered the
+    # finding (if available) so the table explains *why* each user is flagged.
+    # We also drop the verbose "description" column from this table per spec.
+    enriched_detail: list[dict[str, Any]] = []
+    for row in detail_rows:
+        copy = dict(row)
+        copy["אובייקט הרשאה"] = row.get("auth_object", "-") or "-"
+        copy.pop("auth_object", None)
+        enriched_detail.append(copy)
+
     _write_table_block(
         sheet,
-        start_row=next_row,
+        start_row=1,
         title="אוכלוסייה רלוונטית / רשומות לפי כללי הבקרה",
         rows=enriched_detail,
         finding_keys=None,

@@ -857,20 +857,21 @@ def build_strong_profile_issues(
                 continue
             profiles_to_check = [profile_name]
         else:  # USH04
-            profs_raw = normalized_row.get("PROFS", "")
-            if not profs_raw:
-                # also check alias
-                for candidate in get_column_aliases("PROFS"):
-                    if candidate in normalized_row:
-                        profs_raw = normalized_row.get(candidate, "")
-                        break
-            if not profs_raw:
+            profiles_to_check = []
+            for column_name in ("PROFS", "MODBE"):
+                raw_value = normalized_row.get(column_name, "")
+                if not raw_value:
+                    for candidate in get_column_aliases(column_name):
+                        if candidate in normalized_row:
+                            raw_value = normalized_row.get(candidate, "")
+                            break
+                profiles_to_check.extend(
+                    p.strip().upper()
+                    for p in str(raw_value or "").split()
+                    if p.strip()
+                )
+            if not profiles_to_check:
                 continue
-            profiles_to_check = [
-                p.strip().upper()
-                for p in str(profs_raw).split()
-                if p.strip()
-            ]
 
         matched_strong = [p for p in profiles_to_check if p in strong_profiles]
         if not matched_strong:
@@ -892,7 +893,7 @@ def build_strong_profile_issues(
             if profile_name not in entry["profiles"]:
                 entry["profiles"].append(profile_name)
 
-    col_name = "PROFILE" if profile == "UST04" else "PROFS"
+    col_name = "PROFILE" if profile == "UST04" else "PROFS/MODBE"
     for key in order:
         entry = grouped[key]
         profile_list = entry["profiles"]
@@ -917,8 +918,8 @@ def build_strong_profile_issues(
                 risk_level=control_meta.get("risk_level", ""),
                 check_type=control_meta.get("check_type", ""),
                 description=control_meta.get("description", ""),
-                actual_value=entry["user_name"],
-                expected_value=", ".join(profile_list),
+                actual_value=", ".join(profile_list),
+                expected_value="",
                 status="עם ממצא",
                 full_description=full_description,
             )

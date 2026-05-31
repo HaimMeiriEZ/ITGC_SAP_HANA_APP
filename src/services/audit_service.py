@@ -228,6 +228,8 @@ def build_audit_detail_values(detail: dict[str, Any]) -> list[str]:
         str(detail.get("risk_level", "-")),
         str(detail.get("description", "-")),
         str(detail.get("check_type", "-")),
+        str(detail.get("client", "-")),
+        str(detail.get("user_name", "-")),
         str(detail.get("actual_value", "-")),
         str(detail.get("expected_value", "-")),
         str(detail.get("status", "-")),

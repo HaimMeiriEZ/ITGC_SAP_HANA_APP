@@ -10,8 +10,10 @@ from PySide6.QtWidgets import QApplication, QDialog, QHeaderView, QPlainTextEdit
 
 from src.models.validation_result import ValidationIssue, ValidationResult
 from src.pipeline import process_file
+from src.reporting.working_paper_report import write_control_working_paper
 from src.ui.desktop_app import ValidationDesktopApp, get_qt_app
 from src.validators.engine import ValidationEngine
+from src.validators.spec_rules import build_strong_profile_issues
 
 
 class TestSmoke(unittest.TestCase):
@@ -51,6 +53,444 @@ class TestSmoke(unittest.TestCase):
 
         self.assertFalse(result.summary.is_valid)
         self.assertEqual(result.issues[0].column_name, "email")
+
+    def test_strong_profile_finding_reports_profile_as_actual_and_blank_expected(self) -> None:
+        issues = build_strong_profile_issues(
+            "UST04",
+            [
+                {
+                    "MANDT": "100",
+                    "BNAME": "AROMI",
+                    "PROFILE": "SAP_ALL",
+                    "__source_file": "UST04.txt",
+                },
+                {
+                    "MANDT": "100",
+                    "BNAME": "AROMI",
+                    "PROFILE": "S_A.SYSTEM",
+                    "__source_file": "UST04.txt",
+                },
+            ],
+        )
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].actual_value, "SAP_ALL, S_A.SYSTEM")
+        self.assertEqual(issues[0].expected_value, "")
+        self.assertIn("משתמש: AROMI", issues[0].full_description)
+
+    def test_ush04_modbe_strong_profile_is_reported_as_finding(self) -> None:
+        issues = build_strong_profile_issues(
+            "USH04",
+            [
+                {
+                    "MANDT": "100",
+                    "BNAME": "AROMI",
+                    "PROFS": "SECURITY_ADM",
+                    "MODBE": "SAP_ALL",
+                    "__source_file": "USH04.txt",
+                },
+                {
+                    "MANDT": "100",
+                    "BNAME": "NORMAL_USER",
+                    "PROFS": "Z_READ_ONLY",
+                    "MODBE": "BASISADMIN",
+                    "__source_file": "USH04.txt",
+                },
+            ],
+        )
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].column_name, "PROFS/MODBE")
+        self.assertEqual(issues[0].actual_value, "SAP_ALL")
+        self.assertEqual(issues[0].expected_value, "")
+        self.assertIn("משתמש: AROMI", issues[0].full_description)
+
+    def test_permission_detail_reports_role_as_actual_and_blank_expected(self) -> None:
+        qt_app = get_qt_app()
+        self.assertIsInstance(qt_app, QApplication)
+
+        window = ValidationDesktopApp()
+        try:
+            record_key = "MA1-1_AYALON_10|100"
+            window.user_mgmt_summary_records = {
+                record_key: {
+                    "record_key": record_key,
+                    "control_id": "MA1-1_AYALON_10",
+                    "client": "100",
+                    "users_count": 1,
+                    "status": "עם ממצא",
+                    "risk_level": "גבוה",
+                    "finding_text": "נמצאו משתמשים עם הרשאות ניהול משתמשים",
+                }
+            }
+            window.user_mgmt_users_by_control = {
+                record_key: [
+                    {
+                        "client": "100",
+                        "user_name": "AROMI",
+                        "roles": [
+                            {
+                                "agr_name": "Z_SU01_ADMIN",
+                                "objects": [("S_TCODE", "TCD", "SU01")],
+                            }
+                        ],
+                    }
+                ]
+            }
+
+            window._sync_permissions_findings_into_analysis_summary()
+
+            detail = window.audit_details_by_control["MA1-1_AYALON_10"][0]
+            self.assertEqual(detail["client"], "100")
+            self.assertEqual(detail["user_name"], "AROMI")
+            self.assertEqual(detail["actual_value"], "Z_SU01_ADMIN")
+            self.assertEqual(detail["expected_value"], "")
+            self.assertIn("משתמש: AROMI", detail["full_description"])
+        finally:
+            window.close()
+
+    def test_strong_profile_review_table_keeps_users_separate_from_profiles(self) -> None:
+        qt_app = get_qt_app()
+        self.assertIsInstance(qt_app, QApplication)
+
+        rows = [
+            {
+                "MANDT": "400",
+                "BNAME": "AROMI",
+                "PROFILE": "SAP_ALL",
+                "__source_file": "UST04.txt",
+            },
+            {
+                "MANDT": "400",
+                "BNAME": "AROMI",
+                "PROFILE": "S_A.SYSTEM",
+                "__source_file": "UST04.txt",
+            },
+        ]
+        issues = build_strong_profile_issues("UST04", rows)
+        result = ValidationResult(rows=rows, issues=issues, detected_profile="UST04")
+
+        window = ValidationDesktopApp()
+        try:
+            window._upsert_permissions_control_data("UST04", result, issues, "")
+            record_key = "MA3-3_AYALON_14|400"
+            user_rows = window.permissions_users_by_control[record_key]
+
+            self.assertEqual(len(user_rows), 1)
+            self.assertEqual(user_rows[0]["client"], "400")
+            self.assertEqual(user_rows[0]["user_name"], "AROMI")
+            self.assertEqual(user_rows[0]["profiles"], ["SAP_ALL", "S_A.SYSTEM"])
+
+            window._sync_permissions_findings_into_analysis_summary()
+            detail = window.audit_details_by_control["MA3-3_AYALON_14"][0]
+            self.assertEqual(detail["client"], "400")
+            self.assertEqual(detail["user_name"], "AROMI")
+            self.assertEqual(detail["actual_value"], "SAP_ALL, S_A.SYSTEM")
+            self.assertEqual(detail["expected_value"], "")
+        finally:
+            window.close()
+
+    def test_working_paper_marks_strong_profile_raw_rows_as_findings(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "MA3-3_AYALON_14_working_paper.xlsx"
+            raw_rows = [
+                {
+                    "MANDT": "100",
+                    "BNAME": "AROMI",
+                    "PROFILE": "SAP_ALL",
+                    "__profile": "UST04",
+                    "__source_file": "UST04.txt",
+                },
+                {
+                    "MANDT": "100",
+                    "BNAME": "AROMI",
+                    "PROFILE": "S_A.SYSTEM",
+                    "__profile": "UST04",
+                    "__source_file": "UST04.txt",
+                },
+                {
+                    "MANDT": "100",
+                    "BNAME": "AVINOS",
+                    "PROFILE": "SAP_NEW",
+                    "__profile": "UST04",
+                    "__source_file": "UST04.txt",
+                },
+            ]
+            detail_rows = [
+                {
+                    "control_id": "MA3-3_AYALON_14",
+                    "source_file": "UST04",
+                    "extraction_date": "2026-05-31",
+                    "work_environment": "FPP - PROD - סביבת ייצור",
+                    "category": "MA - ניהול גישה",
+                    "risk_level": "גבוה",
+                    "description": "פרופילים חזקים",
+                    "check_type": "פרופילים חזקים",
+                    "client": "100",
+                    "user_name": "AROMI",
+                    "actual_value": "SAP_ALL, S_A.SYSTEM",
+                    "expected_value": "",
+                    "status": "עם ממצא",
+                    "full_description": "משתמש: AROMI",
+                }
+            ]
+
+            write_control_working_paper(
+                control_id="MA3-3_AYALON_14",
+                summary_record={
+                    "control_id": "MA3-3_AYALON_14",
+                    "source_file": "UST04",
+                    "extraction_date": "2026-05-31",
+                    "total_records": 3,
+                    "finding_records": 1,
+                    "description": "פרופילים חזקים",
+                },
+                detail_rows=detail_rows,
+                raw_population_rows=raw_rows,
+                ipe_entries=[],
+                work_environment_label="FPP - PROD - סביבת ייצור",
+                output_path=output_path,
+            )
+
+            workbook = load_workbook(output_path)
+            self.assertIn("אוכלוסיה נבחנת", workbook.sheetnames)
+            self.assertIn("ריכוז ממצאים", workbook.sheetnames)
+            self.assertNotIn("פירוט הבדיקה", workbook.sheetnames)
+
+            sheet = workbook["אוכלוסיה נבחנת"]
+            headers = [sheet.cell(row=2, column=col).value for col in range(1, sheet.max_column + 1)]
+            status_column = headers.index("סטטוס") + 1
+            user_column = headers.index("BNAME") + 1
+            profile_column = headers.index("PROFILE") + 1
+
+            statuses = {
+                (sheet.cell(row=row, column=user_column).value, sheet.cell(row=row, column=profile_column).value):
+                sheet.cell(row=row, column=status_column).value
+                for row in range(3, 6)
+            }
+            self.assertEqual(statuses[("AROMI", "SAP_ALL")], "עם ממצא")
+            self.assertEqual(statuses[("AROMI", "S_A.SYSTEM")], "עם ממצא")
+            self.assertEqual(statuses[("AVINOS", "SAP_NEW")], "תקין")
+
+            findings_sheet = workbook["ריכוז ממצאים"]
+            self.assertEqual(findings_sheet.cell(row=1, column=1).value, "אוכלוסייה רלוונטית / רשומות לפי כללי הבקרה")
+
+    def test_working_paper_marks_ush04_modbe_strong_profile_rows_as_findings(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "MA3-3_AYALON_14_ush04_working_paper.xlsx"
+            raw_rows = [
+                {
+                    "MANDT": "100",
+                    "BNAME": "AROMI",
+                    "MODDA": "05.01.2025",
+                    "MODBE": "SAP_ALL",
+                    "PROFS": "SECURITY_ADM",
+                    "__profile": "USH04",
+                    "__source_file": "USH04.txt",
+                },
+                {
+                    "MANDT": "100",
+                    "BNAME": "NORMAL_USER",
+                    "MODDA": "05.01.2025",
+                    "MODBE": "BASISADMIN",
+                    "PROFS": "Z_READ_ONLY",
+                    "__profile": "USH04",
+                    "__source_file": "USH04.txt",
+                },
+            ]
+            detail_rows = [
+                {
+                    "control_id": "MA3-3_AYALON_14",
+                    "source_file": "USH04",
+                    "extraction_date": "2026-05-31",
+                    "work_environment": "FPP - PROD - סביבת ייצור",
+                    "category": "MA - ניהול גישה",
+                    "risk_level": "גבוה",
+                    "description": "פרופילים חזקים",
+                    "check_type": "פרופילים חזקים",
+                    "client": "100",
+                    "user_name": "AROMI",
+                    "actual_value": "SAP_ALL",
+                    "expected_value": "",
+                    "status": "עם ממצא",
+                    "full_description": "משתמש: AROMI",
+                }
+            ]
+
+            write_control_working_paper(
+                control_id="MA3-3_AYALON_14",
+                summary_record={
+                    "control_id": "MA3-3_AYALON_14",
+                    "source_file": "USH04",
+                    "extraction_date": "2026-05-31",
+                    "total_records": 2,
+                    "finding_records": 1,
+                    "description": "פרופילים חזקים",
+                },
+                detail_rows=detail_rows,
+                raw_population_rows=raw_rows,
+                ipe_entries=[],
+                work_environment_label="FPP - PROD - סביבת ייצור",
+                output_path=output_path,
+            )
+
+            workbook = load_workbook(output_path)
+            sheet = workbook["אוכלוסיה נבחנת"]
+            headers = [sheet.cell(row=2, column=col).value for col in range(1, sheet.max_column + 1)]
+            status_column = headers.index("סטטוס") + 1
+            user_column = headers.index("BNAME") + 1
+
+            statuses = {
+                sheet.cell(row=row, column=user_column).value: sheet.cell(row=row, column=status_column).value
+                for row in range(3, 5)
+            }
+            self.assertEqual(statuses["AROMI"], "עם ממצא")
+            self.assertEqual(statuses["NORMAL_USER"], "תקין")
+
+    def test_working_paper_summary_counts_distinct_client_users(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "MA3-3_AYALON_14_summary_working_paper.xlsx"
+            raw_rows = [
+                {
+                    "MANDT": "100",
+                    "BNAME": "AROMI",
+                    "PROFILE": "SAP_ALL",
+                    "__profile": "UST04",
+                    "__source_file": "UST04.txt",
+                },
+                {
+                    "MANDT": "100",
+                    "BNAME": "AROMI",
+                    "PROFILE": "S_A.SYSTEM",
+                    "__profile": "UST04",
+                    "__source_file": "UST04.txt",
+                },
+                {
+                    "MANDT": "100",
+                    "BNAME": "AROMI",
+                    "PROFS": "SECURITY_ADM",
+                    "MODBE": "SAP_ALL",
+                    "__profile": "USH04",
+                    "__source_file": "USH04.txt",
+                },
+                {
+                    "MANDT": "100",
+                    "BNAME": "NORMAL_USER",
+                    "PROFILE": "Z_READ_ONLY",
+                    "__profile": "UST04",
+                    "__source_file": "UST04.txt",
+                },
+                {
+                    "MANDT": "",
+                    "BNAME": "MISSING_CLIENT",
+                    "PROFILE": "SAP_ALL",
+                    "__profile": "UST04",
+                    "__source_file": "UST04.txt",
+                },
+            ]
+            detail_rows = [
+                {
+                    "control_id": "MA3-3_AYALON_14",
+                    "source_file": "UST04",
+                    "extraction_date": "2026-05-31",
+                    "work_environment": "FPP - PROD - סביבת ייצור",
+                    "category": "MA - ניהול גישה",
+                    "risk_level": "גבוה",
+                    "description": "פרופילים חזקים",
+                    "check_type": "פרופילים חזקים",
+                    "client": "100",
+                    "user_name": "AROMI",
+                    "actual_value": "SAP_ALL",
+                    "expected_value": "",
+                    "status": "עם ממצא",
+                    "full_description": "משתמש: AROMI",
+                },
+                {
+                    "control_id": "MA3-3_AYALON_14",
+                    "source_file": "USH04",
+                    "extraction_date": "2026-05-31",
+                    "work_environment": "FPP - PROD - סביבת ייצור",
+                    "category": "MA - ניהול גישה",
+                    "risk_level": "גבוה",
+                    "description": "פרופילים חזקים",
+                    "check_type": "פרופילים חזקים",
+                    "client": "100",
+                    "user_name": "AROMI",
+                    "actual_value": "S_A.SYSTEM",
+                    "expected_value": "",
+                    "status": "עם ממצא",
+                    "full_description": "משתמש: AROMI",
+                },
+            ]
+
+            write_control_working_paper(
+                control_id="MA3-3_AYALON_14",
+                summary_record={
+                    "control_id": "MA3-3_AYALON_14",
+                    "source_file": "UST04, USH04",
+                    "extraction_date": "2026-05-31",
+                    "total_records": 100,
+                    "finding_records": 100,
+                    "description": "פרופילים חזקים",
+                },
+                detail_rows=detail_rows,
+                raw_population_rows=raw_rows,
+                ipe_entries=[],
+                work_environment_label="FPP - PROD - סביבת ייצור",
+                output_path=output_path,
+            )
+
+            workbook = load_workbook(output_path)
+            overview_sheet = workbook["MA3-3_AYALON_14"]
+            summary_text = next(
+                overview_sheet.cell(row=row, column=2).value
+                for row in range(1, overview_sheet.max_row + 1)
+                if overview_sheet.cell(row=row, column=1).value == "סיכום ממצאים"
+            )
+
+            self.assertEqual(summary_text, "נמצאו 1 מתוך 2 מקרים שנבדקו (50.0%).")
+
+    def test_working_paper_summary_keeps_row_count_fallback_without_users(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "RSPARAM_working_paper.xlsx"
+
+            write_control_working_paper(
+                control_id="RSPARAM_TEST",
+                summary_record={
+                    "control_id": "RSPARAM_TEST",
+                    "source_file": "RSPARAM",
+                    "extraction_date": "2026-05-31",
+                    "total_records": 5,
+                    "finding_records": 2,
+                    "description": "בדיקת פרמטרים",
+                },
+                detail_rows=[
+                    {
+                        "control_id": "RSPARAM_TEST",
+                        "source_file": "RSPARAM",
+                        "actual_value": "login/min_password_lng",
+                        "expected_value": "8",
+                        "status": "עם ממצא",
+                    }
+                ],
+                raw_population_rows=[
+                    {"PARAMETER": "login/min_password_lng", "VALUE": "6"},
+                    {"PARAMETER": "login/fails_to_user_lock", "VALUE": "5"},
+                ],
+                ipe_entries=[],
+                work_environment_label="FPP - PROD - סביבת ייצור",
+                output_path=output_path,
+            )
+
+            workbook = load_workbook(output_path)
+            overview_sheet = workbook["RSPARAM_TEST"]
+            summary_text = next(
+                overview_sheet.cell(row=row, column=2).value
+                for row in range(1, overview_sheet.max_row + 1)
+                if overview_sheet.cell(row=row, column=1).value == "סיכום ממצאים"
+            )
+
+            self.assertEqual(summary_text, "נמצאו 2 ממצאים מתוך 5 רשומות שנבדקו (40.0%).")
 
     def test_excel_report_is_created_with_summary_and_issues(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -1184,7 +1624,7 @@ class TestSmoke(unittest.TestCase):
             window._refresh_selected_audit_detail()
             self.assertGreaterEqual(window.audit_detail_table.rowCount(), 1)
             self.assertEqual(window.audit_detail_table.item(0, 3).text(), "MC - ניהול שינויים")
-            self.assertEqual(window.audit_detail_table.item(0, 9).text(), "עם ממצא")
+            self.assertEqual(window.audit_detail_table.item(0, 11).text(), "עם ממצא")
         finally:
             window.close()
 
@@ -1309,6 +1749,8 @@ class TestSmoke(unittest.TestCase):
                 "גבוה",
                 "תיאור בדיקה",
                 "מדיניות סיסמאות",
+                "100",
+                "AROMI",
                 "6",
                 "-",
                 "עם ממצא",
@@ -1572,8 +2014,9 @@ class TestSmoke(unittest.TestCase):
         strong_profile_issues = [issue for issue in result.issues if issue.control_id == "MA3-3_AYALON_14"]
 
         self.assertEqual(len(strong_profile_issues), 2)
-        self.assertEqual({issue.actual_value for issue in strong_profile_issues}, {"ADMIN_USER", "POWER_USER"})
-        self.assertEqual({issue.expected_value for issue in strong_profile_issues}, {"SAP_ALL", "S_A.ADMIN"})
+        self.assertEqual({issue.actual_value for issue in strong_profile_issues}, {"SAP_ALL", "S_A.ADMIN"})
+        self.assertEqual({issue.expected_value for issue in strong_profile_issues}, {""})
+        self.assertTrue(all("משתמש:" in issue.full_description for issue in strong_profile_issues))
 
     def test_users_profile_requires_last_login_field(self) -> None:
         rows = [
