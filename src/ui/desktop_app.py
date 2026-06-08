@@ -8117,6 +8117,7 @@ class ValidationDesktopApp(QMainWindow):
                     _agr_name = str(_u_row.get("AGR_NAME") or "").strip().upper()
                     for _a_row in _agr1251_by_role.get(_agr_name, []):
                         raw_population_rows.append({
+                            "__profile": "AGR_1251 × AGR_USERS",
                             "MANDT":    _u_row.get("MANDT", "-"),
                             "UNAME":    _u_row.get("UNAME", "-"),
                             "AGR_NAME": _u_row.get("AGR_NAME", "-"),

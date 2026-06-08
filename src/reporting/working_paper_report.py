@@ -112,6 +112,7 @@ def write_control_working_paper(
         work_environment_label=work_environment_label,
         notes=notes,
         critical_roles=critical_roles,
+        raw_population_note=raw_population_note,
     )
 
     ipe_sheet = workbook.create_sheet("IPE")
@@ -146,6 +147,7 @@ def _write_overview_sheet(
     work_environment_label: str,
     notes: list[str] | None = None,
     critical_roles: list[str] | None = None,
+    raw_population_note: str | None = None,
 ) -> None:
     _set_rtl(sheet)
     sheet.column_dimensions["A"].width = 26
@@ -240,6 +242,15 @@ def _write_overview_sheet(
         # Allow tall multiline cells (esp. test steps)
         line_count = max(1, str(value).count("\n") + 1)
         sheet.row_dimensions[idx].height = max(22, min(line_count * 16, 420))
+
+    if raw_population_note:
+        note_row = len(rows) + 2  # rows start at idx=2, so last row = 1+len(rows), note goes next
+        note_cell = sheet.cell(row=note_row, column=1, value=raw_population_note)
+        sheet.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=2)
+        note_cell.font = Font(bold=True, color="FFC00000", size=11)
+        note_cell.fill = PatternFill(start_color="FFFCE4D6", end_color="FFFCE4D6", fill_type="solid")
+        note_cell.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+        sheet.row_dimensions[note_row].height = 28
 
 
 def _detect_profile_from_summary(summary_record: dict[str, Any]) -> str:
@@ -595,10 +606,41 @@ def _write_examined_population_sheet(
     finding_keys = _build_finding_keys(detail_rows, key_columns)
     strong_profile_lookup = _build_strong_profile_finding_lookup(detail_rows)
 
-    # For AGR cross-join controls (MA1-1_AYALON_11 etc.) the detail rows carry
-    # 'client'/'user_name' to identify findings, while actual_value holds role names.
-    # Build a (client, user_name) pair lookup so _raw_status_matcher can correctly
-    # flag cross-join raw rows (keyed by MANDT+UNAME) as findings.
+    # For AGR cross-join controls the detail rows carry 'client'/'user_name' to
+    # identify findings, while actual_value holds comma-separated role names.
+    #
+    # For MA1-1 controls the finding is tied to a *specific role* (e.g. the role
+    # that grants S_TCODE/PFCG). We build a role-level lookup so that only the
+    # row whose AGR_NAME caused the finding is highlighted red — not every row
+    # belonging to that user.
+    #
+    # For MA7-17 / MA5.1-13 the finding is user-centric (periodic review /
+    # new-user check), so we fall back to the simpler user-pair lookup which
+    # correctly highlights all rows for a finding user.
+    _ma1_role_specific = any(
+        str(row.get("control_id", "")).startswith("MA1-1")
+        for row in detail_rows
+        if str(row.get("status", "")).strip() == "עם ממצא"
+    )
+
+    # Role-specific lookup: (client, user_name) → set of AGR_NAME values that
+    # triggered a finding.  Populated only for MA1-1 controls.
+    _finding_client_user_roles: dict[tuple[str, str], set[str]] = {}
+    if _ma1_role_specific:
+        for _row in detail_rows:
+            if str(_row.get("status", "")).strip() != "עם ממצא":
+                continue
+            _client = str(_row.get("client", "") or "").strip().upper()
+            _uname  = str(_row.get("user_name", "") or "").strip().upper()
+            if not _client or _client == "-" or not _uname or _uname == "-":
+                continue
+            _av = str(_row.get("actual_value", "") or "")
+            _roles = {r.strip().upper() for r in _av.split(",") if r.strip() and r.strip() != "-"}
+            if _roles:
+                _finding_client_user_roles.setdefault((_client, _uname), set()).update(_roles)
+
+    # Fallback user-pair lookup used by non-MA1-1 cross-join controls and when
+    # the raw row has no AGR_NAME to key on.
     _finding_client_user_pairs: set[tuple[str, str]] = {
         (
             str(row.get("client", "") or "").strip().upper(),
@@ -630,10 +672,27 @@ def _write_examined_population_sheet(
         if strong_profile_lookup and row_profile in {"UST04", "USH04"}:
             return _row_matches_strong_profile_finding(row, row_profile, strong_profile_lookup)
 
-        # For AGR cross-join raw rows (MANDT + UNAME/BNAME keyed) the detail rows
-        # carry 'user_name' rather than storing the user in 'actual_value'.
-        # Match by (client, user_name) pair; fall back to user-name-only when the
-        # raw row has no client information.
+        # Role-specific matching for MA1-1 controls: only highlight the rows
+        # whose AGR_NAME directly caused the finding — not all rows for the user.
+        if _finding_client_user_roles:
+            uname   = _row_value(row, "UNAME", "BNAME", "USER_NAME", "USER").strip().upper()
+            agr_name = _row_value(row, "AGR_NAME").strip().upper()
+            if uname and uname != "-" and agr_name and agr_name != "-":
+                mandt = _row_value(row, "MANDT", "CLIENT").strip().upper()
+                if mandt and mandt != "-":
+                    user_roles = _finding_client_user_roles.get((mandt, uname))
+                else:
+                    user_roles = next(
+                        (roles for (_, u), roles in _finding_client_user_roles.items() if u == uname),
+                        None,
+                    )
+                if user_roles is not None:
+                    # User is a finding user: mark only the specific role rows
+                    return agr_name in user_roles
+                # User is not a finding user at all
+                return False
+
+        # User-level matching for MA7-17 / MA5.1-13 and other cross-join controls.
         if _finding_client_user_pairs:
             uname = _row_value(row, "UNAME", "BNAME", "USER_NAME", "USER").strip().upper()
             if uname and uname != "-":
@@ -673,8 +732,10 @@ def _write_examined_population_sheet(
         sheet.merge_cells(
             start_row=next_row, start_column=1, end_row=next_row, end_column=6
         )
-        note_cell.font = Font(italic=True, color="FFC00000", size=9)
-        note_cell.alignment = Alignment(horizontal="right", vertical="center")
+        note_cell.font = Font(bold=True, color="FFC00000", size=11)
+        note_cell.fill = PatternFill(start_color="FFFCE4D6", end_color="FFFCE4D6", fill_type="solid")
+        note_cell.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+        sheet.row_dimensions[next_row].height = 28
         next_row += 2
 
 
