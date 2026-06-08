@@ -1942,7 +1942,7 @@ class ValidationDesktopApp(QMainWindow):
             ["מזהה בקרה", "שם הבקרה", "קטגוריה", "תת-קטגוריה", "תהליך", "רמת סיכון", "בסקופ"]
         ):
             _hi = QTableWidgetItem(self.format_rtl_text(_lbl))
-            _hi.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            _hi.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
             self.controls_catalog_table.setHorizontalHeaderItem(_col, _hi)
         self.controls_catalog_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.controls_catalog_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
