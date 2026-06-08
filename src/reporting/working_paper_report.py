@@ -595,6 +595,20 @@ def _write_examined_population_sheet(
     finding_keys = _build_finding_keys(detail_rows, key_columns)
     strong_profile_lookup = _build_strong_profile_finding_lookup(detail_rows)
 
+    # For AGR cross-join controls (MA1-1_AYALON_11 etc.) the detail rows carry
+    # 'client'/'user_name' to identify findings, while actual_value holds role names.
+    # Build a (client, user_name) pair lookup so _raw_status_matcher can correctly
+    # flag cross-join raw rows (keyed by MANDT+UNAME) as findings.
+    _finding_client_user_pairs: set[tuple[str, str]] = {
+        (
+            str(row.get("client", "") or "").strip().upper(),
+            str(row.get("user_name", "") or "").strip().upper(),
+        )
+        for row in detail_rows
+        if str(row.get("status", "")).strip() == "עם ממצא"
+        and str(row.get("user_name", "") or "").strip() not in {"", "-"}
+    }
+
     def _row_profile(row: dict[str, Any]) -> str:
         p = str(row.get("__profile", "") or "").upper()
         if p:
@@ -606,9 +620,32 @@ def _write_examined_population_sheet(
         return profile  # last-resort fallback
 
     def _raw_status_matcher(row: dict[str, Any]) -> bool:
+        # Rows that are themselves detail/finding rows (used as raw_population_rows
+        # when the full cross-join population is too large to expand) carry a
+        # 'control_id' field – defer to their own pre-computed status value.
+        if "control_id" in row:
+            return str(row.get("status", "")).strip() == "עם ממצא"
+
         row_profile = _row_profile(row)
         if strong_profile_lookup and row_profile in {"UST04", "USH04"}:
             return _row_matches_strong_profile_finding(row, row_profile, strong_profile_lookup)
+
+        # For AGR cross-join raw rows (MANDT + UNAME/BNAME keyed) the detail rows
+        # carry 'user_name' rather than storing the user in 'actual_value'.
+        # Match by (client, user_name) pair; fall back to user-name-only when the
+        # raw row has no client information.
+        if _finding_client_user_pairs:
+            uname = _row_value(row, "UNAME", "BNAME", "USER_NAME", "USER").strip().upper()
+            if uname and uname != "-":
+                mandt = _row_value(row, "MANDT", "CLIENT").strip().upper()
+                if mandt and mandt != "-":
+                    if (mandt, uname) in _finding_client_user_pairs:
+                        return True
+                else:
+                    # Client absent in raw row: match on user name alone
+                    if any(u == uname for _, u in _finding_client_user_pairs):
+                        return True
+
         return _row_is_finding(row, finding_keys, key_columns)
 
     # Enrich raw rows with per-row source-table name so mixed populations
