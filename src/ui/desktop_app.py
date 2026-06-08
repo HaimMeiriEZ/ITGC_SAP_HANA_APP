@@ -56,6 +56,9 @@ from src.persistence.controls_metadata_loader import (
     apply_metadata_to_definitions,
     load_controls_metadata_csv,
 )
+from src.persistence.controls_catalog_loader import (
+    load_and_apply_catalog,
+)
 from src.readers.excel_reader import ExcelFileReader
 from src.readers.text_reader import TextFileReader
 from src.reporting.excel_report import ExcelReportWriter
@@ -693,7 +696,20 @@ class ValidationDesktopApp(QMainWindow):
         self.config.input_dir.mkdir(parents=True, exist_ok=True)
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Merge CSV-supplied metadata into AUDIT_CONTROL_DEFINITIONS at startup
+        # Load controls catalog (knowledge_base/controls_catalog.json) first —
+        # provides process, risk_description, in_scope, analysis_type for all controls.
+        # Stored in Git so it is never lost.
+        try:
+            _kb_dir = self.config.output_dir.parent / "knowledge_base"
+            self._controls_catalog: list[dict[str, Any]] = load_and_apply_catalog(
+                _kb_dir,
+                AUDIT_CONTROL_DEFINITIONS,
+            )
+        except Exception:  # pragma: no cover - never block startup
+            self._controls_catalog = []
+
+        # Legacy CSV override (data/output/controls_metadata.csv) — applied after
+        # catalog so user CSV values take highest precedence.
         try:
             csv_metadata = load_controls_metadata_csv(self.config.output_dir)
             if csv_metadata:
