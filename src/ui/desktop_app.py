@@ -1942,6 +1942,7 @@ class ValidationDesktopApp(QMainWindow):
         self.controls_catalog_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.controls_catalog_table.setAlternatingRowColors(True)
         hdr = self.controls_catalog_table.horizontalHeader()
+        hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
@@ -1968,21 +1969,24 @@ class ValidationDesktopApp(QMainWindow):
         btn_bar_layout.setContentsMargins(0, 6, 0, 0)
         btn_bar_layout.setSpacing(8)
 
-        save_btn = QPushButton(self.format_ui_rtl_text("💾 שמור שינויים"))
+        save_btn = QPushButton(self.format_ui_rtl_text("שמור שינויים"))
         save_btn.setToolTip(self.format_ui_rtl_text("שמור שינויים ל-controls_catalog.json"))
+        save_btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         save_btn.setStyleSheet(
             "font-weight: bold; background-color: #6d002f; color: white; padding: 5px 14px;"
         )
         save_btn.clicked.connect(self._save_controls_catalog)
         btn_bar_layout.addWidget(save_btn)
 
-        export_btn = QPushButton(self.format_ui_rtl_text("📤 ייצוא ל-Excel"))
+        export_btn = QPushButton(self.format_ui_rtl_text("ייצוא ל-Excel"))
         export_btn.setToolTip(self.format_ui_rtl_text("ייצא את הקטלוג לקובץ Excel לעריכה חיצונית"))
+        export_btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         export_btn.clicked.connect(self._export_controls_catalog_to_excel)
         btn_bar_layout.addWidget(export_btn)
 
-        import_btn = QPushButton(self.format_ui_rtl_text("📥 ייבוא מ-Excel"))
+        import_btn = QPushButton(self.format_ui_rtl_text("ייבוא מ-Excel"))
         import_btn.setToolTip(self.format_ui_rtl_text("ייבא קטלוג שנערך ב-Excel"))
+        import_btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         import_btn.clicked.connect(self._import_controls_catalog_from_excel)
         btn_bar_layout.addWidget(import_btn)
 
@@ -2097,23 +2101,30 @@ class ValidationDesktopApp(QMainWindow):
 
         name_edit = QLineEdit(str(defn.get("check_type", "") or ""))
         name_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        name_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
         form_layout.addRow(self.format_ui_rtl_text("שם הבקרה:"), name_edit)
 
         process_edit = QLineEdit(
             str(defn.get("process", str(catalog_entry.get("process", "") or "")) or "")
         )
         process_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        process_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
         form_layout.addRow(self.format_ui_rtl_text("תהליך:"), process_edit)
 
-        desc_edit = QTextEdit(
+        desc_edit = QTextEdit()
+        desc_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        desc_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        desc_edit.setPlainText(
             str(defn.get("description", str(catalog_entry.get("description", "") or "")) or "")
         )
-        desc_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         desc_edit.setMinimumHeight(70)
         desc_edit.setMaximumHeight(95)
         form_layout.addRow(self.format_ui_rtl_text("תיאור:"), desc_edit)
 
-        risk_desc_edit = QTextEdit(
+        risk_desc_edit = QTextEdit()
+        risk_desc_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        risk_desc_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        risk_desc_edit.setPlainText(
             str(
                 defn.get(
                     "risk_description",
@@ -2122,7 +2133,6 @@ class ValidationDesktopApp(QMainWindow):
                 or ""
             )
         )
-        risk_desc_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         risk_desc_edit.setMinimumHeight(70)
         risk_desc_edit.setMaximumHeight(95)
         form_layout.addRow(self.format_ui_rtl_text("תיאור הסיכון:"), risk_desc_edit)
