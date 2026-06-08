@@ -2107,19 +2107,16 @@ class ValidationDesktopApp(QMainWindow):
 
         name_edit = QLineEdit(str(defn.get("check_type", "") or ""))
         name_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        name_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
         form_layout.addRow(self.format_ui_rtl_text("שם הבקרה:"), name_edit)
 
         process_edit = QLineEdit(
             str(defn.get("process", str(catalog_entry.get("process", "") or "")) or "")
         )
         process_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        process_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
         form_layout.addRow(self.format_ui_rtl_text("תהליך:"), process_edit)
 
         desc_edit = QTextEdit()
         desc_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        desc_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
         desc_edit.setPlainText(
             str(defn.get("description", str(catalog_entry.get("description", "") or "")) or "")
         )
@@ -2129,7 +2126,6 @@ class ValidationDesktopApp(QMainWindow):
 
         risk_desc_edit = QTextEdit()
         risk_desc_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        risk_desc_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
         risk_desc_edit.setPlainText(
             str(
                 defn.get(
