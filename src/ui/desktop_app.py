@@ -1961,6 +1961,7 @@ class ValidationDesktopApp(QMainWindow):
         self.controls_catalog_table.setColumnWidth(5, 90)
         self.controls_catalog_table.setColumnWidth(6, 70)
         self.controls_catalog_table.verticalHeader().setVisible(False)
+        self.controls_catalog_table.setItemDelegate(_RightAlignDelegate(self.controls_catalog_table))
         self.controls_catalog_table.setToolTip(
             self.format_ui_rtl_text("לחיצה כפולה על שורה לעריכת פרטי הבקרה")
         )
@@ -2022,7 +2023,7 @@ class ValidationDesktopApp(QMainWindow):
             row_index = table.rowCount()
             table.insertRow(row_index)
 
-            def _item(text: str, align: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter) -> QTableWidgetItem:
+            def _item(text: str, align: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter) -> QTableWidgetItem:
                 it = QTableWidgetItem(self.format_rtl_text(text))
                 it.setTextAlignment(align)
                 return it
