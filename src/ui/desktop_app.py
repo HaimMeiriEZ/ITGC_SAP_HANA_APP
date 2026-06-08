@@ -57,7 +57,11 @@ from src.persistence.controls_metadata_loader import (
     load_controls_metadata_csv,
 )
 from src.persistence.controls_catalog_loader import (
+    apply_catalog_to_definitions,
+    export_catalog_to_excel,
+    import_catalog_from_excel,
     load_and_apply_catalog,
+    save_catalog,
 )
 from src.readers.excel_reader import ExcelFileReader
 from src.readers.text_reader import TextFileReader
@@ -1226,6 +1230,7 @@ class ValidationDesktopApp(QMainWindow):
         self.settings_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.settings_tab_layout.addWidget(self.settings_scroll)
 
+        self.tabs.addTab(self._build_controls_catalog_tab(), self.format_rtl_text("רשימת בקרות לניתוח"))
         self.tabs.addTab(self.intake_tab, self.format_rtl_text("קליטת קבצים"))
         self.tabs.addTab(self.settings_tab, self.format_rtl_text("הגדרות מערכת לביקורת"))
         self.tabs.addTab(self.review_tab, self.format_rtl_text("סקירת דוח משתמשים"))
@@ -1904,6 +1909,385 @@ class ValidationDesktopApp(QMainWindow):
     def _default_extraction_date() -> str:
         return datetime.now().strftime("%Y-%m-%d")
 
+    # ------------------------------------------------------------------
+    # Controls Catalog Tab (Phase 2)
+    # ------------------------------------------------------------------
+
+    def _build_controls_catalog_tab(self) -> QWidget:
+        """Build the 'רשימת בקרות לניתוח' tab — shows all controls with in-scope toggle."""
+        page = QWidget()
+        page.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        hint = QLabel(
+            self.format_ui_rtl_text(
+                "רשימת כל הבקרות לניתוח. לחץ פעמיים על שורה לעריכה. "
+                "שינויים יישמרו רק לאחר לחיצה על 'שמור שינויים'."
+            )
+        )
+        hint.setWordWrap(True)
+        hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        hint.setStyleSheet("color: #444; font-size: 11px; padding: 4px 0;")
+        layout.addWidget(hint)
+
+        self.controls_catalog_table = QTableWidget()
+        self.controls_catalog_table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.controls_catalog_table.setColumnCount(7)
+        self.controls_catalog_table.setHorizontalHeaderLabels(
+            ["מזהה בקרה", "שם הבקרה", "קטגוריה", "תת-קטגוריה", "תהליך", "רמת סיכון", "בסקופ"]
+        )
+        self.controls_catalog_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.controls_catalog_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.controls_catalog_table.setAlternatingRowColors(True)
+        hdr = self.controls_catalog_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        self.controls_catalog_table.setColumnWidth(0, 220)
+        self.controls_catalog_table.setColumnWidth(2, 160)
+        self.controls_catalog_table.setColumnWidth(3, 200)
+        self.controls_catalog_table.setColumnWidth(5, 90)
+        self.controls_catalog_table.setColumnWidth(6, 70)
+        self.controls_catalog_table.verticalHeader().setVisible(False)
+        self.controls_catalog_table.setToolTip(
+            self.format_ui_rtl_text("לחיצה כפולה על שורה לעריכת פרטי הבקרה")
+        )
+        self.controls_catalog_table.cellDoubleClicked.connect(self._on_catalog_row_double_clicked)
+        self._refresh_controls_catalog_table()
+        layout.addWidget(self.controls_catalog_table, 1)
+
+        btn_bar = QWidget()
+        btn_bar.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        btn_bar_layout = QHBoxLayout(btn_bar)
+        btn_bar_layout.setContentsMargins(0, 6, 0, 0)
+        btn_bar_layout.setSpacing(8)
+
+        save_btn = QPushButton(self.format_ui_rtl_text("💾 שמור שינויים"))
+        save_btn.setToolTip(self.format_ui_rtl_text("שמור שינויים ל-controls_catalog.json"))
+        save_btn.setStyleSheet(
+            "font-weight: bold; background-color: #6d002f; color: white; padding: 5px 14px;"
+        )
+        save_btn.clicked.connect(self._save_controls_catalog)
+        btn_bar_layout.addWidget(save_btn)
+
+        export_btn = QPushButton(self.format_ui_rtl_text("📤 ייצוא ל-Excel"))
+        export_btn.setToolTip(self.format_ui_rtl_text("ייצא את הקטלוג לקובץ Excel לעריכה חיצונית"))
+        export_btn.clicked.connect(self._export_controls_catalog_to_excel)
+        btn_bar_layout.addWidget(export_btn)
+
+        import_btn = QPushButton(self.format_ui_rtl_text("📥 ייבוא מ-Excel"))
+        import_btn.setToolTip(self.format_ui_rtl_text("ייבא קטלוג שנערך ב-Excel"))
+        import_btn.clicked.connect(self._import_controls_catalog_from_excel)
+        btn_bar_layout.addWidget(import_btn)
+
+        btn_bar_layout.addStretch(1)
+        layout.addWidget(btn_bar)
+        return page
+
+    def _refresh_controls_catalog_table(self) -> None:
+        """Populate the controls catalog table from self._controls_catalog + AUDIT_CONTROL_DEFINITIONS."""
+        table = self.controls_catalog_table
+        table.setRowCount(0)
+
+        catalog_by_id: dict[str, dict[str, Any]] = {
+            str(e.get("control_id", "")): e
+            for e in self._controls_catalog
+            if e.get("control_id")
+        }
+
+        for control_id, defn in AUDIT_CONTROL_DEFINITIONS.items():
+            cat_entry = catalog_by_id.get(control_id, {})
+            in_scope_raw = str(
+                defn.get("in_scope", str(cat_entry.get("in_scope", True) if cat_entry else True))
+            )
+            in_scope = in_scope_raw.lower() != "false"
+            sub_category = str(cat_entry.get("sub_category", "") or "")
+            process = str(defn.get("process", str(cat_entry.get("process", "") or "")) or "")
+
+            row_index = table.rowCount()
+            table.insertRow(row_index)
+
+            def _item(text: str, align: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter) -> QTableWidgetItem:
+                it = QTableWidgetItem(self.format_rtl_text(text))
+                it.setTextAlignment(align)
+                return it
+
+            table.setItem(row_index, 0, _item(control_id))
+            table.setItem(row_index, 1, _item(str(defn.get("check_type", "") or "")))
+            table.setItem(row_index, 2, _item(str(defn.get("category", "") or "")))
+            table.setItem(row_index, 3, _item(sub_category))
+            table.setItem(row_index, 4, _item(process))
+            table.setItem(row_index, 5, _item(str(defn.get("risk_level", "") or "")))
+
+            scope_item = QTableWidgetItem(self.format_rtl_text("✓" if in_scope else "✗"))
+            scope_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
+            )
+            scope_item.setForeground(
+                QBrush(QColor("#1a7a1a") if in_scope else QColor("#c00000"))
+            )
+            table.setItem(row_index, 6, scope_item)
+
+        table.resizeRowsToContents()
+
+    def _on_catalog_row_double_clicked(self, row: int, _column: int) -> None:
+        item = self.controls_catalog_table.item(row, 0)
+        if item is None:
+            return
+        self._show_control_edit_dialog(self.format_rtl_text(item.text()))
+
+    def _show_control_edit_dialog(self, control_id: str) -> None:
+        """Open the edit dialog for a single control entry."""
+        defn = AUDIT_CONTROL_DEFINITIONS.get(control_id)
+        if defn is None:
+            return
+
+        catalog_entry: dict[str, Any] = {}
+        catalog_idx: int = -1
+        for i, entry in enumerate(self._controls_catalog):
+            if str(entry.get("control_id", "")) == control_id:
+                catalog_entry = entry
+                catalog_idx = i
+                break
+
+        dlg = QDialog(
+            self,
+            Qt.WindowType.Dialog
+            | Qt.WindowType.CustomizeWindowHint
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowCloseButtonHint,
+        )
+        dlg.setWindowTitle(f"עריכת בקרה — {control_id}")
+        dlg.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumWidth(560)
+        dlg.resize(600, 560)
+
+        dlg_layout = QVBoxLayout(dlg)
+        dlg_layout.setContentsMargins(16, 14, 16, 14)
+        dlg_layout.setSpacing(4)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        form_widget = QWidget()
+        form_widget.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        form_layout = QFormLayout(form_widget)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form_layout.setSpacing(10)
+        scroll.setWidget(form_widget)
+
+        def _ro(text: str) -> QLabel:
+            lbl = QLabel(f"<b>{self.format_rtl_text(text)}</b>")
+            lbl.setStyleSheet("color: #555;")
+            lbl.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            return lbl
+
+        form_layout.addRow(self.format_ui_rtl_text("מזהה:"), _ro(control_id))
+        form_layout.addRow(self.format_ui_rtl_text("קטגוריה:"), _ro(str(defn.get("category", ""))))
+        form_layout.addRow(self.format_ui_rtl_text("רמת סיכון:"), _ro(str(defn.get("risk_level", ""))))
+
+        name_edit = QLineEdit(str(defn.get("check_type", "") or ""))
+        name_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        form_layout.addRow(self.format_ui_rtl_text("שם הבקרה:"), name_edit)
+
+        process_edit = QLineEdit(
+            str(defn.get("process", str(catalog_entry.get("process", "") or "")) or "")
+        )
+        process_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        form_layout.addRow(self.format_ui_rtl_text("תהליך:"), process_edit)
+
+        desc_edit = QTextEdit(
+            str(defn.get("description", str(catalog_entry.get("description", "") or "")) or "")
+        )
+        desc_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        desc_edit.setMinimumHeight(70)
+        desc_edit.setMaximumHeight(95)
+        form_layout.addRow(self.format_ui_rtl_text("תיאור:"), desc_edit)
+
+        risk_desc_edit = QTextEdit(
+            str(
+                defn.get(
+                    "risk_description",
+                    str(catalog_entry.get("risk_description", "") or ""),
+                )
+                or ""
+            )
+        )
+        risk_desc_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        risk_desc_edit.setMinimumHeight(70)
+        risk_desc_edit.setMaximumHeight(95)
+        form_layout.addRow(self.format_ui_rtl_text("תיאור הסיכון:"), risk_desc_edit)
+
+        notes_edit = QPlainTextEdit(
+            str(catalog_entry.get("notes", str(defn.get("notes", "") or "")) or "")
+        )
+        notes_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        notes_edit.setMaximumHeight(70)
+        form_layout.addRow(self.format_ui_rtl_text("הערות:"), notes_edit)
+
+        raw_in_scope = str(
+            defn.get("in_scope", str(catalog_entry.get("in_scope", True) if catalog_entry else True))
+        )
+        in_scope_cb = QCheckBox(self.format_ui_rtl_text("בסקופ לביקורת הנוכחית"))
+        in_scope_cb.setChecked(raw_in_scope.lower() != "false")
+        form_layout.addRow("", in_scope_cb)
+
+        dlg_layout.addWidget(scroll, 1)
+
+        btn_box = QDialogButtonBox()
+        btn_box.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        ok_btn = btn_box.addButton("אישור", QDialogButtonBox.ButtonRole.AcceptRole)
+        ok_btn.setDefault(True)
+        btn_box.addButton("ביטול", QDialogButtonBox.ButtonRole.RejectRole)
+        btn_box.accepted.connect(dlg.accept)
+        btn_box.rejected.connect(dlg.reject)
+        dlg_layout.addSpacing(8)
+        dlg_layout.addWidget(btn_box)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        # Apply to AUDIT_CONTROL_DEFINITIONS in-memory
+        defn["check_type"] = name_edit.text().strip()
+        defn["process"] = process_edit.text().strip()
+        defn["description"] = desc_edit.toPlainText().strip()
+        defn["risk_description"] = risk_desc_edit.toPlainText().strip()
+        defn["in_scope"] = "true" if in_scope_cb.isChecked() else "false"
+
+        # Update or create catalog entry
+        new_entry: dict[str, Any] = dict(catalog_entry) if catalog_entry else {"control_id": control_id}
+        new_entry["control_id"] = control_id
+        new_entry["check_type"] = defn["check_type"]
+        new_entry["process"] = defn["process"]
+        new_entry["description"] = defn["description"]
+        new_entry["risk_description"] = defn["risk_description"]
+        new_entry["notes"] = notes_edit.toPlainText().strip()
+        new_entry["in_scope"] = in_scope_cb.isChecked()
+        new_entry.setdefault("category", str(defn.get("category", "")))
+        new_entry.setdefault("sub_category", str(catalog_entry.get("sub_category", "")))
+        new_entry.setdefault("risk_level", str(defn.get("risk_level", "")))
+        new_entry.setdefault("analysis_type", str(catalog_entry.get("analysis_type", "")))
+
+        if catalog_idx >= 0:
+            self._controls_catalog[catalog_idx] = new_entry
+        else:
+            self._controls_catalog.append(new_entry)
+
+        self._refresh_controls_catalog_table()
+
+    def _save_controls_catalog(self) -> None:
+        """Persist in-memory catalog to JSON and re-apply to definitions."""
+        try:
+            _kb_dir = self.config.output_dir.parent / "knowledge_base"
+            save_catalog(self._controls_catalog, _kb_dir)
+            apply_catalog_to_definitions(self._controls_catalog, AUDIT_CONTROL_DEFINITIONS)
+            QMessageBox.information(
+                self,
+                self.format_ui_rtl_text("שמירה"),
+                self.format_ui_rtl_text("הקטלוג נשמר בהצלחה."),
+            )
+        except Exception as exc:  # pragma: no cover
+            QMessageBox.critical(
+                self,
+                self.format_ui_rtl_text("שגיאה"),
+                self.format_ui_rtl_text(f"שגיאה בשמירת הקטלוג:\n{exc}"),
+            )
+
+    def _export_controls_catalog_to_excel(self) -> None:
+        """Export the current catalog to an Excel file via QFileDialog."""
+        default_path = str(self.config.output_dir / "controls_catalog_export.xlsx")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            self.format_ui_rtl_text("ייצוא קטלוג ל-Excel"),
+            default_path,
+            "Excel Files (*.xlsx)",
+        )
+        if not path:
+            return
+        try:
+            export_catalog_to_excel(self._controls_catalog, Path(path))
+            QMessageBox.information(
+                self,
+                self.format_ui_rtl_text("ייצוא"),
+                self.format_ui_rtl_text(f"הקטלוג יוצא בהצלחה ל:\n{path}"),
+            )
+        except Exception as exc:  # pragma: no cover
+            QMessageBox.critical(
+                self,
+                self.format_ui_rtl_text("שגיאה"),
+                self.format_ui_rtl_text(f"שגיאה בייצוא:\n{exc}"),
+            )
+
+    def _import_controls_catalog_from_excel(self) -> None:
+        """Import catalog from a previously-exported Excel file via QFileDialog."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.format_ui_rtl_text("ייבוא קטלוג מ-Excel"),
+            self._get_last_file_dialog_directory(),
+            "Excel Files (*.xlsx)",
+        )
+        if not path:
+            return
+        try:
+            imported = import_catalog_from_excel(Path(path))
+        except Exception as exc:  # pragma: no cover
+            QMessageBox.critical(
+                self,
+                self.format_ui_rtl_text("שגיאה"),
+                self.format_ui_rtl_text(f"שגיאה בקריאת הקובץ:\n{exc}"),
+            )
+            return
+        if not imported:
+            QMessageBox.warning(
+                self,
+                self.format_ui_rtl_text("ייבוא"),
+                self.format_ui_rtl_text("לא נמצאו רשומות תקינות בקובץ."),
+            )
+            return
+        reply = QMessageBox.question(
+            self,
+            self.format_ui_rtl_text("אישור ייבוא"),
+            self.format_ui_rtl_text(
+                f"נמצאו {len(imported)} בקרות לייבוא.\nהאם לעדכן את הקטלוג?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        catalog_by_id = {
+            str(e.get("control_id", "")): i for i, e in enumerate(self._controls_catalog)
+        }
+        for entry in imported:
+            cid = str(entry.get("control_id", ""))
+            if not cid:
+                continue
+            if cid in catalog_by_id:
+                self._controls_catalog[catalog_by_id[cid]] = entry
+            else:
+                self._controls_catalog.append(entry)
+        apply_catalog_to_definitions(self._controls_catalog, AUDIT_CONTROL_DEFINITIONS)
+        self._refresh_controls_catalog_table()
+        QMessageBox.information(
+            self,
+            self.format_ui_rtl_text("ייבוא"),
+            self.format_ui_rtl_text(f"יובאו {len(imported)} בקרות בהצלחה."),
+        )
+
+    def _is_control_in_scope(self, control_id: str) -> bool:
+        """Return True when the control is in scope (default: True when key is absent)."""
+        return (
+            str(AUDIT_CONTROL_DEFINITIONS.get(control_id, {}).get("in_scope", "true")).lower()
+            != "false"
+        )
 
     def _build_system_settings_sections(self) -> None:
         # --- Outer wrapper for flush right alignment ---
@@ -8008,6 +8392,8 @@ class ValidationDesktopApp(QMainWindow):
             return
 
         for row_data in sorted_audit_summary_rows(self.audit_summary_records):
+            if not self._is_control_in_scope(str(row_data.get("control_id", ""))):
+                continue
             row_index = self.audit_summary_table.rowCount()
             self.audit_summary_table.insertRow(row_index)
             values = build_audit_summary_values(row_data)
