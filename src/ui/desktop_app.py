@@ -1935,14 +1935,19 @@ class ValidationDesktopApp(QMainWindow):
         self.controls_catalog_table = QTableWidget()
         self.controls_catalog_table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.controls_catalog_table.setColumnCount(7)
-        self.controls_catalog_table.setHorizontalHeaderLabels(
+        # Use setHorizontalHeaderItem (not setHorizontalHeaderLabels) so we can
+        # explicitly force AlignRight — setHorizontalHeaderLabels creates items
+        # with AlignLeft by default, which overrides setDefaultAlignment().
+        for _col, _lbl in enumerate(
             ["מזהה בקרה", "שם הבקרה", "קטגוריה", "תת-קטגוריה", "תהליך", "רמת סיכון", "בסקופ"]
-        )
+        ):
+            _hi = QTableWidgetItem(self.format_rtl_text(_lbl))
+            _hi.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.controls_catalog_table.setHorizontalHeaderItem(_col, _hi)
         self.controls_catalog_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.controls_catalog_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.controls_catalog_table.setAlternatingRowColors(True)
         hdr = self.controls_catalog_table.horizontalHeader()
-        hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
