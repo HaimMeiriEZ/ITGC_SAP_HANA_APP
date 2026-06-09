@@ -14,7 +14,9 @@
       "process": "ניהול שינויים — בקרת ייבוא לסביבת ייצור",
       "risk_description": "משתמשים לא מורשים יעבירו  שינויים לא מורשים או לא בדוקים לסביבת הייצור.",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": "מנהל כספים"
     },
     {
       "control_id": "MA1-1&MA7-17_AYALON_2",
@@ -28,7 +30,9 @@
       "process": "ניהול גישה — סקר הרשאות תקופתי",
       "risk_description": "תהליכי הרשאת גישת משתמשים לא מורשים עלולות לגרום לביצוע עסקאות לא מורשה/בלתי הולם או לדיווח כספי לא מדויק",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": "מנהל כספים"
     },
     {
       "control_id": "MA1-1_AYALON_5",
@@ -42,7 +46,9 @@
       "process": "ניהול גישה — משתמשי-על ומדיניות סיסמאות",
       "risk_description": "פיקוח על פעולות לא הולמות שבוצעו על ידי משתמשי על לא קיים",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": ""
     },
     {
       "control_id": "MA2-2_AYALON_6",
@@ -56,7 +62,9 @@
       "process": "ניהול גישה — משתמשי-על ומדיניות סיסמאות",
       "risk_description": "הגדרות לא נאותות ומתאימות של מדיניות הסיסמאות במערכת עשויות להוביל לאבטחת סיסמה וכניסה לא נאותה שעשויה להוביל לגישה לא מורשית",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": ""
     },
     {
       "control_id": "MA3-3_AYALON_14",
@@ -70,7 +78,9 @@
       "process": "ניהול גישה — סקר הרשאות תקופתי",
       "risk_description": "בשנת הביקורת היו משתמשים בלתי מורשים שהעונקו עבורם הרשאה לפרופילים גבוהים.",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": ""
     },
     {
       "control_id": "MA1-1_AYALON_10",
@@ -84,7 +94,9 @@
       "process": "ניהול גישה — סקר הרשאות תקופתי",
       "risk_description": "משתמשים בלתי מורשים קיימים הרשאות על לניהול משתמשים והרשאות במערכת",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": ""
     },
     {
       "control_id": "MA1-1_AYALON_11",
@@ -98,7 +110,9 @@
       "process": "ניהול גישה — סקר הרשאות תקופתי",
       "risk_description": "משתמשים בלתי מורשים קיימים הרשאות על לניהול משתמשים והרשאות במערכת",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": ""
     },
     {
       "control_id": "MA1-1_AYALON_12",
@@ -112,7 +126,9 @@
       "process": "ניהול גישה — סקר הרשאות תקופתי",
       "risk_description": "משתמשים בלתי מורשים בעלי הרשאות לניהול שינוי change documents",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": ""
     },
     {
       "control_id": "MA1-1_AYALON_16",
@@ -126,7 +142,9 @@
       "process": "ניהול גישה — סקר הרשאות תקופתי",
       "risk_description": "משתמשים לא מורשים תהיה לה גישה ישירה לבסיס הנתונים לשינויים לא מורשים.",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": ""
     },
     {
       "control_id": "MA1-1_AYALON_43",
@@ -140,7 +158,9 @@
       "process": "ניהול גישה — סקר הרשאות תקופתי",
       "risk_description": "משתמשים לא מורשים יעבירו  שינויים לא מורשים או לא בדוקים לסביבת הייצור.",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": "מנהל כספים"
     },
     {
       "control_id": "MA1-1_AYALON_45",
@@ -154,7 +174,9 @@
       "process": "ניהול גישה — סקר הרשאות תקופתי",
       "risk_description": "משתמשים שיש Debug בPRD מאפשר להם לעבור על חלקים מהקוד (למשל AUTHORITY-CHECK) ולשנות את ערכי השדות משמעות הדבר היא שכמעט כל בדיקות ההרשאה חסרות תועלת, שכן ניתן לעקוף אותן או לשנות את הקוד.",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": ""
     },
     {
       "control_id": "MA1-1_AYALON_67",
@@ -168,7 +190,9 @@
       "process": "ניהול גישה — סקר הרשאות תקופתי",
       "risk_description": "משתמשים לא מורשים לעדכון ג'ובים קריטיים לFPSL וIFRS17 יבצעו עדכונים (מחיקה, יצירה, שינוי) לא מורשים",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": ""
     },
     {
       "control_id": "MA5.1-13_AYALON_24",
@@ -182,7 +206,9 @@
       "process": "ניהול גישה — Joiners / Movers / Leavers",
       "risk_description": "משתמש חדש יוקם והרשאותיו ישויכו שלא בהתאם לצורך",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": "מנהל כספים"
     },
     {
       "control_id": "MA5.3-13_AYALON_25",
@@ -196,7 +222,9 @@
       "process": "ניהול גישה — Joiners / Movers / Leavers",
       "risk_description": "משתמש קיים במערכת  והרשאותיו ישויכו/יעדוכנו שלא בהתאם לצורך",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": "מנהל כספים"
     },
     {
       "control_id": "MA7-17_AYALON_30",
@@ -210,7 +238,9 @@
       "process": "ניהול גישה — סקר הרשאות תקופתי",
       "risk_description": "משתמשים בסביבת ה- הייצור  (IT ועסקי) אינם מורשים ואינם מתאימים.",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": "מנהל כספים"
     },
     {
       "control_id": "MC5-23_AYALON_48",
@@ -224,7 +254,9 @@
       "process": "ניהול שינויים — הפרדת סביבות",
       "risk_description": "הגדרות מערכת להעברת שינויים בין סביבות אינה מוגדרת ואינה חסומה לשינויים ישירים בתוכניות בייצור לא מורשים או לא בדוקים לסביבת הייצור.",
       "test_steps_override": "",
-      "notes": ""
+      "notes": "",
+      "it_owner_role": "מנהל מערכת SAP",
+      "business_owner_role": "מנהל כספים"
     }
   ]
 }

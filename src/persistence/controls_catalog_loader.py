@@ -29,6 +29,8 @@ _MERGEABLE_FIELDS = (
     "risk_description",
     "test_steps_override",
     "notes",
+    "it_owner_role",
+    "business_owner_role",
 )
 
 # Fields that identify and categorise a control (read-only from catalog perspective).
