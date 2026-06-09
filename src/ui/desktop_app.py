@@ -683,6 +683,7 @@ class ValidationDesktopApp(QMainWindow):
         "password_policy_defaults": set(),
         "file_mappings": set(),
         "inactive_days_threshold": set(),
+        "role_email_mapping": set(),
     }
 
     def __init__(self, base_dir: Path | None = None) -> None:
@@ -1012,11 +1013,18 @@ class ValidationDesktopApp(QMainWindow):
         self.audit_export_button.clicked.connect(lambda: self.export_audit_findings_to_excel(open_after_export=True))
         self.analysis_layout.addWidget(self.audit_export_button, 0, Qt.AlignmentFlag.AlignRight)
 
+        self.send_findings_email_button = QPushButton(self.format_ui_rtl_text("שלח ממצאים לאחראים"))
+        self.send_findings_email_button.setToolTip(self.format_ui_rtl_text(
+            "פותח טיוטת Outlook לכל אחראי IT / עסקי שהוגדר לבקרות עם ממצאים, עם נייר העבודה מצורף"
+        ))
+        self.send_findings_email_button.clicked.connect(self._send_findings_by_email)
+        self.analysis_layout.addWidget(self.send_findings_email_button, 0, Qt.AlignmentFlag.AlignRight)
+
         self.audit_summary_group = QGroupBox(self.format_ui_rtl_text("ממצאי ביקורת כללי - ריכוז"))
         self.audit_summary_group.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         audit_summary_layout = QVBoxLayout(self.audit_summary_group)
         audit_summary_layout.setContentsMargins(8, 14, 8, 8)
-        self.audit_summary_table = QTableWidget(0, 11)
+        self.audit_summary_table = QTableWidget(0, 12)
         self.audit_summary_table.setItemDelegate(_RightAlignDelegate(self.audit_summary_table))
         self.audit_summary_table.setHorizontalHeaderLabels([
             self.format_rtl_text("מזהה בקרה"),
@@ -1026,6 +1034,7 @@ class ValidationDesktopApp(QMainWindow):
             self.format_rtl_text("רשומות עם ממצא"),
             self.format_rtl_text("סהכ רשומות"),
             self.format_rtl_text("נייר עבודה"),
+            self.format_rtl_text("שלח מייל"),
             self.format_rtl_text("סביבת עבודה"),
             self.format_rtl_text("קובץ מקור"),
             self.format_rtl_text("תאריך הפקה"),
@@ -1036,8 +1045,9 @@ class ValidationDesktopApp(QMainWindow):
         _audit_summary_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         _audit_summary_hdr.setStretchLastSection(False)
         self.audit_summary_table.setColumnWidth(1, 200)  # סוג בדיקה
-        self.audit_summary_table.setColumnWidth(6, 90)   # נייר עבודה
-        self.audit_summary_table.setColumnWidth(10, 220) # תיאור בדיקה
+        self.audit_summary_table.setColumnWidth(6, 70)   # נייר עבודה
+        self.audit_summary_table.setColumnWidth(7, 70)   # שלח מייל
+        self.audit_summary_table.setColumnWidth(11, 220) # תיאור בדיקה
         self.audit_summary_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.audit_summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.audit_summary_table.setAlternatingRowColors(True)
@@ -1922,12 +1932,12 @@ class ValidationDesktopApp(QMainWindow):
 
         self.controls_catalog_table = QTableWidget()
         self.controls_catalog_table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.controls_catalog_table.setColumnCount(7)
+        self.controls_catalog_table.setColumnCount(9)
         # Use setHorizontalHeaderItem (not setHorizontalHeaderLabels) so we can
         # explicitly force AlignRight — setHorizontalHeaderLabels creates items
         # with AlignLeft by default, which overrides setDefaultAlignment().
         for _col, _lbl in enumerate(
-            ["מזהה בקרה", "שם הבקרה", "קטגוריה", "תת-קטגוריה", "תהליך", "רמת סיכון", "בסקופ"]
+            ["מזהה בקרה", "שם הבקרה", "קטגוריה", "תת-קטגוריה", "תהליך", "רמת סיכון", "בסקופ", "אחראי IT", "אחראי עסקי"]
         ):
             _hi = QTableWidgetItem(self.format_rtl_text(_lbl))
             _hi.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
@@ -1935,19 +1945,19 @@ class ValidationDesktopApp(QMainWindow):
         self.controls_catalog_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.controls_catalog_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.controls_catalog_table.setAlternatingRowColors(True)
+        self.controls_catalog_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         hdr = self.controls_catalog_table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive)
-        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        self.controls_catalog_table.setColumnWidth(0, 220)
-        self.controls_catalog_table.setColumnWidth(2, 160)
-        self.controls_catalog_table.setColumnWidth(3, 200)
-        self.controls_catalog_table.setColumnWidth(5, 90)
-        self.controls_catalog_table.setColumnWidth(6, 70)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hdr.setStretchLastSection(False)
+        self.controls_catalog_table.setColumnWidth(0, 220)  # מזהה בקרה
+        self.controls_catalog_table.setColumnWidth(1, 260)  # שם הבקרה
+        self.controls_catalog_table.setColumnWidth(2, 160)  # קטגוריה
+        self.controls_catalog_table.setColumnWidth(3, 200)  # תת-קטגוריה
+        self.controls_catalog_table.setColumnWidth(4, 260)  # תהליך
+        self.controls_catalog_table.setColumnWidth(5, 90)   # רמת סיכון
+        self.controls_catalog_table.setColumnWidth(6, 70)   # בסקופ
+        self.controls_catalog_table.setColumnWidth(7, 150)  # אחראי IT
+        self.controls_catalog_table.setColumnWidth(8, 150)  # אחראי עסקי
         self.controls_catalog_table.verticalHeader().setVisible(False)
         self.controls_catalog_table.setItemDelegate(_RightAlignDelegate(self.controls_catalog_table))
         self.controls_catalog_table.setToolTip(
@@ -2031,6 +2041,8 @@ class ValidationDesktopApp(QMainWindow):
                 QBrush(QColor("#1a7a1a") if in_scope else QColor("#c00000"))
             )
             table.setItem(row_index, 6, scope_item)
+            table.setItem(row_index, 7, _item(str(defn.get("it_owner_role", "") or "")))
+            table.setItem(row_index, 8, _item(str(defn.get("business_owner_role", "") or "")))
 
         table.resizeRowsToContents()
 
@@ -2141,6 +2153,20 @@ class ValidationDesktopApp(QMainWindow):
         in_scope_cb.setChecked(raw_in_scope.lower() != "false")
         form_layout.addRow("", in_scope_cb)
 
+        it_owner_combo = QComboBox()
+        it_owner_combo.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        it_owner_combo.addItems(["", "מנהל מערכת SAP", "מנהל תשתיות SAP"])
+        current_it = str(defn.get("it_owner_role", str(catalog_entry.get("it_owner_role", "") or "")) or "")
+        it_owner_combo.setCurrentText(current_it)
+        form_layout.addRow(self.format_ui_rtl_text("אחראי בקרה IT:"), it_owner_combo)
+
+        biz_owner_combo = QComboBox()
+        biz_owner_combo.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        biz_owner_combo.addItems(["", "מנהל כספים"])
+        current_biz = str(defn.get("business_owner_role", str(catalog_entry.get("business_owner_role", "") or "")) or "")
+        biz_owner_combo.setCurrentText(current_biz)
+        form_layout.addRow(self.format_ui_rtl_text("אחראי בקרה עסקי:"), biz_owner_combo)
+
         dlg_layout.addWidget(scroll, 1)
 
         btn_box = QDialogButtonBox()
@@ -2162,6 +2188,8 @@ class ValidationDesktopApp(QMainWindow):
         defn["description"] = desc_edit.toPlainText().strip()
         defn["risk_description"] = risk_desc_edit.toPlainText().strip()
         defn["in_scope"] = "true" if in_scope_cb.isChecked() else "false"
+        defn["it_owner_role"] = it_owner_combo.currentText().strip()
+        defn["business_owner_role"] = biz_owner_combo.currentText().strip()
 
         # Update or create catalog entry
         new_entry: dict[str, Any] = dict(catalog_entry) if catalog_entry else {"control_id": control_id}
@@ -2172,6 +2200,8 @@ class ValidationDesktopApp(QMainWindow):
         new_entry["risk_description"] = defn["risk_description"]
         new_entry["notes"] = notes_edit.toPlainText().strip()
         new_entry["in_scope"] = in_scope_cb.isChecked()
+        new_entry["it_owner_role"] = defn["it_owner_role"]
+        new_entry["business_owner_role"] = defn["business_owner_role"]
         new_entry.setdefault("category", str(defn.get("category", "")))
         new_entry.setdefault("sub_category", str(catalog_entry.get("sub_category", "")))
         new_entry.setdefault("risk_level", str(defn.get("risk_level", "")))
@@ -2361,6 +2391,12 @@ class ValidationDesktopApp(QMainWindow):
         self.system_settings_widgets["authorized_developers"] = dev_table
         self.system_settings_sections["authorized_developers"] = dev_group
         self.system_settings_unavailable_labels["authorized_developers"] = dev_unavailable_label
+
+        role_email_group, role_email_table, role_email_unavailable_label = self._build_role_email_section()
+        self.settings_layout.addWidget(role_email_group)
+        self.role_email_table = role_email_table
+        self.system_settings_sections["role_email_mapping"] = role_email_group
+        self.system_settings_unavailable_labels["role_email_mapping"] = role_email_unavailable_label
 
         generic_users_group = self._add_settings_text_list_section(
             "generic_users",
@@ -2674,8 +2710,6 @@ class ValidationDesktopApp(QMainWindow):
     def _default_system_settings(self) -> dict[str, Any]:
         return {
             "work_environment": "FPP",
-            "business_reviewer_email": "",
-            "technical_reviewer_email": "",
             "generic_users": ["SAP", "DDIC", "TMSADM", "SAPCPIC"],
             "authorized_stms_users": [],
             "authorized_developers": [],
@@ -2711,6 +2745,7 @@ class ValidationDesktopApp(QMainWindow):
                 for slot_key, metadata in self.SLOT_DEFINITIONS.items()
             },
             "slot_ipe_control_mapping": {k: list(v) for k, v in SLOT_DEFAULT_CONTROLS.items()},
+            "role_email_mapping": [],
         }
 
     def _current_system_settings(self) -> dict[str, Any]:
@@ -2782,6 +2817,22 @@ class ValidationDesktopApp(QMainWindow):
                         dev_table.setItem(row, 0, QTableWidgetItem(mandt))
                         dev_table.setItem(row, 1, QTableWidgetItem(bname))
 
+        role_email_list = settings.get("role_email_mapping", [])
+        if hasattr(self, "role_email_table") and isinstance(self.role_email_table, QTableWidget):
+            self.role_email_table.setRowCount(0)
+            if isinstance(role_email_list, list):
+                for entry in role_email_list:
+                    if isinstance(entry, dict):
+                        role = str(entry.get("role", "")).strip()
+                        email = str(entry.get("email", "")).strip()
+                        if role or email:
+                            self._append_role_email_row(self.role_email_table)
+                            loaded_row = self.role_email_table.rowCount() - 1
+                            combo = self.role_email_table.cellWidget(loaded_row, 0)
+                            if isinstance(combo, QComboBox):
+                                combo.setCurrentText(role)
+                            self.role_email_table.setItem(loaded_row, 1, QTableWidgetItem(email))
+
         if load_review_period:
             period_cfg = settings.get("user_review_period", {}) if isinstance(settings, dict) else {}
             start_text = str(period_cfg.get("start_date", self._default_extraction_date())).strip()
@@ -2805,13 +2856,6 @@ class ValidationDesktopApp(QMainWindow):
         threshold_widget = self.system_settings_widgets.get("inactive_days_threshold")
         if isinstance(threshold_widget, QLineEdit):
             threshold_widget.setText(str(settings.get("inactive_days_threshold", 90)))
-
-        business_email_widget = self.system_settings_widgets.get("business_reviewer_email")
-        if isinstance(business_email_widget, QLineEdit):
-            business_email_widget.setText(str(settings.get("business_reviewer_email", "")).strip())
-        technical_email_widget = self.system_settings_widgets.get("technical_reviewer_email")
-        if isinstance(technical_email_widget, QLineEdit):
-            technical_email_widget.setText(str(settings.get("technical_reviewer_email", "")).strip())
 
         password_defaults = settings.get("password_policy_defaults", {}) if isinstance(settings, dict) else {}
         if isinstance(password_defaults, dict):
@@ -2886,6 +2930,24 @@ class ValidationDesktopApp(QMainWindow):
                     dev_list.append({"MANDT": m_val, "BNAME": b_val})
         settings["authorized_developers"] = dev_list
 
+        role_email_list: list[dict[str, str]] = []
+        invalid_emails: list[str] = []
+        if hasattr(self, "role_email_table") and isinstance(self.role_email_table, QTableWidget):
+            for row_index in range(self.role_email_table.rowCount()):
+                combo = self.role_email_table.cellWidget(row_index, 0)
+                email_item = self.role_email_table.item(row_index, 1)
+                role_val = combo.currentText().strip() if isinstance(combo, QComboBox) else ""
+                email_val = email_item.text().strip() if email_item else ""
+                if email_val and not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email_val):
+                    invalid_emails.append(email_val)
+                if role_val or email_val:
+                    role_email_list.append({"role": role_val, "email": email_val})
+        if invalid_emails:
+            raise ValueError(
+                "כתובות המייל הבאות אינן תקינות:\n" + "\n".join(f"• {e}" for e in invalid_emails)
+            )
+        settings["role_email_mapping"] = role_email_list
+
         period_start_widget = self.system_settings_widgets.get("user_review_period.start_date")
         period_end_widget = self.system_settings_widgets.get("user_review_period.end_date")
         if isinstance(period_start_widget, QDateEdit) and isinstance(period_end_widget, QDateEdit):
@@ -2907,13 +2969,6 @@ class ValidationDesktopApp(QMainWindow):
         threshold_widget = self.system_settings_widgets.get("inactive_days_threshold")
         if isinstance(threshold_widget, QLineEdit):
             settings["inactive_days_threshold"] = self._safe_int(threshold_widget.text(), 90)
-
-        business_email_widget = self.system_settings_widgets.get("business_reviewer_email")
-        if isinstance(business_email_widget, QLineEdit):
-            settings["business_reviewer_email"] = business_email_widget.text().strip()
-        technical_email_widget = self.system_settings_widgets.get("technical_reviewer_email")
-        if isinstance(technical_email_widget, QLineEdit):
-            settings["technical_reviewer_email"] = technical_email_widget.text().strip()
 
         password_defaults = {}
         for field_name in [
@@ -8397,16 +8452,16 @@ class ValidationDesktopApp(QMainWindow):
             row_index = self.audit_summary_table.rowCount()
             self.audit_summary_table.insertRow(row_index)
             values = build_audit_summary_values(row_data)
-            # Insert values: cols 0..5 directly, then skip col 6 (button), shift cols 6..9 to 7..10
+            # Insert values: cols 0..5 directly, then skip cols 6+7 (buttons), shift cols 6..9 to 8..11
             for value_index, value in enumerate(values):
-                target_col = value_index if value_index < 6 else value_index + 1
+                target_col = value_index if value_index < 6 else value_index + 2
                 item = QTableWidgetItem(self.format_rtl_text(value))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 if value_index == 0:
                     item.setData(Qt.ItemDataRole.UserRole, row_data.get("control_id", ""))
                 self.audit_summary_table.setItem(row_index, target_col, item)
 
-            # Add working-paper export button in column 6 (between סהכ רשומות and סביבת עבודה)
+            # Add working-paper export button in column 6 (between סהכ רשומות and שלח מייל)
             control_id_value = str(row_data.get("control_id", ""))
             wp_button = QPushButton("📄")
             wp_button.setToolTip(self.format_rtl_text("ייצוא נייר עבודה"))
@@ -8415,6 +8470,17 @@ class ValidationDesktopApp(QMainWindow):
                 lambda _checked=False, cid=control_id_value: self._export_control_working_paper(cid)
             )
             self.audit_summary_table.setCellWidget(row_index, 6, wp_button)
+
+            # Add email button in column 7
+            has_findings = int(row_data.get("finding_records", 0)) > 0
+            email_button = QPushButton("📧")
+            email_button.setToolTip(self.format_rtl_text("שלח ממצאים לאחראים"))
+            email_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            email_button.setEnabled(has_findings)
+            email_button.clicked.connect(
+                lambda _checked=False, cid=control_id_value: self._send_control_finding_email(cid)
+            )
+            self.audit_summary_table.setCellWidget(row_index, 7, email_button)
 
         if self.audit_summary_table.rowCount() > 0:
             self.audit_summary_table.selectRow(0)
@@ -8464,18 +8530,23 @@ class ValidationDesktopApp(QMainWindow):
 
         return export_path
 
-    def _export_control_working_paper(self, control_id: str) -> None:
-        """Export a per-control working paper Excel file."""
+    def _export_control_working_paper(self, control_id: str, _silent_output_path: Path | None = None) -> Path | None:
+        """Export a per-control working paper Excel file.
+
+        When *_silent_output_path* is provided the file is saved there directly
+        without showing a save-dialog or a success popup.  Returns the saved path.
+        """
         if not control_id:
-            return
+            return None
         summary_record = self.audit_summary_records.get(control_id)
         if not summary_record:
-            QMessageBox.warning(
-                self,
-                "אין נתונים לייצוא",
-                f"לא נמצאו נתוני בקרה עבור {control_id}.",
-            )
-            return
+            if _silent_output_path is None:
+                QMessageBox.warning(
+                    self,
+                    "אין נתונים לייצוא",
+                    f"לא נמצאו נתוני בקרה עבור {control_id}.",
+                )
+            return None
 
         detail_rows = list(self.audit_details_by_control.get(control_id, []))
         raw_population_rows = list(self.control_to_slot_rows.get(control_id, []))
@@ -8601,14 +8672,17 @@ class ValidationDesktopApp(QMainWindow):
         default_name = f"{safe_id}_working_paper_{timestamp}.xlsx"
         default_path = str(self.config.output_dir / default_name)
 
-        chosen_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "שמירת נייר עבודה",
-            default_path,
-            "Excel Files (*.xlsx)",
-        )
-        if not chosen_path:
-            return
+        if _silent_output_path is not None:
+            chosen_path = str(_silent_output_path)
+        else:
+            chosen_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "שמירת נייר עבודה",
+                default_path,
+                "Excel Files (*.xlsx)",
+            )
+            if not chosen_path:
+                return None
         if not chosen_path.lower().endswith(".xlsx"):
             chosen_path += ".xlsx"
 
@@ -8637,13 +8711,15 @@ class ValidationDesktopApp(QMainWindow):
                 "שגיאה בייצוא",
                 f"שגיאה ביצירת נייר העבודה:\n{exc}",
             )
-            return
+            return None
 
-        QMessageBox.information(
-            self,
-            "הייצוא הושלם",
-            f"נייר העבודה נשמר בהצלחה:\n{chosen_path}",
-        )
+        if _silent_output_path is None:
+            QMessageBox.information(
+                self,
+                "הייצוא הושלם",
+                f"נייר העבודה נשמר בהצלחה:\n{chosen_path}",
+            )
+        return Path(chosen_path)
 
     def _build_audit_detail_dialog_text(self, row_index: int) -> str:
         if row_index < 0 or row_index >= self.audit_detail_table.rowCount():
@@ -9215,13 +9291,13 @@ class ValidationDesktopApp(QMainWindow):
 
     def draft_user_review_email_to_business(self) -> None:
         self._create_outlook_review_draft(
-            recipient_email=self._email_from_settings("business_reviewer_email"),
+            recipient_email=self._get_email_for_role("מנהל כספים"),
             role_label="גורם מהכספים",
         )
 
     def draft_user_review_email_to_technical(self) -> None:
         self._create_outlook_review_draft(
-            recipient_email=self._email_from_settings("technical_reviewer_email"),
+            recipient_email=self._get_email_for_role("מנהל מערכת SAP"),
             role_label="גורם טכני",
         )
 
@@ -9243,6 +9319,289 @@ class ValidationDesktopApp(QMainWindow):
             subprocess.run(["open", str(path)], check=False)
             return
         subprocess.run(["xdg-open", str(path)], check=False)
+
+    # ------------------------------------------------------------------
+    # Control owner helpers
+    # ------------------------------------------------------------------
+
+    def _get_defined_roles(self) -> list[str]:
+        """Return sorted list of role names from role_email_mapping in current settings."""
+        settings = self._current_system_settings()
+        mapping = settings.get("role_email_mapping", [])
+        roles: list[str] = []
+        if isinstance(mapping, list):
+            for entry in mapping:
+                if isinstance(entry, dict):
+                    role = str(entry.get("role", "")).strip()
+                    if role and role not in roles:
+                        roles.append(role)
+        return sorted(roles)
+
+    def _get_email_for_role(self, role: str) -> str:
+        """Lookup email address for a given role name from system settings.
+
+        Returns empty string when not found.
+        """
+        if not role:
+            return ""
+        settings = self._current_system_settings()
+        mapping = settings.get("role_email_mapping", [])
+        if isinstance(mapping, list):
+            for entry in mapping:
+                if isinstance(entry, dict) and str(entry.get("role", "")).strip() == role:
+                    return str(entry.get("email", "")).strip()
+        return ""
+
+    def _build_role_email_section(self) -> tuple[QGroupBox, QTableWidget, QLabel]:
+        """Build the role → email mapping settings section."""
+        group, layout, unavailable_label = self._build_settings_group(
+            "מיפוי תפקידים לכתובות מייל",
+            "הגדר תפקידים וכתובות המייל שלהם. "
+            "התפקידים ישמשו לשיוך אחראי IT / עסקי לכל בקרה, לשליחת ממצאים אוטומטית, "
+            "וגם לשליחת דוחות סקירת משתמשים לגורמים הרלוונטיים.",
+        )
+        table = QTableWidget(0, 2)
+        table.setItemDelegate(_RightAlignDelegate(table))
+        table.setHorizontalHeaderLabels(["שם תפקיד", "כתובת מייל"])
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.setMinimumHeight(140)
+        layout.addWidget(table)
+
+        control_row = QWidget()
+        control_layout = QHBoxLayout(control_row)
+        control_layout.setContentsMargins(0, 0, 0, 0)
+        control_layout.setSpacing(8)
+        control_layout.addStretch(1)
+
+        add_button = QPushButton(self.format_ui_rtl_text("הוסף שורה"))
+        remove_button = QPushButton(self.format_ui_rtl_text("הסר שורה"))
+        add_button.clicked.connect(lambda: self._append_role_email_row(table))
+        remove_button.clicked.connect(lambda: self._remove_selected_super_user_row(table))
+        control_layout.addWidget(remove_button)
+        control_layout.addWidget(add_button)
+        layout.addWidget(control_row)
+
+        return group, table, unavailable_label
+
+    def _append_role_email_row(self, table: QTableWidget) -> None:
+        row = table.rowCount()
+        table.insertRow(row)
+        role_combo = QComboBox()
+        role_combo.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        role_combo.addItems(["", "מנהל מערכת SAP", "מנהל תשתיות SAP", "מנהל כספים"])
+        table.setCellWidget(row, 0, role_combo)
+        table.setItem(row, 1, QTableWidgetItem(""))
+
+    # ------------------------------------------------------------------
+    # Send findings by email (Outlook draft via win32com)
+    # ------------------------------------------------------------------
+
+    def _send_control_finding_email(self, control_id: str) -> None:
+        """Create a single Outlook draft for one control, addressed to its IT and business owners."""
+        defn = AUDIT_CONTROL_DEFINITIONS.get(control_id, {})
+        it_role = str(defn.get("it_owner_role", "") or "").strip()
+        biz_role = str(defn.get("business_owner_role", "") or "").strip()
+        it_email = self._get_email_for_role(it_role)
+        biz_email = self._get_email_for_role(biz_role)
+
+        recipients: list[str] = []
+        for em in (it_email, biz_email):
+            if em and em not in recipients:
+                recipients.append(em)
+
+        if not recipients:
+            roles_info = ""
+            if it_role:
+                roles_info += f"\n\u2022 אחראי IT: {it_role}"
+            if biz_role:
+                roles_info += f"\n\u2022 אחראי עסקי: {biz_role}"
+            QMessageBox.warning(
+                self,
+                self.format_ui_rtl_text("לא הוגדרו כתובות מייל"),
+                self.format_ui_rtl_text(
+                    f"לבקרה {control_id} לא הוגדרו כתובות מייל לאחראים."
+                    + (f"{roles_info}\n\nהגדר מיילים בהגדרות המערכת." if roles_info else "\n\nשייך אחראים לבקרה ברשימת הבקרות.")
+                ),
+            )
+            return
+
+        wp_dir = self.config.output_dir / "working_papers"
+        wp_candidates = list(wp_dir.glob(f"{control_id}*.xlsx")) if wp_dir.exists() else []
+        wp_path: Path | None = wp_candidates[0] if wp_candidates else None
+
+        # Auto-export working paper silently if it doesn't exist yet
+        if wp_path is None or not wp_path.exists():
+            wp_dir.mkdir(parents=True, exist_ok=True)
+            safe_id = re.sub(r"[\\/*?:\[\]&]", "_", control_id)
+            auto_path = wp_dir / f"{safe_id}_working_paper.xlsx"
+            wp_path = self._export_control_working_paper(control_id, _silent_output_path=auto_path)
+
+        work_env = self._current_work_environment_label()
+        check_type = str(defn.get("check_type", control_id))
+        subject = f"ממצאי ביקורת SAP ITGC — {check_type} — {work_env}"
+
+        try:
+            import win32com.client  # type: ignore[import]
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            mail = outlook.CreateItem(0)  # olMailItem
+            mail.To = "; ".join(recipients)
+            mail.Subject = subject
+            mail.Body = (
+                f"שלום,\n\n"
+                f"מצורף נייר עבודה לבקרה שנמצאו בה ממצאים:\n\n"
+                f"• {check_type}\n\n"
+                f"סביבת עבודה: {work_env}\n\n"
+                f"בברכה"
+            )
+            if wp_path and wp_path.exists():
+                mail.Attachments.Add(str(wp_path.resolve()))
+            mail.Display()  # open draft, do NOT auto-send
+            QMessageBox.information(
+                self,
+                self.format_ui_rtl_text("טיוטאת מייל נוצרה"),
+                self.format_ui_rtl_text(
+                    f"נוצרה טיוטה עבור {control_id}\n"
+                    f"נמענים: {', '.join(recipients)}"
+                ),
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                self.format_ui_rtl_text("שגיאת מייל"),
+                self.format_ui_rtl_text(f"לא ניתן ליצור טיוטא: {exc}"),
+            )
+
+    def _send_findings_by_email(self) -> None:
+        """Collect all controls with findings, group by owner email, open Outlook drafts."""
+        # --- collect finding controls ---
+        all_summary_sources: list[dict[str, dict[str, Any]]] = [
+            self.audit_summary_records,
+            self.permissions_summary_records,
+            self.user_mgmt_summary_records,
+            self.auth_mgmt_summary_records,
+            self.rscdok99_summary_records,
+            self.data_mgmt_summary_records,
+            self.transport_summary_records,
+            self.debug_summary_records,
+            self.job_mgmt_summary_records,
+        ]
+        finding_control_ids: list[str] = []
+        for src in all_summary_sources:
+            for record_key, record in src.items():
+                if int(record.get("finding_records", 0)) > 0:
+                    ctrl_id = str(record.get("control_id", "")).strip()
+                    if ctrl_id and ctrl_id not in finding_control_ids:
+                        finding_control_ids.append(ctrl_id)
+
+        if not finding_control_ids:
+            QMessageBox.information(
+                self,
+                self.format_ui_rtl_text("אין ממצאים"),
+                self.format_ui_rtl_text("לא נמצאו בקרות עם ממצאים. הרץ ניתוח תחילה."),
+            )
+            return
+
+        # --- map control_id → working paper path ---
+        wp_dir = self.config.output_dir / "working_papers"
+
+        # --- build email_address → [(control_id, wp_path)] ---
+        email_to_controls: dict[str, list[tuple[str, Path | None]]] = {}
+
+        for ctrl_id in finding_control_ids:
+            defn = AUDIT_CONTROL_DEFINITIONS.get(ctrl_id, {})
+            it_role = str(defn.get("it_owner_role", "") or "").strip()
+            biz_role = str(defn.get("business_owner_role", "") or "").strip()
+            it_email = self._get_email_for_role(it_role)
+            biz_email = self._get_email_for_role(biz_role)
+
+            # Collect unique valid emails for this control
+            emails: list[str] = []
+            for em in {it_email, biz_email}:
+                if em and em not in emails:
+                    emails.append(em)
+
+            # Find working paper file
+            wp_candidates = list(wp_dir.glob(f"{ctrl_id}*.xlsx")) if wp_dir.exists() else []
+            wp_path: Path | None = wp_candidates[0] if wp_candidates else None
+
+            for em in emails:
+                email_to_controls.setdefault(em, []).append((ctrl_id, wp_path))
+
+        if not email_to_controls:
+            # No emails mapped — show informational list
+            lines = [f"• {cid}" for cid in finding_control_ids]
+            QMessageBox.information(
+                self,
+                self.format_ui_rtl_text("לא הוגדרו כתובות מייל"),
+                self.format_ui_rtl_text(
+                    "הבקרות הבאות נמצאו עם ממצאים אך לא הוגדרו להן אחראים עם כתובות מייל:\n\n"
+                    + "\n".join(lines)
+                    + "\n\nהגדר תפקידים ומיילים בהגדרות המערכת ושייך אחראים לבקרות ברשימת הבקרות."
+                ),
+            )
+            return
+
+        # --- create Outlook drafts ---
+        drafts_created = 0
+        errors: list[str] = []
+
+        try:
+            import win32com.client  # type: ignore[import]
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            use_outlook = True
+        except Exception:
+            use_outlook = False
+
+        work_env = self._current_work_environment_label()
+        subject_prefix = f"ממצאי ביקורת SAP ITGC — {work_env}"
+
+        if use_outlook:
+            for email_addr, controls_list in email_to_controls.items():
+                try:
+                    mail = outlook.CreateItem(0)  # olMailItem
+                    mail.To = email_addr
+                    mail.Subject = subject_prefix
+                    ctrl_lines = "\n".join(f"• {cid}" for cid, _ in controls_list)
+                    mail.Body = (
+                        f"שלום,\n\n"
+                        f"מצורפים ניירות עבודה לבקרות הבאות שנמצאו בהן ממצאים:\n\n"
+                        f"{ctrl_lines}\n\n"
+                        f"סביבת עבודה: {work_env}\n\n"
+                        f"בברכה"
+                    )
+                    for _ctrl_id, wp_path in controls_list:
+                        if wp_path and wp_path.exists():
+                            mail.Attachments.Add(str(wp_path.resolve()))
+                    mail.Display()  # open draft for user review, do NOT call Send()
+                    drafts_created += 1
+                except Exception as exc:
+                    errors.append(f"{email_addr}: {exc}")
+        else:
+            # Fallback: display summary dialog
+            lines = []
+            for email_addr, controls_list in email_to_controls.items():
+                ctrl_names = ", ".join(cid for cid, _ in controls_list)
+                lines.append(f"• {email_addr} ← {ctrl_names}")
+            QMessageBox.information(
+                self,
+                self.format_ui_rtl_text("שליחת מייל — Outlook לא זמין"),
+                self.format_ui_rtl_text(
+                    "win32com / Outlook אינו זמין בסביבה זו.\n"
+                    "ניתן לשלוח את הממצאים ידנית לנמענים הבאים:\n\n"
+                    + "\n".join(lines)
+                ),
+            )
+            return
+
+        summary = self.format_ui_rtl_text(
+            f"הוכנו {drafts_created} טיוטות ב-Outlook.\n"
+            "בדוק כל טיוטה לפני שליחה."
+        )
+        if errors:
+            summary += "\n\nשגיאות:\n" + "\n".join(errors)
+        QMessageBox.information(self, self.format_ui_rtl_text("טיוטות נוצרו"), summary)
 
 
 def launch_desktop_app() -> None:
