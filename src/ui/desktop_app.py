@@ -2392,12 +2392,6 @@ class ValidationDesktopApp(QMainWindow):
         self.system_settings_sections["authorized_developers"] = dev_group
         self.system_settings_unavailable_labels["authorized_developers"] = dev_unavailable_label
 
-        role_email_group, role_email_table, role_email_unavailable_label = self._build_role_email_section()
-        self.settings_layout.addWidget(role_email_group)
-        self.role_email_table = role_email_table
-        self.system_settings_sections["role_email_mapping"] = role_email_group
-        self.system_settings_unavailable_labels["role_email_mapping"] = role_email_unavailable_label
-
         generic_users_group = self._add_settings_text_list_section(
             "generic_users",
             "משתמשים גנריים",
@@ -2472,32 +2466,11 @@ class ValidationDesktopApp(QMainWindow):
         self.system_settings_sections["inactive_days_threshold"] = threshold_group
         self.system_settings_unavailable_labels["inactive_days_threshold"] = threshold_unavailable_label
 
-        email_group, email_layout, email_unavailable_label = self._build_settings_group(
-            "הגדרות תפוצת מייל",
-            "הגדר כתובות מייל של גורם מהכספים וגורם טכני עבור יצירת טיוטות שליחת דוח סקירת משתמשים.",
-        )
-        email_form = QFormLayout()
-        email_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        email_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-
-        business_email_widget = QLineEdit()
-        business_email_widget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        business_email_widget.setPlaceholderText("business.reviewer@company.com")
-        technical_email_widget = QLineEdit()
-        technical_email_widget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        technical_email_widget.setPlaceholderText("technical.reviewer@company.com")
-
-        self.system_settings_widgets["business_reviewer_email"] = business_email_widget
-        self.system_settings_widgets["technical_reviewer_email"] = technical_email_widget
-
-        email_form.addRow("כתובת מייל גורם מהכספים", business_email_widget)
-        email_form.addRow("כתובת מייל גורם טכני", technical_email_widget)
-        email_layout.addLayout(email_form)
-        self.settings_layout.addWidget(email_group)
-        self.system_settings_sections["business_reviewer_email"] = email_group
-        self.system_settings_sections["technical_reviewer_email"] = email_group
-        self.system_settings_unavailable_labels["business_reviewer_email"] = email_unavailable_label
-        self.system_settings_unavailable_labels["technical_reviewer_email"] = email_unavailable_label
+        role_email_group, role_email_table, role_email_unavailable_label = self._build_role_email_section()
+        self.settings_layout.addWidget(role_email_group)
+        self.role_email_table = role_email_table
+        self.system_settings_sections["role_email_mapping"] = role_email_group
+        self.system_settings_unavailable_labels["role_email_mapping"] = role_email_unavailable_label
 
         # ---- IPE Evidence Mapping Table ----
         ipe_group = QGroupBox(self.format_ui_rtl_text("מיפוי ראיות IPE לבקרות"))
@@ -2944,7 +2917,7 @@ class ValidationDesktopApp(QMainWindow):
                     role_email_list.append({"role": role_val, "email": email_val})
         if invalid_emails:
             raise ValueError(
-                "כתובות המייל הבאות אינן תקינות:\n" + "\n".join(f"• {e}" for e in invalid_emails)
+                "כתובות המייל הבאות אינן תקינות:\n" + "\n".join(f"\u2022 {e}" for e in invalid_emails)
             )
         settings["role_email_mapping"] = role_email_list
 
@@ -9227,10 +9200,6 @@ class ValidationDesktopApp(QMainWindow):
             f"יובאו בהצלחה {imported_count} שורות מקובץ הסקירה.{notes_warn}{missing_warn}",
         )
 
-    def _email_from_settings(self, settings_key: str) -> str:
-        settings = self._current_system_settings()
-        return str(settings.get(settings_key, "")).strip()
-
     @staticmethod
     def _validate_email_address(email_value: str) -> bool:
         normalized = email_value.strip()
@@ -9448,12 +9417,14 @@ class ValidationDesktopApp(QMainWindow):
             mail = outlook.CreateItem(0)  # olMailItem
             mail.To = "; ".join(recipients)
             mail.Subject = subject
-            mail.Body = (
-                f"שלום,\n\n"
-                f"מצורף נייר עבודה לבקרה שנמצאו בה ממצאים:\n\n"
-                f"• {check_type}\n\n"
-                f"סביבת עבודה: {work_env}\n\n"
-                f"בברכה"
+            mail.HTMLBody = (
+                "<div dir='rtl' style='text-align:right; font-family:Arial, sans-serif; font-size:12pt;'>"
+                "<p>שלום,</p>"
+                "<p>מצורף נייר עבודה לבקרה שנמצאו בה ממצאים:</p>"
+                f"<p>&#8226; {check_type}</p>"
+                f"<p>סביבת עבודה: {work_env}</p>"
+                "<p>בברכה</p>"
+                "</div>"
             )
             if wp_path and wp_path.exists():
                 mail.Attachments.Add(str(wp_path.resolve()))
@@ -9563,13 +9534,15 @@ class ValidationDesktopApp(QMainWindow):
                     mail = outlook.CreateItem(0)  # olMailItem
                     mail.To = email_addr
                     mail.Subject = subject_prefix
-                    ctrl_lines = "\n".join(f"• {cid}" for cid, _ in controls_list)
-                    mail.Body = (
-                        f"שלום,\n\n"
-                        f"מצורפים ניירות עבודה לבקרות הבאות שנמצאו בהן ממצאים:\n\n"
-                        f"{ctrl_lines}\n\n"
-                        f"סביבת עבודה: {work_env}\n\n"
-                        f"בברכה"
+                    ctrl_items_html = "".join(f"<p>&#8226; {cid}</p>" for cid, _ in controls_list)
+                    mail.HTMLBody = (
+                        "<div dir='rtl' style='text-align:right; font-family:Arial, sans-serif; font-size:12pt;'>"
+                        "<p>שלום,</p>"
+                        "<p>מצורפים ניירות עבודה לבקרות הבאות שנמצאו בהן ממצאים:</p>"
+                        f"{ctrl_items_html}"
+                        f"<p>סביבת עבודה: {work_env}</p>"
+                        "<p>בברכה</p>"
+                        "</div>"
                     )
                     for _ctrl_id, wp_path in controls_list:
                         if wp_path and wp_path.exists():
