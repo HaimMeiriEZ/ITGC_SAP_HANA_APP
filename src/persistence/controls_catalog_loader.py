@@ -9,9 +9,6 @@ At application startup, call ``load_and_apply_catalog`` to:
   2. Merge the user-editable fields into AUDIT_CONTROL_DEFINITIONS in-place
      (so the rest of the application reads them transparently).
 
-The legacy CSV loader (controls_metadata_loader) is still tried AFTER this so
-that any hand-edited CSV can still override individual fields.
-
 Excel import/export (Phase 2) is scaffolded but not yet wired into the UI.
 """
 from __future__ import annotations

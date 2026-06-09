@@ -52,10 +52,6 @@ from src.config import AppConfig, CONTROL_GROUPS, CONTROL_LABELS, SLOT_DEFAULT_C
 from src.models.validation_result import ValidationIssue
 from src.pipeline import process_file
 from src.persistence.ui_state_repository import IpeEvidenceRepository, UiStateRepository
-from src.persistence.controls_metadata_loader import (
-    apply_metadata_to_definitions,
-    load_controls_metadata_csv,
-)
 from src.persistence.controls_catalog_loader import (
     apply_catalog_to_definitions,
     export_catalog_to_excel,
@@ -712,14 +708,6 @@ class ValidationDesktopApp(QMainWindow):
         except Exception:  # pragma: no cover - never block startup
             self._controls_catalog = []
 
-        # Legacy CSV override (data/output/controls_metadata.csv) — applied after
-        # catalog so user CSV values take highest precedence.
-        try:
-            csv_metadata = load_controls_metadata_csv(self.config.output_dir)
-            if csv_metadata:
-                apply_metadata_to_definitions(csv_metadata, AUDIT_CONTROL_DEFINITIONS)
-        except Exception:  # pragma: no cover - never block startup
-            pass
         self.report_path: Path | None = None
         self.log_export_path: Path | None = None
         self.slot_widgets: dict[str, dict[str, Any]] = {}
@@ -1231,8 +1219,8 @@ class ValidationDesktopApp(QMainWindow):
         self.settings_tab_layout.addWidget(self.settings_scroll)
 
         self.tabs.addTab(self._build_controls_catalog_tab(), self.format_rtl_text("רשימת בקרות לניתוח"))
-        self.tabs.addTab(self.intake_tab, self.format_rtl_text("קליטת קבצים"))
         self.tabs.addTab(self.settings_tab, self.format_rtl_text("הגדרות מערכת לביקורת"))
+        self.tabs.addTab(self.intake_tab, self.format_rtl_text("קליטת קבצים"))
         self.tabs.addTab(self.review_tab, self.format_rtl_text("סקירת דוח משתמשים"))
         self.tabs.addTab(self.permissions_review_tab, self.format_rtl_text("סקירת הרשאות"))
         self.tabs.addTab(self.analysis_tab, self.format_rtl_text("ביצוע ניתוח לביקורת"))
