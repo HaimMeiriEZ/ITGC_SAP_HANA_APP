@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 import copy
+import uuid
 
 from typing import Any, Sequence
 from datetime import datetime, date
@@ -51,6 +52,7 @@ from PySide6.QtWidgets import (
 from src.config import AppConfig, CONTROL_GROUPS, CONTROL_LABELS, SLOT_DEFAULT_CONTROLS
 from src.models.validation_result import ValidationIssue
 from src.pipeline import process_file
+from src.persistence.audit_activity_logger import UserReviewActivityLogger
 from src.persistence.ui_state_repository import IpeEvidenceRepository, UiStateRepository
 from src.persistence.controls_catalog_loader import (
     apply_catalog_to_definitions,
@@ -473,7 +475,7 @@ class ValidationDesktopApp(QMainWindow):
         {"field": "SECURITY_POLICY", "formal": "מדיניות אבטחה", "technical": "SECURITY_POLICY", "source": "USR02", "default": True, "width": 160},
         {"field": "REVIEW_STATUS", "formal": "בוצעה סקירה", "technical": "REVIEW_STATUS", "source": "סוקר", "default": True, "width": 165},
         {"field": "FINDINGS_DESCRIPTION", "formal": "תיאור ממצאים", "technical": "FINDINGS_DESCRIPTION", "source": "מערכת", "default": True, "width": 280},
-        {"field": "TECH_REVIEW_NOTES", "formal": "הערות סוקר גורם טכני", "technical": "TECH_REVIEW_NOTES", "source": "סוקר טכני", "default": True, "width": 240},
+        {"field": "TECH_REVIEW_NOTES", "formal": "הערות סוקר גורם טכנולוגי", "technical": "TECH_REVIEW_NOTES", "source": "סוקר טכני", "default": True, "width": 240},
         {"field": "BUS_REVIEW_NOTES", "formal": "הערות סוקר גורם מהכספים", "technical": "BUS_REVIEW_NOTES", "source": "סוקר מהכספים", "default": True, "width": 240},
         {"field": "LAST_IMPORT_DATE", "formal": "עודכן לאחרונה", "technical": "LAST_IMPORT_DATE", "source": "ייבוא סקירה", "default": True, "width": 145},
         {"field": "UFLAG", "formal": "קוד נעילה", "technical": "UFLAG", "source": "USR02", "default": False, "width": 100},
@@ -696,6 +698,10 @@ class ValidationDesktopApp(QMainWindow):
         self.ipe_evidence_data: dict[str, list[dict[str, Any]]] = {}
         self.config.input_dir.mkdir(parents=True, exist_ok=True)
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
+        self.user_review_activity_logger = UserReviewActivityLogger(
+            self.ui_state_repository.user_review_activity_log_path()
+        )
+        self.user_review_activity_session_id = str(uuid.uuid4())
 
         # Load controls catalog (knowledge_base/controls_catalog.json) first —
         # provides process, risk_description, in_scope, analysis_type for all controls.
@@ -1661,12 +1667,17 @@ class ValidationDesktopApp(QMainWindow):
         self.user_preview_import_button.clicked.connect(self.import_user_review_from_excel)
         user_preview_actions_layout.addWidget(self.user_preview_import_button, 0, Qt.AlignmentFlag.AlignRight)
 
+        self.user_preview_activity_log_button = QPushButton("פתח לוג פעילות סקירה")
+        self.user_preview_activity_log_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.user_preview_activity_log_button.clicked.connect(self.open_user_review_activity_log)
+        user_preview_actions_layout.addWidget(self.user_preview_activity_log_button, 0, Qt.AlignmentFlag.AlignRight)
+
         self.user_preview_send_business_button = QPushButton("שליחת הדוח לגורם מהכספים")
         self.user_preview_send_business_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.user_preview_send_business_button.clicked.connect(self.draft_user_review_email_to_business)
         user_preview_actions_layout.addWidget(self.user_preview_send_business_button, 0, Qt.AlignmentFlag.AlignRight)
 
-        self.user_preview_send_technical_button = QPushButton("שליחת הדוח לגורם טכני")
+        self.user_preview_send_technical_button = QPushButton("שליחת הדוח לגורם טכנולוגי")
         self.user_preview_send_technical_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.user_preview_send_technical_button.clicked.connect(self.draft_user_review_email_to_technical)
         user_preview_actions_layout.addWidget(self.user_preview_send_technical_button, 0, Qt.AlignmentFlag.AlignRight)
@@ -3849,6 +3860,60 @@ class ValidationDesktopApp(QMainWindow):
             self.user_reviewer_state,
         )
 
+    @staticmethod
+    def _split_review_key(review_key: str) -> tuple[str, str]:
+        key = str(review_key).strip()
+        if "|" in key:
+            mandt, bname = key.split("|", 1)
+            return mandt.strip(), bname.strip()
+        return "", key
+
+    @staticmethod
+    def _current_windows_actor() -> str:
+        for env_key in ("USERNAME", "USER"):
+            value = str(os.environ.get(env_key, "")).strip()
+            if value:
+                return value
+        return "unknown"
+
+    def _log_user_review_activity(
+        self,
+        *,
+        action_type: str,
+        source: str,
+        review_key: str = "",
+        field_name: str = "",
+        old_value: object = "",
+        new_value: object = "",
+        import_file: str = "",
+        import_mode: str = "",
+        warning_code: str = "",
+        warning_details: str = "",
+    ) -> None:
+        if not self._allow_user_preview_persistence:
+            return
+
+        mandt, bname = self._split_review_key(review_key)
+        try:
+            self.user_review_activity_logger.append_event(
+                actor=self._current_windows_actor(),
+                action_type=action_type,
+                source=source,
+                review_key=review_key,
+                mandt=mandt,
+                bname=bname,
+                field_name=field_name,
+                old_value=old_value,
+                new_value=new_value,
+                import_file=import_file,
+                import_mode=import_mode,
+                warning_code=warning_code,
+                warning_details=warning_details,
+                session_id=self.user_review_activity_session_id,
+            )
+        except Exception as exc:
+            self._log_to_console(f"שגיאה ברישום לוג פעילות סקירה: {exc}", "warn")
+
     def _get_reviewer_values(self, mandt: object, bname: object) -> dict[str, str]:
         review_key = self._user_reviewer_state_key(mandt, bname)
         stored_values = self.user_reviewer_state.get(review_key)
@@ -3869,10 +3934,25 @@ class ValidationDesktopApp(QMainWindow):
 
         current_values = self.user_reviewer_state.setdefault(review_key, self._default_reviewer_values().copy())
         if normalized_field == "REVIEW_STATUS":
-            current_values[normalized_field] = self._normalize_reviewer_status(value)
+            old_value = self._normalize_reviewer_status(current_values.get(normalized_field))
+            new_value = self._normalize_reviewer_status(value)
         else:
-            current_values[normalized_field] = "" if value is None else str(value).strip()
+            old_value = str(current_values.get(normalized_field, "")).strip()
+            new_value = "" if value is None else str(value).strip()
+
+        if old_value == new_value:
+            return
+
+        current_values[normalized_field] = new_value
         self._save_user_reviewer_state()
+        self._log_user_review_activity(
+            action_type="manual_edit",
+            source="user_review_table",
+            review_key=review_key,
+            field_name=normalized_field,
+            old_value=old_value,
+            new_value=new_value,
+        )
 
     def _normalize_user_preview_columns(self, selected_columns: list[str] | None) -> list[str]:
         allowed_fields = [column["field"] for column in self.USER_PREVIEW_COLUMN_DEFINITIONS]
@@ -9073,7 +9153,7 @@ class ValidationDesktopApp(QMainWindow):
         imported_keys = set(imported_data.keys())
 
         # Records with non-default reviewer data absent from the imported file
-        missing_with_data: list[str] = []
+        missing_with_data_details: list[tuple[str, str]] = []
         for key, state in self.user_reviewer_state.items():
             if key in imported_keys or not isinstance(state, dict):
                 continue
@@ -9084,7 +9164,8 @@ class ValidationDesktopApp(QMainWindow):
             )
             if has_non_default:
                 bname_part = key.split("|", 1)[-1] if "|" in key else key
-                missing_with_data.append(bname_part)
+                missing_with_data_details.append((key, bname_part))
+        missing_with_data = sorted([bname for _, bname in missing_with_data_details])
 
         # Notes that were populated and will be erased by the import
         notes_cleared: list[tuple[str, list[str]]] = []
@@ -9106,7 +9187,7 @@ class ValidationDesktopApp(QMainWindow):
         confirm_dialog = _ImportReviewConfirmDialog(
             self,
             total_in_file=len(imported_data),
-            missing_with_data=sorted(missing_with_data),
+            missing_with_data=missing_with_data,
             notes_cleared=notes_cleared,
         )
         if confirm_dialog.exec() != QDialog.DialogCode.Accepted:
@@ -9114,20 +9195,86 @@ class ValidationDesktopApp(QMainWindow):
 
         selected_mode = confirm_dialog.selected_mode
         import_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        import_file_name = Path(file_path).name
+
+        for missing_key, missing_bname in missing_with_data_details:
+            self._log_user_review_activity(
+                action_type="import_anomaly",
+                source="user_review_import",
+                review_key=missing_key,
+                field_name="IMPORT_MISSING_RECORD",
+                import_file=import_file_name,
+                import_mode=selected_mode,
+                warning_code="missing_review_record",
+                warning_details=f"רשומה עם נתוני סקירה קיימים אינה קיימת בקובץ: {missing_bname}",
+            )
 
         # ── Phase 4: Apply ─────────────────────────────────────────────────
         imported_count = 0
         for key, new_vals in imported_data.items():
             current = self.user_reviewer_state.setdefault(key, self._default_reviewer_values().copy())
-            current["REVIEW_STATUS"] = new_vals["REVIEW_STATUS"]
+
+            old_status = self._normalize_reviewer_status(current.get("REVIEW_STATUS"))
+            new_status = self._normalize_reviewer_status(new_vals["REVIEW_STATUS"])
+            if old_status != new_status:
+                self._log_user_review_activity(
+                    action_type="import_field_change",
+                    source="user_review_import",
+                    review_key=key,
+                    field_name="REVIEW_STATUS",
+                    old_value=old_status,
+                    new_value=new_status,
+                    import_file=import_file_name,
+                    import_mode=selected_mode,
+                )
+            current["REVIEW_STATUS"] = new_status
+
             if selected_mode == _ImportReviewConfirmDialog.MODE_PRESERVE_NOTES:
                 for note_field in ("TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES"):
                     new_val = new_vals.get(note_field, "")
-                    if new_val or not str(current.get(note_field, "")).strip():
+                    old_val = str(current.get(note_field, "")).strip()
+                    if new_val or not old_val:
+                        if old_val != new_val:
+                            self._log_user_review_activity(
+                                action_type="import_field_change",
+                                source="user_review_import",
+                                review_key=key,
+                                field_name=note_field,
+                                old_value=old_val,
+                                new_value=new_val,
+                                import_file=import_file_name,
+                                import_mode=selected_mode,
+                            )
                         current[note_field] = new_val
             else:
-                current["TECH_REVIEW_NOTES"] = new_vals["TECH_REVIEW_NOTES"]
-                current["BUS_REVIEW_NOTES"] = new_vals["BUS_REVIEW_NOTES"]
+                for note_field in ("TECH_REVIEW_NOTES", "BUS_REVIEW_NOTES"):
+                    old_val = str(current.get(note_field, "")).strip()
+                    new_val = new_vals.get(note_field, "")
+                    if old_val != new_val:
+                        self._log_user_review_activity(
+                            action_type="import_field_change",
+                            source="user_review_import",
+                            review_key=key,
+                            field_name=note_field,
+                            old_value=old_val,
+                            new_value=new_val,
+                            import_file=import_file_name,
+                            import_mode=selected_mode,
+                        )
+                    current[note_field] = new_val
+
+            old_import_date = str(current.get("LAST_IMPORT_DATE", "")).strip()
+            if old_import_date != import_timestamp:
+                self._log_user_review_activity(
+                    action_type="import_field_change",
+                    source="user_review_import",
+                    review_key=key,
+                    field_name="LAST_IMPORT_DATE",
+                    old_value=old_import_date,
+                    new_value=import_timestamp,
+                    import_file=import_file_name,
+                    import_mode=selected_mode,
+                )
             current["LAST_IMPORT_DATE"] = import_timestamp
             imported_count += 1
 
@@ -9142,6 +9289,15 @@ class ValidationDesktopApp(QMainWindow):
             summary_parts.append(f"הערות שנמחקו: {len(notes_cleared)}")
         summary_parts.append(f"מצב: {mode_label}")
         error_preview = " | ".join(summary_parts)
+
+        self._log_user_review_activity(
+            action_type="import_summary",
+            source="user_review_import",
+            import_file=import_file_name,
+            import_mode=selected_mode,
+            new_value=str(imported_count),
+            warning_details=error_preview,
+        )
 
         import_now = datetime.now()
         record: dict[str, Any] = {
@@ -9267,7 +9423,7 @@ class ValidationDesktopApp(QMainWindow):
     def draft_user_review_email_to_technical(self) -> None:
         self._create_outlook_review_draft(
             recipient_email=self._get_email_for_role("מנהל מערכת SAP"),
-            role_label="גורם טכני",
+            role_label="גורם טכנולוגי",
         )
 
     def open_output_folder(self) -> None:
@@ -9278,6 +9434,18 @@ class ValidationDesktopApp(QMainWindow):
             self._open_path(self.report_path)
         else:
             QMessageBox.warning(self, "דוח לא זמין", "טרם נוצר דוח אקסל לפתיחה.")
+
+    def open_user_review_activity_log(self) -> None:
+        log_path = self.ui_state_repository.user_review_activity_log_path()
+        if not log_path.exists():
+            QMessageBox.information(
+                self,
+                "לוג פעילות לא זמין",
+                "קובץ לוג פעילות הסקירה עדיין לא נוצר. "
+                "יש לבצע עריכה ידנית או ייבוא סקירה כדי לייצר את הקובץ.",
+            )
+            return
+        self._open_path(log_path)
 
     @staticmethod
     def _open_path(path: Path) -> None:

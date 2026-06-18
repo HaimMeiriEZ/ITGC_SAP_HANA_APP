@@ -26,6 +26,9 @@ class UiStateRepository:
     def user_reviewer_state_path(self) -> Path:
         return self._output_dir / "user_preview_reviewer_state.json"
 
+    def user_review_activity_log_path(self) -> Path:
+        return self._output_dir / "user_review_activity_log.csv"
+
     def load_system_settings(self, defaults: dict[str, Any]) -> dict[str, Any]:
         settings_path = self.system_settings_path()
         if not settings_path.exists():
