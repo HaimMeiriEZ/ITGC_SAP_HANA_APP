@@ -7,7 +7,7 @@ import sys
 import copy
 import uuid
 
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 from datetime import datetime, date
 from pathlib import Path
 
@@ -6119,27 +6119,40 @@ class ValidationDesktopApp(QMainWindow):
         layout.addWidget(buttons)
         dialog.exec()
 
-    # ------------------------------------------------------------------
-    # User-Management Permissions (MA1-1_AYALON_10)
-    # Cross-join: AGR_1251 (permission objects) × AGR_USERS (role assignments)
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # Shared AGR permission helpers
+    # These five methods implement the common OR-logic, AND-logic,
+    # summary-table refresh, selected-users refresh, and detail-dialog
+    # patterns shared by all permission-control sub-tabs.
+    # Each control's four public methods are thin wrappers below.
+    # ==================================================================
 
-    def _compute_user_mgmt_permissions(self) -> None:
-        """Recompute user-management permission findings from cached AGR_1251 + AGR_USERS rows."""
+    def _compute_agr_permission_findings_or(
+        self,
+        control_id: str,
+        criteria: dict,
+        summary_records: dict,
+        users_by_control: dict,
+        refresh_fn: Callable[[], None],
+        finding_found_text: str,
+        finding_none_text: str,
+    ) -> None:
+        """Generic AGR_1251 × AGR_USERS OR-logic cross-join for one permission control.
+
+        ``criteria`` maps (OBJECT, FIELD) tuples to a set of qualifying LOW/HIGH values.
+        If the set contains ``"*"``, any non-empty LOW or HIGH value qualifies.
+        Results are written into ``summary_records`` / ``users_by_control`` (cleared
+        first) and ``refresh_fn`` is called when done.
+        """
         if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
             return
 
-        control_id = "MA1-1_AYALON_10"
         control_meta = get_audit_control_definition(control_id)
-
-        # Step A: find AGR_NAMEs that carry user-management permission objects.
-        # qualifying_values: (OBJECT_upper, FIELD_upper) -> set of qualifying LOW/HIGH values
         qualifying_map: dict[tuple[str, str], set[str]] = {
             (obj.upper(), fld.upper()): {v.upper() for v in vals}
-            for (obj, fld), vals in USER_MGMT_PERMISSION_CRITERIA.items()
+            for (obj, fld), vals in criteria.items()
         }
 
-        # agr_name_objects: AGR_NAME -> set of (OBJECT, FIELD, LOW_display) tuples that qualified
         agr_name_objects: dict[str, set[tuple[str, str, str]]] = {}
         for row in self.agr_1251_cached_rows:
             obj_val = self._resolve_row_value_by_priority(row, "OBJECT")
@@ -6155,9 +6168,10 @@ class ValidationDesktopApp(QMainWindow):
                 continue
             low_str = str(low_val).strip().upper() if low_val is not None else ""
             high_str = str(high_val).strip().upper() if high_val is not None else ""
-            # wildcard or value in qualifying set
             if low_str == "*" or high_str == "*":
                 qualifies = True
+            elif "*" in qualifying_map[key]:
+                qualifies = bool(low_str) or bool(high_str)
             else:
                 qualifies = bool(low_str and low_str in qualifying_map[key]) or bool(
                     high_str and high_str in qualifying_map[key]
@@ -6172,9 +6186,6 @@ class ValidationDesktopApp(QMainWindow):
             agr_name_objects.setdefault(agr_name_upper, set()).add((obj_upper, fld_upper, low_display))
 
         matching_agr_names: set[str] = set(agr_name_objects.keys())
-
-        # Step B: scan AGR_USERS; for each row whose AGR_NAME is in matching set,
-        #         group by MANDT → UNAME → set of AGR_NAMEs.
         users_by_client: dict[str, dict[str, set[str]]] = {}
         for row in self.agr_users_cached_rows:
             agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
@@ -6183,8 +6194,6 @@ class ValidationDesktopApp(QMainWindow):
             agr_name_upper = str(agr_name_val).strip().upper()
             if agr_name_upper not in matching_agr_names:
                 continue
-
-            # Resolve MANDT with fallback to filename
             mandt_val = self._resolve_row_value_by_priority(row, "MANDT")
             if mandt_val is not None and str(mandt_val).strip():
                 mandt = str(mandt_val).strip()
@@ -6192,75 +6201,187 @@ class ValidationDesktopApp(QMainWindow):
                 source_file = str(row.get("__source_file", ""))
                 digits_match = re.search(r"\d{3}", Path(source_file).name)
                 mandt = digits_match.group(0) if digits_match else "-"
-
             uname_val = self._resolve_row_value_by_priority(row, "UNAME")
             if uname_val is None or not str(uname_val).strip():
                 continue
             uname = str(uname_val).strip().upper()
-
             client_users = users_by_client.setdefault(mandt, {})
             client_users.setdefault(uname, set()).add(agr_name_upper)
 
-        # Step C: rebuild summary/users dicts
-        self.user_mgmt_summary_records.clear()
-        self.user_mgmt_users_by_control.clear()
-
+        summary_records.clear()
+        users_by_control.clear()
         if not users_by_client:
             record_key = f"{control_id}|-"
-            self.user_mgmt_summary_records[record_key] = {
+            summary_records[record_key] = {
                 "record_key": record_key,
                 "client": "-",
-                "finding_text": "לא נמצאו משתמשים בעלי הרשאות ניהול משתמשים",
+                "finding_text": finding_none_text,
                 "users_count": 0,
                 "risk_level": control_meta.get("risk_level", "-"),
                 "status": "תקין",
             }
-            self.user_mgmt_users_by_control[record_key] = []
+            users_by_control[record_key] = []
         else:
             for mandt, client_users in sorted(users_by_client.items()):
                 users_count = len(client_users)
                 record_key = f"{control_id}|{mandt}"
-                self.user_mgmt_summary_records[record_key] = {
+                summary_records[record_key] = {
                     "record_key": record_key,
                     "client": mandt,
-                    "finding_text": f"נמצאו {users_count} משתמשים בעלי הרשאות ניהול משתמשים",
+                    "finding_text": finding_found_text.format(count=users_count),
                     "users_count": users_count,
                     "risk_level": control_meta.get("risk_level", "-"),
                     "status": "עם ממצא" if users_count > 0 else "תקין",
                 }
-                self.user_mgmt_users_by_control[record_key] = [
+                users_by_control[record_key] = [
                     {
                         "client": mandt,
                         "user_name": uname,
                         "roles": [
-                            {
-                                "agr_name": r,
-                                "objects": sorted(agr_name_objects.get(r, set())),
-                            }
+                            {"agr_name": r, "objects": sorted(agr_name_objects.get(r, set()))}
                             for r in sorted(roles)
                         ],
                     }
                     for uname, roles in sorted(client_users.items())
                 ]
+        refresh_fn()
 
-        self._refresh_user_mgmt_summary_table()
+    def _compute_agr_permission_findings_and(
+        self,
+        control_id: str,
+        criteria: list,
+        summary_records: dict,
+        users_by_control: dict,
+        refresh_fn: Callable[[], None],
+        finding_found_text: str,
+        finding_none_text: str,
+    ) -> None:
+        """Generic AGR_1251 × AGR_USERS AND-logic cross-join for one permission control.
 
-    def _refresh_user_mgmt_summary_table(self) -> None:
-        self.user_mgmt_summary_table.setRowCount(0)
-        self.user_mgmt_users_table.setRowCount(0)
-        if not self.user_mgmt_summary_records:
-            self.user_mgmt_users_table.insertRow(0)
-            empty_item = QTableWidgetItem(self.format_rtl_text("יש לטעון קבצי AGR_1251 ו-AGR_USERS"))
-            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.user_mgmt_users_table.setItem(0, 1, empty_item)
+        ``criteria`` is a ``list[tuple[str, str, set[str]]]``; every entry must be
+        satisfied by the SAME AGR_NAME for it to qualify.
+        """
+        if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
             return
 
-        for row_data in sorted(
-            self.user_mgmt_summary_records.values(),
-            key=lambda item: str(item.get("client", "")),
-        ):
-            row_index = self.user_mgmt_summary_table.rowCount()
-            self.user_mgmt_summary_table.insertRow(row_index)
+        control_meta = get_audit_control_definition(control_id)
+        total_criteria = len(criteria)
+        criteria_count: dict[str, set[int]] = {}
+        agr_name_objects: dict[str, set[tuple[str, str, str]]] = {}
+        for row in self.agr_1251_cached_rows:
+            obj_val = self._resolve_row_value_by_priority(row, "OBJECT")
+            fld_val = self._resolve_row_value_by_priority(row, "FIELD")
+            if obj_val is None or fld_val is None:
+                continue
+            obj_upper = str(obj_val).strip().upper()
+            fld_upper = str(fld_val).strip().upper()
+            low_val = self._resolve_row_value_by_priority(row, "LOW")
+            high_val = self._resolve_row_value_by_priority(row, "HIGH")
+            low_str = str(low_val).strip().upper() if low_val is not None else ""
+            high_str = str(high_val).strip().upper() if high_val is not None else ""
+            for idx, (crit_obj, crit_fld, crit_values) in enumerate(criteria):
+                if obj_upper != crit_obj.upper() or fld_upper != crit_fld.upper():
+                    continue
+                crit_upper = {v.upper() for v in crit_values}
+                if low_str == "*" or high_str == "*":
+                    qualifies = True
+                else:
+                    qualifies = bool(low_str and low_str in crit_upper) or bool(
+                        high_str and high_str in crit_upper
+                    )
+                if not qualifies:
+                    continue
+                agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
+                if agr_name_val is None or not str(agr_name_val).strip():
+                    continue
+                agr_name_upper = str(agr_name_val).strip().upper()
+                criteria_count.setdefault(agr_name_upper, set()).add(idx)
+                low_display = low_str if low_str else "-"
+                agr_name_objects.setdefault(agr_name_upper, set()).add((obj_upper, fld_upper, low_display))
+
+        matching_agr_names: set[str] = {
+            agr for agr, satisfied in criteria_count.items()
+            if len(satisfied) >= total_criteria
+        }
+        users_by_client: dict[str, dict[str, set[str]]] = {}
+        for row in self.agr_users_cached_rows:
+            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
+            if agr_name_val is None:
+                continue
+            agr_name_upper = str(agr_name_val).strip().upper()
+            if agr_name_upper not in matching_agr_names:
+                continue
+            mandt_val = self._resolve_row_value_by_priority(row, "MANDT")
+            if mandt_val is not None and str(mandt_val).strip():
+                mandt = str(mandt_val).strip()
+            else:
+                source_file = str(row.get("__source_file", ""))
+                digits_match = re.search(r"\d{3}", Path(source_file).name)
+                mandt = digits_match.group(0) if digits_match else "-"
+            uname_val = self._resolve_row_value_by_priority(row, "UNAME")
+            if uname_val is None or not str(uname_val).strip():
+                continue
+            uname = str(uname_val).strip().upper()
+            client_users = users_by_client.setdefault(mandt, {})
+            client_users.setdefault(uname, set()).add(agr_name_upper)
+
+        summary_records.clear()
+        users_by_control.clear()
+        if not users_by_client:
+            record_key = f"{control_id}|-"
+            summary_records[record_key] = {
+                "record_key": record_key,
+                "client": "-",
+                "finding_text": finding_none_text,
+                "users_count": 0,
+                "risk_level": control_meta.get("risk_level", "-"),
+                "status": "תקין",
+            }
+            users_by_control[record_key] = []
+        else:
+            for mandt, client_users in sorted(users_by_client.items()):
+                users_count = len(client_users)
+                record_key = f"{control_id}|{mandt}"
+                summary_records[record_key] = {
+                    "record_key": record_key,
+                    "client": mandt,
+                    "finding_text": finding_found_text.format(count=users_count),
+                    "users_count": users_count,
+                    "risk_level": control_meta.get("risk_level", "-"),
+                    "status": "עם ממצא" if users_count > 0 else "תקין",
+                }
+                users_by_control[record_key] = [
+                    {
+                        "client": mandt,
+                        "user_name": uname,
+                        "roles": [
+                            {"agr_name": r, "objects": sorted(agr_name_objects.get(r, set()))}
+                            for r in sorted(roles)
+                        ],
+                    }
+                    for uname, roles in sorted(client_users.items())
+                ]
+        refresh_fn()
+
+    def _refresh_permission_summary_table(
+        self,
+        summary_table: QTableWidget,
+        users_table: QTableWidget,
+        summary_records: dict,
+        refresh_selected_fn: Callable[[], None],
+    ) -> None:
+        """Populate a permission-control summary QTableWidget from ``summary_records``."""
+        summary_table.setRowCount(0)
+        users_table.setRowCount(0)
+        if not summary_records:
+            users_table.insertRow(0)
+            empty_item = QTableWidgetItem(self.format_rtl_text("יש לטעון קבצי AGR_1251 ו-AGR_USERS"))
+            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            users_table.setItem(0, 1, empty_item)
+            return
+        for row_data in sorted(summary_records.values(), key=lambda item: str(item.get("client", ""))):
+            row_index = summary_table.rowCount()
+            summary_table.insertRow(row_index)
             values = [
                 str(row_data.get("client", "-")),
                 str(row_data.get("finding_text", "-")),
@@ -6273,37 +6394,37 @@ class ValidationDesktopApp(QMainWindow):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, row_data.get("record_key", ""))
-                self.user_mgmt_summary_table.setItem(row_index, column, item)
+                summary_table.setItem(row_index, column, item)
+        if summary_table.rowCount() > 0:
+            summary_table.selectRow(0)
+            refresh_selected_fn()
+        summary_table.resizeColumnsToContents()
 
-        if self.user_mgmt_summary_table.rowCount() > 0:
-            self.user_mgmt_summary_table.selectRow(0)
-            self._refresh_selected_user_mgmt_users()
-        self.user_mgmt_summary_table.resizeColumnsToContents()
-
-    def _refresh_selected_user_mgmt_users(self) -> None:
-        selected_items = self.user_mgmt_summary_table.selectedItems()
+    def _refresh_selected_control_users(
+        self,
+        summary_table: QTableWidget,
+        users_table: QTableWidget,
+        users_by_control: dict,
+    ) -> None:
+        """Populate the users detail table for the selected row in a permission summary table."""
+        selected_items = summary_table.selectedItems()
         if not selected_items:
             return
-
-        selected_row = selected_items[0].row()
-        control_item = self.user_mgmt_summary_table.item(selected_row, 0)
+        control_item = summary_table.item(selected_items[0].row(), 0)
         if control_item is None:
             return
-
         record_key = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text())
-        user_rows = self.user_mgmt_users_by_control.get(record_key, [])
-        self.user_mgmt_users_table.setRowCount(0)
-
+        user_rows = users_by_control.get(record_key, [])
+        users_table.setRowCount(0)
         if not user_rows:
-            self.user_mgmt_users_table.insertRow(0)
+            users_table.insertRow(0)
             empty_item = QTableWidgetItem(self.format_rtl_text("לא נמצאו משתמשים להצגה"))
             empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.user_mgmt_users_table.setItem(0, 1, empty_item)
+            users_table.setItem(0, 1, empty_item)
             return
-
         for user_data in user_rows:
-            row_index = self.user_mgmt_users_table.rowCount()
-            self.user_mgmt_users_table.insertRow(row_index)
+            row_index = users_table.rowCount()
+            users_table.insertRow(row_index)
             client_name = str(user_data.get("client", "-") or "-")
             user_name = str(user_data.get("user_name", "-") or "-")
             client_item = QTableWidgetItem(self.format_rtl_text(client_name))
@@ -6311,18 +6432,24 @@ class ValidationDesktopApp(QMainWindow):
             user_item = QTableWidgetItem(self.format_rtl_text(user_name))
             user_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             user_item.setData(Qt.ItemDataRole.UserRole, {"client": client_name, "user": user_name})
-            self.user_mgmt_users_table.setItem(row_index, 0, client_item)
-            self.user_mgmt_users_table.setItem(row_index, 1, user_item)
-        self.user_mgmt_users_table.resizeColumnsToContents()
+            users_table.setItem(row_index, 0, client_item)
+            users_table.setItem(row_index, 1, user_item)
+        users_table.resizeColumnsToContents()
 
-    def show_user_mgmt_user_dialog(self, row_index: int, _column: int) -> None:
-        if row_index < 0 or row_index >= self.user_mgmt_users_table.rowCount():
+    def _show_permission_user_dialog(
+        self,
+        row_index: int,
+        users_table: QTableWidget,
+        summary_table: QTableWidget,
+        users_by_control: dict,
+        dialog_title: str,
+    ) -> None:
+        """Show a role/object detail dialog for a user in a permission-control users table."""
+        if row_index < 0 or row_index >= users_table.rowCount():
             return
-
-        user_item = self.user_mgmt_users_table.item(row_index, 1)
+        user_item = users_table.item(row_index, 1)
         if user_item is None:
             return
-
         user_payload = user_item.data(Qt.ItemDataRole.UserRole)
         user_name = ""
         client_name = "-"
@@ -6333,17 +6460,14 @@ class ValidationDesktopApp(QMainWindow):
             user_name = str(user_item.text() or "").strip()
         if not user_name or user_name.startswith("לא נמצאו") or user_name.startswith("אין "):
             return
-
-        selected_items = self.user_mgmt_summary_table.selectedItems()
+        selected_items = summary_table.selectedItems()
         if not selected_items:
             return
-
-        summary_item = self.user_mgmt_summary_table.item(selected_items[0].row(), 0)
+        summary_item = summary_table.item(selected_items[0].row(), 0)
         if summary_item is None:
             return
-
         record_key = str(summary_item.data(Qt.ItemDataRole.UserRole) or summary_item.text())
-        user_rows = self.user_mgmt_users_by_control.get(record_key, [])
+        user_rows = users_by_control.get(record_key, [])
         roles: list[dict] = []
         for user_data in user_rows:
             if (
@@ -6352,12 +6476,10 @@ class ValidationDesktopApp(QMainWindow):
             ):
                 roles = list(user_data.get("roles", []))
                 break
-
         dialog = QDialog(self)
-        dialog.setWindowTitle("פירוט הרשאות ניהול משתמשים")
+        dialog.setWindowTitle(dialog_title)
         dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         dialog.resize(640, 480)
-
         layout = QVBoxLayout(dialog)
         details_box = QTextEdit()
         details_box.setReadOnly(True)
@@ -6376,11 +6498,51 @@ class ValidationDesktopApp(QMainWindow):
             lines.append("- לא נמצאו רולים להצגה")
         details_box.setPlainText(self.format_rtl_text("\n".join(lines)))
         layout.addWidget(details_box)
-
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         buttons.accepted.connect(dialog.accept)
         layout.addWidget(buttons)
         dialog.exec()
+
+    # ------------------------------------------------------------------
+    # User-Management Permissions (MA1-1_AYALON_10)
+    # Cross-join: AGR_1251 (permission objects) × AGR_USERS (role assignments)
+    # ------------------------------------------------------------------
+
+    def _compute_user_mgmt_permissions(self) -> None:
+        """Recompute user-management permission findings from cached AGR_1251 + AGR_USERS rows."""
+        self._compute_agr_permission_findings_or(
+            control_id="MA1-1_AYALON_10",
+            criteria=USER_MGMT_PERMISSION_CRITERIA,
+            summary_records=self.user_mgmt_summary_records,
+            users_by_control=self.user_mgmt_users_by_control,
+            refresh_fn=self._refresh_user_mgmt_summary_table,
+            finding_found_text="נמצאו {count} משתמשים בעלי הרשאות ניהול משתמשים",
+            finding_none_text="לא נמצאו משתמשים בעלי הרשאות ניהול משתמשים",
+        )
+
+    def _refresh_user_mgmt_summary_table(self) -> None:
+        self._refresh_permission_summary_table(
+            self.user_mgmt_summary_table,
+            self.user_mgmt_users_table,
+            self.user_mgmt_summary_records,
+            self._refresh_selected_user_mgmt_users,
+        )
+
+    def _refresh_selected_user_mgmt_users(self) -> None:
+        self._refresh_selected_control_users(
+            self.user_mgmt_summary_table,
+            self.user_mgmt_users_table,
+            self.user_mgmt_users_by_control,
+        )
+
+    def show_user_mgmt_user_dialog(self, row_index: int, _column: int) -> None:
+        self._show_permission_user_dialog(
+            row_index,
+            self.user_mgmt_users_table,
+            self.user_mgmt_summary_table,
+            self.user_mgmt_users_by_control,
+            "פירוט הרשאות ניהול משתמשים",
+        )
 
     # ------------------------------------------------------------------
     # Authorization-Management Permissions (MA-AUTHMGMT-01)
@@ -6450,254 +6612,39 @@ class ValidationDesktopApp(QMainWindow):
 
     def _compute_auth_mgmt_permissions(self) -> None:
         """Recompute authorization-management permission findings from cached AGR_1251 + AGR_USERS rows."""
-        if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
-            return
-
-        control_id = "MA1-1_AYALON_11"
-        control_meta = get_audit_control_definition(control_id)
-
-        qualifying_map: dict[tuple[str, str], set[str]] = {
-            (obj.upper(), fld.upper()): {v.upper() for v in vals}
-            for (obj, fld), vals in AUTH_MGMT_PERMISSION_CRITERIA.items()
-        }
-
-        # agr_name_objects: AGR_NAME -> set of (OBJECT, FIELD, LOW_display) tuples that qualified
-        agr_name_objects: dict[str, set[tuple[str, str, str]]] = {}
-        for row in self.agr_1251_cached_rows:
-            obj_val = self._resolve_row_value_by_priority(row, "OBJECT")
-            fld_val = self._resolve_row_value_by_priority(row, "FIELD")
-            low_val = self._resolve_row_value_by_priority(row, "LOW")
-            high_val = self._resolve_row_value_by_priority(row, "HIGH")
-            if obj_val is None or fld_val is None:
-                continue
-            obj_upper = str(obj_val).strip().upper()
-            fld_upper = str(fld_val).strip().upper()
-            key = (obj_upper, fld_upper)
-            if key not in qualifying_map:
-                continue
-            low_str = str(low_val).strip().upper() if low_val is not None else ""
-            high_str = str(high_val).strip().upper() if high_val is not None else ""
-            if low_str == "*" or high_str == "*":
-                qualifies = True
-            else:
-                qualifies = bool(low_str and low_str in qualifying_map[key]) or bool(
-                    high_str and high_str in qualifying_map[key]
-                )
-            if not qualifies:
-                continue
-            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
-            if agr_name_val is None or not str(agr_name_val).strip():
-                continue
-            agr_name_upper = str(agr_name_val).strip().upper()
-            low_display = low_str if low_str else "-"
-            agr_name_objects.setdefault(agr_name_upper, set()).add((obj_upper, fld_upper, low_display))
-
-        matching_agr_names: set[str] = set(agr_name_objects.keys())
-
-        users_by_client: dict[str, dict[str, set[str]]] = {}
-        for row in self.agr_users_cached_rows:
-            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
-            if agr_name_val is None:
-                continue
-            agr_name_upper = str(agr_name_val).strip().upper()
-            if agr_name_upper not in matching_agr_names:
-                continue
-
-            mandt_val = self._resolve_row_value_by_priority(row, "MANDT")
-            if mandt_val is not None and str(mandt_val).strip():
-                mandt = str(mandt_val).strip()
-            else:
-                source_file = str(row.get("__source_file", ""))
-                digits_match = re.search(r"\d{3}", Path(source_file).name)
-                mandt = digits_match.group(0) if digits_match else "-"
-
-            uname_val = self._resolve_row_value_by_priority(row, "UNAME")
-            if uname_val is None or not str(uname_val).strip():
-                continue
-            uname = str(uname_val).strip().upper()
-
-            client_users = users_by_client.setdefault(mandt, {})
-            client_users.setdefault(uname, set()).add(agr_name_upper)
-
-        self.auth_mgmt_summary_records.clear()
-        self.auth_mgmt_users_by_control.clear()
-
-        if not users_by_client:
-            record_key = f"{control_id}|-"
-            self.auth_mgmt_summary_records[record_key] = {
-                "record_key": record_key,
-                "client": "-",
-                "finding_text": "לא נמצאו משתמשים בעלי הרשאות ניהול הרשאות",
-                "users_count": 0,
-                "risk_level": control_meta.get("risk_level", "-"),
-                "status": "תקין",
-            }
-            self.auth_mgmt_users_by_control[record_key] = []
-        else:
-            for mandt, client_users in sorted(users_by_client.items()):
-                users_count = len(client_users)
-                record_key = f"{control_id}|{mandt}"
-                self.auth_mgmt_summary_records[record_key] = {
-                    "record_key": record_key,
-                    "client": mandt,
-                    "finding_text": f"נמצאו {users_count} משתמשים בעלי הרשאות ניהול הרשאות",
-                    "users_count": users_count,
-                    "risk_level": control_meta.get("risk_level", "-"),
-                    "status": "עם ממצא" if users_count > 0 else "תקין",
-                }
-                self.auth_mgmt_users_by_control[record_key] = [
-                    {
-                        "client": mandt,
-                        "user_name": uname,
-                        "roles": [
-                            {
-                                "agr_name": r,
-                                "objects": sorted(agr_name_objects.get(r, set())),
-                            }
-                            for r in sorted(roles)
-                        ],
-                    }
-                    for uname, roles in sorted(client_users.items())
-                ]
-
-        self._refresh_auth_mgmt_summary_table()
+        self._compute_agr_permission_findings_or(
+            control_id="MA1-1_AYALON_11",
+            criteria=AUTH_MGMT_PERMISSION_CRITERIA,
+            summary_records=self.auth_mgmt_summary_records,
+            users_by_control=self.auth_mgmt_users_by_control,
+            refresh_fn=self._refresh_auth_mgmt_summary_table,
+            finding_found_text="נמצאו {count} משתמשים בעלי הרשאות ניהול הרשאות",
+            finding_none_text="לא נמצאו משתמשים בעלי הרשאות ניהול הרשאות",
+        )
 
     def _refresh_auth_mgmt_summary_table(self) -> None:
-        self.auth_mgmt_summary_table.setRowCount(0)
-        self.auth_mgmt_users_table.setRowCount(0)
-        if not self.auth_mgmt_summary_records:
-            self.auth_mgmt_users_table.insertRow(0)
-            empty_item = QTableWidgetItem(self.format_rtl_text("יש לטעון קבצי AGR_1251 ו-AGR_USERS"))
-            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.auth_mgmt_users_table.setItem(0, 1, empty_item)
-            return
-
-        for row_data in sorted(
-            self.auth_mgmt_summary_records.values(),
-            key=lambda item: str(item.get("client", "")),
-        ):
-            row_index = self.auth_mgmt_summary_table.rowCount()
-            self.auth_mgmt_summary_table.insertRow(row_index)
-            values = [
-                str(row_data.get("client", "-")),
-                str(row_data.get("finding_text", "-")),
-                str(row_data.get("users_count", 0)),
-                str(row_data.get("risk_level", "-")),
-                str(row_data.get("status", "-")),
-            ]
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(self.format_rtl_text(value))
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if column == 0:
-                    item.setData(Qt.ItemDataRole.UserRole, row_data.get("record_key", ""))
-                self.auth_mgmt_summary_table.setItem(row_index, column, item)
-
-        if self.auth_mgmt_summary_table.rowCount() > 0:
-            self.auth_mgmt_summary_table.selectRow(0)
-            self._refresh_selected_auth_mgmt_users()
-        self.auth_mgmt_summary_table.resizeColumnsToContents()
+        self._refresh_permission_summary_table(
+            self.auth_mgmt_summary_table,
+            self.auth_mgmt_users_table,
+            self.auth_mgmt_summary_records,
+            self._refresh_selected_auth_mgmt_users,
+        )
 
     def _refresh_selected_auth_mgmt_users(self) -> None:
-        selected_items = self.auth_mgmt_summary_table.selectedItems()
-        if not selected_items:
-            return
-
-        selected_row = selected_items[0].row()
-        control_item = self.auth_mgmt_summary_table.item(selected_row, 0)
-        if control_item is None:
-            return
-
-        record_key = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text())
-        user_rows = self.auth_mgmt_users_by_control.get(record_key, [])
-        self.auth_mgmt_users_table.setRowCount(0)
-
-        if not user_rows:
-            self.auth_mgmt_users_table.insertRow(0)
-            empty_item = QTableWidgetItem(self.format_rtl_text("לא נמצאו משתמשים להצגה"))
-            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.auth_mgmt_users_table.setItem(0, 1, empty_item)
-            return
-
-        for user_data in user_rows:
-            row_index = self.auth_mgmt_users_table.rowCount()
-            self.auth_mgmt_users_table.insertRow(row_index)
-            client_name = str(user_data.get("client", "-") or "-")
-            user_name = str(user_data.get("user_name", "-") or "-")
-            client_item = QTableWidgetItem(self.format_rtl_text(client_name))
-            client_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            user_item = QTableWidgetItem(self.format_rtl_text(user_name))
-            user_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            user_item.setData(Qt.ItemDataRole.UserRole, {"client": client_name, "user": user_name})
-            self.auth_mgmt_users_table.setItem(row_index, 0, client_item)
-            self.auth_mgmt_users_table.setItem(row_index, 1, user_item)
-        self.auth_mgmt_users_table.resizeColumnsToContents()
+        self._refresh_selected_control_users(
+            self.auth_mgmt_summary_table,
+            self.auth_mgmt_users_table,
+            self.auth_mgmt_users_by_control,
+        )
 
     def show_auth_mgmt_user_dialog(self, row_index: int, _column: int) -> None:
-        if row_index < 0 or row_index >= self.auth_mgmt_users_table.rowCount():
-            return
-
-        user_item = self.auth_mgmt_users_table.item(row_index, 1)
-        if user_item is None:
-            return
-
-        user_payload = user_item.data(Qt.ItemDataRole.UserRole)
-        user_name = ""
-        client_name = "-"
-        if isinstance(user_payload, dict):
-            user_name = str(user_payload.get("user", "") or "").strip()
-            client_name = str(user_payload.get("client", "-") or "-").strip()
-        if not user_name:
-            user_name = str(user_item.text() or "").strip()
-        if not user_name or user_name.startswith("לא נמצאו") or user_name.startswith("אין "):
-            return
-
-        selected_items = self.auth_mgmt_summary_table.selectedItems()
-        if not selected_items:
-            return
-
-        summary_item = self.auth_mgmt_summary_table.item(selected_items[0].row(), 0)
-        if summary_item is None:
-            return
-
-        record_key = str(summary_item.data(Qt.ItemDataRole.UserRole) or summary_item.text())
-        user_rows = self.auth_mgmt_users_by_control.get(record_key, [])
-        roles: list[dict] = []
-        for user_data in user_rows:
-            if (
-                str(user_data.get("user_name", "")).strip().upper() == user_name.upper()
-                and str(user_data.get("client", "-") or "-").strip() == client_name
-            ):
-                roles = list(user_data.get("roles", []))
-                break
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("פירוט הרשאות ניהול הרשאות")
-        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        dialog.resize(640, 480)
-
-        layout = QVBoxLayout(dialog)
-        details_box = QTextEdit()
-        details_box.setReadOnly(True)
-        lines = [
-            f"קליינט: {client_name}",
-            f"משתמש: {user_name}",
-            "",
-            "רולים ואובייקטי הרשאה:",
-        ]
-        if roles:
-            for role_entry in roles:
-                lines.append(f"- {role_entry.get('agr_name', '')}")
-                for obj, fld, low in role_entry.get("objects", []):
-                    lines.append(f"    {obj} | {fld} | {low}")
-        else:
-            lines.append("- לא נמצאו רולים להצגה")
-        details_box.setPlainText(self.format_rtl_text("\n".join(lines)))
-        layout.addWidget(details_box)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-        buttons.accepted.connect(dialog.accept)
-        layout.addWidget(buttons)
-        dialog.exec()
+        self._show_permission_user_dialog(
+            row_index,
+            self.auth_mgmt_users_table,
+            self.auth_mgmt_summary_table,
+            self.auth_mgmt_users_by_control,
+            "פירוט הרשאות ניהול הרשאות",
+        )
 
     # ------------------------------------------------------------------
     # RSCDOK99 Program Permissions (MA1-1_AYALON_12)
@@ -6770,265 +6717,42 @@ class ValidationDesktopApp(QMainWindow):
     def _compute_rscdok99_permissions(self) -> None:
         """Recompute RSCDOK99 permission findings from cached AGR_1251 + AGR_USERS rows.
 
-        An AGR_NAME qualifies only when ALL criteria in RSCDOK99_PERMISSION_CRITERIA
-        are satisfied (AND logic): both S_PROGRAM/P_GROUP=RSCDOK99 and
-        S_PROGRAM/P_ACTION=SUB must appear in the role's permission rows.
+        AND logic: both S_PROGRAM/P_GROUP=RSCDOK99 and S_PROGRAM/P_ACTION=SUB must
+        appear in the same AGR_NAME.
         """
-        if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
-            return
-
-        control_id = "MA1-1_AYALON_12"
-        control_meta = get_audit_control_definition(control_id)
-
-        # Build per-AGR_NAME satisfied-criteria tracking.
-        # criteria_count[agr_name] = set of criterion indexes satisfied
-        # agr_name_objects[agr_name] = set of (OBJECT, FIELD, LOW_display) tuples that qualified
-        criteria_count: dict[str, set[int]] = {}
-        agr_name_objects: dict[str, set[tuple[str, str, str]]] = {}
-        total_criteria = len(RSCDOK99_PERMISSION_CRITERIA)
-
-        for row in self.agr_1251_cached_rows:
-            obj_val = self._resolve_row_value_by_priority(row, "OBJECT")
-            fld_val = self._resolve_row_value_by_priority(row, "FIELD")
-            if obj_val is None or fld_val is None:
-                continue
-            obj_upper = str(obj_val).strip().upper()
-            fld_upper = str(fld_val).strip().upper()
-            low_val = self._resolve_row_value_by_priority(row, "LOW")
-            high_val = self._resolve_row_value_by_priority(row, "HIGH")
-            low_str = str(low_val).strip().upper() if low_val is not None else ""
-            high_str = str(high_val).strip().upper() if high_val is not None else ""
-
-            for idx, (crit_obj, crit_fld, crit_values) in enumerate(RSCDOK99_PERMISSION_CRITERIA):
-                if obj_upper != crit_obj.upper() or fld_upper != crit_fld.upper():
-                    continue
-                crit_upper = {v.upper() for v in crit_values}
-                if low_str == "*" or high_str == "*":
-                    qualifies = True
-                else:
-                    qualifies = bool(low_str and low_str in crit_upper) or bool(
-                        high_str and high_str in crit_upper
-                    )
-                if not qualifies:
-                    continue
-                agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
-                if agr_name_val is None or not str(agr_name_val).strip():
-                    continue
-                agr_name_upper = str(agr_name_val).strip().upper()
-                criteria_count.setdefault(agr_name_upper, set()).add(idx)
-                low_display = low_str if low_str else "-"
-                agr_name_objects.setdefault(agr_name_upper, set()).add((obj_upper, fld_upper, low_display))
-
-        # Only keep roles that satisfy ALL criteria
-        matching_agr_names: set[str] = {
-            agr for agr, satisfied in criteria_count.items()
-            if len(satisfied) >= total_criteria
-        }
-
-        users_by_client: dict[str, dict[str, set[str]]] = {}
-        for row in self.agr_users_cached_rows:
-            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
-            if agr_name_val is None:
-                continue
-            agr_name_upper = str(agr_name_val).strip().upper()
-            if agr_name_upper not in matching_agr_names:
-                continue
-
-            mandt_val = self._resolve_row_value_by_priority(row, "MANDT")
-            if mandt_val is not None and str(mandt_val).strip():
-                mandt = str(mandt_val).strip()
-            else:
-                source_file = str(row.get("__source_file", ""))
-                digits_match = re.search(r"\d{3}", Path(source_file).name)
-                mandt = digits_match.group(0) if digits_match else "-"
-
-            uname_val = self._resolve_row_value_by_priority(row, "UNAME")
-            if uname_val is None or not str(uname_val).strip():
-                continue
-            uname = str(uname_val).strip().upper()
-
-            client_users = users_by_client.setdefault(mandt, {})
-            client_users.setdefault(uname, set()).add(agr_name_upper)
-
-        self.rscdok99_summary_records.clear()
-        self.rscdok99_users_by_control.clear()
-
-        if not users_by_client:
-            record_key = f"{control_id}|-"
-            self.rscdok99_summary_records[record_key] = {
-                "record_key": record_key,
-                "client": "-",
-                "finding_text": "לא נמצאו משתמשים בעלי הרשאה לתוכנית RSCDOK99",
-                "users_count": 0,
-                "risk_level": control_meta.get("risk_level", "-"),
-                "status": "תקין",
-            }
-            self.rscdok99_users_by_control[record_key] = []
-        else:
-            for mandt, client_users in sorted(users_by_client.items()):
-                users_count = len(client_users)
-                record_key = f"{control_id}|{mandt}"
-                self.rscdok99_summary_records[record_key] = {
-                    "record_key": record_key,
-                    "client": mandt,
-                    "finding_text": f"נמצאו {users_count} משתמשים בעלי הרשאה לתוכנית RSCDOK99",
-                    "users_count": users_count,
-                    "risk_level": control_meta.get("risk_level", "-"),
-                    "status": "עם ממצא" if users_count > 0 else "תקין",
-                }
-                self.rscdok99_users_by_control[record_key] = [
-                    {
-                        "client": mandt,
-                        "user_name": uname,
-                        "roles": [
-                            {
-                                "agr_name": r,
-                                "objects": sorted(agr_name_objects.get(r, set())),
-                            }
-                            for r in sorted(roles)
-                        ],
-                    }
-                    for uname, roles in sorted(client_users.items())
-                ]
-
-        self._refresh_rscdok99_summary_table()
+        self._compute_agr_permission_findings_and(
+            control_id="MA1-1_AYALON_12",
+            criteria=RSCDOK99_PERMISSION_CRITERIA,
+            summary_records=self.rscdok99_summary_records,
+            users_by_control=self.rscdok99_users_by_control,
+            refresh_fn=self._refresh_rscdok99_summary_table,
+            finding_found_text="נמצאו {count} משתמשים בעלי הרשאה לתוכנית RSCDOK99",
+            finding_none_text="לא נמצאו משתמשים בעלי הרשאה לתוכנית RSCDOK99",
+        )
 
     def _refresh_rscdok99_summary_table(self) -> None:
-        self.rscdok99_summary_table.setRowCount(0)
-        self.rscdok99_users_table.setRowCount(0)
-        if not self.rscdok99_summary_records:
-            self.rscdok99_users_table.insertRow(0)
-            empty_item = QTableWidgetItem(self.format_rtl_text("יש לטעון קבצי AGR_1251 ו-AGR_USERS"))
-            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.rscdok99_users_table.setItem(0, 1, empty_item)
-            return
-
-        for row_data in sorted(
-            self.rscdok99_summary_records.values(),
-            key=lambda item: str(item.get("client", "")),
-        ):
-            row_index = self.rscdok99_summary_table.rowCount()
-            self.rscdok99_summary_table.insertRow(row_index)
-            values = [
-                str(row_data.get("client", "-")),
-                str(row_data.get("finding_text", "-")),
-                str(row_data.get("users_count", 0)),
-                str(row_data.get("risk_level", "-")),
-                str(row_data.get("status", "-")),
-            ]
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(self.format_rtl_text(value))
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if column == 0:
-                    item.setData(Qt.ItemDataRole.UserRole, row_data.get("record_key", ""))
-                self.rscdok99_summary_table.setItem(row_index, column, item)
-
-        if self.rscdok99_summary_table.rowCount() > 0:
-            self.rscdok99_summary_table.selectRow(0)
-            self._refresh_selected_rscdok99_users()
-        self.rscdok99_summary_table.resizeColumnsToContents()
+        self._refresh_permission_summary_table(
+            self.rscdok99_summary_table,
+            self.rscdok99_users_table,
+            self.rscdok99_summary_records,
+            self._refresh_selected_rscdok99_users,
+        )
 
     def _refresh_selected_rscdok99_users(self) -> None:
-        selected_items = self.rscdok99_summary_table.selectedItems()
-        if not selected_items:
-            return
-
-        selected_row = selected_items[0].row()
-        control_item = self.rscdok99_summary_table.item(selected_row, 0)
-        if control_item is None:
-            return
-
-        record_key = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text())
-        user_rows = self.rscdok99_users_by_control.get(record_key, [])
-        self.rscdok99_users_table.setRowCount(0)
-
-        if not user_rows:
-            self.rscdok99_users_table.insertRow(0)
-            empty_item = QTableWidgetItem(self.format_rtl_text("לא נמצאו משתמשים להצגה"))
-            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.rscdok99_users_table.setItem(0, 1, empty_item)
-            return
-
-        for user_data in user_rows:
-            row_index = self.rscdok99_users_table.rowCount()
-            self.rscdok99_users_table.insertRow(row_index)
-            client_name = str(user_data.get("client", "-") or "-")
-            user_name = str(user_data.get("user_name", "-") or "-")
-            client_item = QTableWidgetItem(self.format_rtl_text(client_name))
-            client_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            user_item = QTableWidgetItem(self.format_rtl_text(user_name))
-            user_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            user_item.setData(Qt.ItemDataRole.UserRole, {"client": client_name, "user": user_name})
-            self.rscdok99_users_table.setItem(row_index, 0, client_item)
-            self.rscdok99_users_table.setItem(row_index, 1, user_item)
-        self.rscdok99_users_table.resizeColumnsToContents()
+        self._refresh_selected_control_users(
+            self.rscdok99_summary_table,
+            self.rscdok99_users_table,
+            self.rscdok99_users_by_control,
+        )
 
     def show_rscdok99_user_dialog(self, row_index: int, _column: int) -> None:
-        if row_index < 0 or row_index >= self.rscdok99_users_table.rowCount():
-            return
-
-        user_item = self.rscdok99_users_table.item(row_index, 1)
-        if user_item is None:
-            return
-
-        user_payload = user_item.data(Qt.ItemDataRole.UserRole)
-        user_name = ""
-        client_name = "-"
-        if isinstance(user_payload, dict):
-            user_name = str(user_payload.get("user", "") or "").strip()
-            client_name = str(user_payload.get("client", "-") or "-").strip()
-        if not user_name:
-            user_name = str(user_item.text() or "").strip()
-        if not user_name or user_name.startswith("לא נמצאו") or user_name.startswith("אין "):
-            return
-
-        selected_items = self.rscdok99_summary_table.selectedItems()
-        if not selected_items:
-            return
-
-        summary_item = self.rscdok99_summary_table.item(selected_items[0].row(), 0)
-        if summary_item is None:
-            return
-
-        record_key = str(summary_item.data(Qt.ItemDataRole.UserRole) or summary_item.text())
-        user_rows = self.rscdok99_users_by_control.get(record_key, [])
-        roles: list[dict] = []
-        for user_data in user_rows:
-            if (
-                str(user_data.get("user_name", "")).strip().upper() == user_name.upper()
-                and str(user_data.get("client", "-") or "-").strip() == client_name
-            ):
-                roles = list(user_data.get("roles", []))
-                break
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("פירוט הרשאה לתוכנית RSCDOK99")
-        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        dialog.resize(640, 480)
-
-        layout = QVBoxLayout(dialog)
-        details_box = QTextEdit()
-        details_box.setReadOnly(True)
-        lines = [
-            f"קליינט: {client_name}",
-            f"משתמש: {user_name}",
-            "",
-            "רולים ואובייקטי הרשאה:",
-        ]
-        if roles:
-            for role_entry in roles:
-                lines.append(f"- {role_entry.get('agr_name', '')}")
-                for obj, fld, low in role_entry.get("objects", []):
-                    lines.append(f"    {obj} | {fld} | {low}")
-        else:
-            lines.append("- לא נמצאו רולים להצגה")
-        details_box.setPlainText(self.format_rtl_text("\n".join(lines)))
-        layout.addWidget(details_box)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-        buttons.accepted.connect(dialog.accept)
-        layout.addWidget(buttons)
-        dialog.exec()
+        self._show_permission_user_dialog(
+            row_index,
+            self.rscdok99_users_table,
+            self.rscdok99_summary_table,
+            self.rscdok99_users_by_control,
+            "פירוט הרשאה לתוכנית RSCDOK99",
+        )
 
     # ------------------------------------------------------------------
     # Data Management Permissions (MA-DATAMGMT-01)
@@ -7102,267 +6826,40 @@ class ValidationDesktopApp(QMainWindow):
         self._refresh_data_mgmt_summary_table()
 
     def _compute_data_mgmt_permissions(self) -> None:
-        """Recompute data-management permission findings from cached AGR_1251 + AGR_USERS rows.
-
-        OR logic: any single qualifying row in AGR_1251 makes the AGR_NAME a match.
-        Special wildcard criterion: if the qualifying set for a (OBJECT, FIELD) pair
-        contains "*", then any non-empty LOW or HIGH value qualifies.
-        """
-        if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
-            return
-
-        control_id = "MA1-1_AYALON_16"
-        control_meta = get_audit_control_definition(control_id)
-
-        # Step A: find AGR_NAMEs that carry data-management permission objects.
-        qualifying_map: dict[tuple[str, str], set[str]] = {
-            (obj.upper(), fld.upper()): {v.upper() for v in vals}
-            for (obj, fld), vals in DATA_MGMT_PERMISSION_CRITERIA.items()
-        }
-
-        # agr_name_objects: AGR_NAME -> set of (OBJECT, FIELD, LOW_display) tuples that qualified
-        agr_name_objects: dict[str, set[tuple[str, str, str]]] = {}
-        for row in self.agr_1251_cached_rows:
-            obj_val = self._resolve_row_value_by_priority(row, "OBJECT")
-            fld_val = self._resolve_row_value_by_priority(row, "FIELD")
-            low_val = self._resolve_row_value_by_priority(row, "LOW")
-            high_val = self._resolve_row_value_by_priority(row, "HIGH")
-            if obj_val is None or fld_val is None:
-                continue
-            obj_upper = str(obj_val).strip().upper()
-            fld_upper = str(fld_val).strip().upper()
-            key = (obj_upper, fld_upper)
-            if key not in qualifying_map:
-                continue
-            low_str = str(low_val).strip().upper() if low_val is not None else ""
-            high_str = str(high_val).strip().upper() if high_val is not None else ""
-            # SAP data has a wildcard → always qualifies
-            if low_str == "*" or high_str == "*":
-                qualifies = True
-            elif "*" in qualifying_map[key]:
-                # Criterion allows any value → any non-empty LOW or HIGH qualifies
-                qualifies = bool(low_str) or bool(high_str)
-            else:
-                qualifies = bool(low_str and low_str in qualifying_map[key]) or bool(
-                    high_str and high_str in qualifying_map[key]
-                )
-            if not qualifies:
-                continue
-            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
-            if agr_name_val is None or not str(agr_name_val).strip():
-                continue
-            agr_name_upper = str(agr_name_val).strip().upper()
-            low_display = low_str if low_str else "-"
-            agr_name_objects.setdefault(agr_name_upper, set()).add((obj_upper, fld_upper, low_display))
-
-        matching_agr_names: set[str] = set(agr_name_objects.keys())
-
-        # Step B: cross-join with AGR_USERS to collect users per client.
-        users_by_client: dict[str, dict[str, set[str]]] = {}
-        for row in self.agr_users_cached_rows:
-            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
-            if agr_name_val is None:
-                continue
-            agr_name_upper = str(agr_name_val).strip().upper()
-            if agr_name_upper not in matching_agr_names:
-                continue
-
-            mandt_val = self._resolve_row_value_by_priority(row, "MANDT")
-            if mandt_val is not None and str(mandt_val).strip():
-                mandt = str(mandt_val).strip()
-            else:
-                source_file = str(row.get("__source_file", ""))
-                digits_match = re.search(r"\d{3}", Path(source_file).name)
-                mandt = digits_match.group(0) if digits_match else "-"
-
-            uname_val = self._resolve_row_value_by_priority(row, "UNAME")
-            if uname_val is None or not str(uname_val).strip():
-                continue
-            uname = str(uname_val).strip().upper()
-
-            client_users = users_by_client.setdefault(mandt, {})
-            client_users.setdefault(uname, set()).add(agr_name_upper)
-
-        # Step C+D: store results.
-        self.data_mgmt_summary_records.clear()
-        self.data_mgmt_users_by_control.clear()
-
-        if not users_by_client:
-            record_key = f"{control_id}|-"
-            self.data_mgmt_summary_records[record_key] = {
-                "record_key": record_key,
-                "client": "-",
-                "finding_text": "לא נמצאו משתמשים בעלי הרשאות ניהול נתונים",
-                "users_count": 0,
-                "risk_level": control_meta.get("risk_level", "-"),
-                "status": "תקין",
-            }
-            self.data_mgmt_users_by_control[record_key] = []
-        else:
-            for mandt, client_users in sorted(users_by_client.items()):
-                users_count = len(client_users)
-                record_key = f"{control_id}|{mandt}"
-                self.data_mgmt_summary_records[record_key] = {
-                    "record_key": record_key,
-                    "client": mandt,
-                    "finding_text": f"נמצאו {users_count} משתמשים בעלי הרשאות ניהול נתונים",
-                    "users_count": users_count,
-                    "risk_level": control_meta.get("risk_level", "-"),
-                    "status": "עם ממצא" if users_count > 0 else "תקין",
-                }
-                self.data_mgmt_users_by_control[record_key] = [
-                    {
-                        "client": mandt,
-                        "user_name": uname,
-                        "roles": [
-                            {
-                                "agr_name": r,
-                                "objects": sorted(agr_name_objects.get(r, set())),
-                            }
-                            for r in sorted(roles)
-                        ],
-                    }
-                    for uname, roles in sorted(client_users.items())
-                ]
-
-        self._refresh_data_mgmt_summary_table()
+        """Recompute data-management permission findings from cached AGR_1251 + AGR_USERS rows."""
+        self._compute_agr_permission_findings_or(
+            control_id="MA1-1_AYALON_16",
+            criteria=DATA_MGMT_PERMISSION_CRITERIA,
+            summary_records=self.data_mgmt_summary_records,
+            users_by_control=self.data_mgmt_users_by_control,
+            refresh_fn=self._refresh_data_mgmt_summary_table,
+            finding_found_text="נמצאו {count} משתמשים בעלי הרשאות ניהול נתונים",
+            finding_none_text="לא נמצאו משתמשים בעלי הרשאות ניהול נתונים",
+        )
 
     def _refresh_data_mgmt_summary_table(self) -> None:
-        self.data_mgmt_summary_table.setRowCount(0)
-        self.data_mgmt_users_table.setRowCount(0)
-        if not self.data_mgmt_summary_records:
-            self.data_mgmt_users_table.insertRow(0)
-            empty_item = QTableWidgetItem(self.format_rtl_text("יש לטעון קבצי AGR_1251 ו-AGR_USERS"))
-            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.data_mgmt_users_table.setItem(0, 1, empty_item)
-            return
-
-        for row_data in sorted(
-            self.data_mgmt_summary_records.values(),
-            key=lambda item: str(item.get("client", "")),
-        ):
-            row_index = self.data_mgmt_summary_table.rowCount()
-            self.data_mgmt_summary_table.insertRow(row_index)
-            values = [
-                str(row_data.get("client", "-")),
-                str(row_data.get("finding_text", "-")),
-                str(row_data.get("users_count", 0)),
-                str(row_data.get("risk_level", "-")),
-                str(row_data.get("status", "-")),
-            ]
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(self.format_rtl_text(value))
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if column == 0:
-                    item.setData(Qt.ItemDataRole.UserRole, row_data.get("record_key", ""))
-                self.data_mgmt_summary_table.setItem(row_index, column, item)
-
-        if self.data_mgmt_summary_table.rowCount() > 0:
-            self.data_mgmt_summary_table.selectRow(0)
-            self._refresh_selected_data_mgmt_users()
-        self.data_mgmt_summary_table.resizeColumnsToContents()
+        self._refresh_permission_summary_table(
+            self.data_mgmt_summary_table,
+            self.data_mgmt_users_table,
+            self.data_mgmt_summary_records,
+            self._refresh_selected_data_mgmt_users,
+        )
 
     def _refresh_selected_data_mgmt_users(self) -> None:
-        selected_items = self.data_mgmt_summary_table.selectedItems()
-        if not selected_items:
-            return
-
-        selected_row = selected_items[0].row()
-        control_item = self.data_mgmt_summary_table.item(selected_row, 0)
-        if control_item is None:
-            return
-
-        record_key = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text())
-        user_rows = self.data_mgmt_users_by_control.get(record_key, [])
-        self.data_mgmt_users_table.setRowCount(0)
-
-        if not user_rows:
-            self.data_mgmt_users_table.insertRow(0)
-            empty_item = QTableWidgetItem(self.format_rtl_text("לא נמצאו משתמשים להצגה"))
-            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.data_mgmt_users_table.setItem(0, 1, empty_item)
-            return
-
-        for user_data in user_rows:
-            row_index = self.data_mgmt_users_table.rowCount()
-            self.data_mgmt_users_table.insertRow(row_index)
-            client_name = str(user_data.get("client", "-") or "-")
-            user_name = str(user_data.get("user_name", "-") or "-")
-            client_item = QTableWidgetItem(self.format_rtl_text(client_name))
-            client_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            user_item = QTableWidgetItem(self.format_rtl_text(user_name))
-            user_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            user_item.setData(Qt.ItemDataRole.UserRole, {"client": client_name, "user": user_name})
-            self.data_mgmt_users_table.setItem(row_index, 0, client_item)
-            self.data_mgmt_users_table.setItem(row_index, 1, user_item)
-        self.data_mgmt_users_table.resizeColumnsToContents()
+        self._refresh_selected_control_users(
+            self.data_mgmt_summary_table,
+            self.data_mgmt_users_table,
+            self.data_mgmt_users_by_control,
+        )
 
     def show_data_mgmt_user_dialog(self, row_index: int, _column: int) -> None:
-        if row_index < 0 or row_index >= self.data_mgmt_users_table.rowCount():
-            return
-
-        user_item = self.data_mgmt_users_table.item(row_index, 1)
-        if user_item is None:
-            return
-
-        user_payload = user_item.data(Qt.ItemDataRole.UserRole)
-        user_name = ""
-        client_name = "-"
-        if isinstance(user_payload, dict):
-            user_name = str(user_payload.get("user", "") or "").strip()
-            client_name = str(user_payload.get("client", "-") or "-").strip()
-        if not user_name:
-            user_name = str(user_item.text() or "").strip()
-        if not user_name or user_name.startswith("לא נמצאו") or user_name.startswith("אין "):
-            return
-
-        selected_items = self.data_mgmt_summary_table.selectedItems()
-        if not selected_items:
-            return
-
-        summary_item = self.data_mgmt_summary_table.item(selected_items[0].row(), 0)
-        if summary_item is None:
-            return
-
-        record_key = str(summary_item.data(Qt.ItemDataRole.UserRole) or summary_item.text())
-        user_rows = self.data_mgmt_users_by_control.get(record_key, [])
-        roles: list[dict] = []
-        for user_data in user_rows:
-            if (
-                str(user_data.get("user_name", "")).strip().upper() == user_name.upper()
-                and str(user_data.get("client", "-") or "-").strip() == client_name
-            ):
-                roles = list(user_data.get("roles", []))
-                break
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("פירוט הרשאות ניהול נתונים")
-        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        dialog.resize(640, 480)
-
-        layout = QVBoxLayout(dialog)
-        details_box = QTextEdit()
-        details_box.setReadOnly(True)
-        lines = [
-            f"קליינט: {client_name}",
-            f"משתמש: {user_name}",
-            "",
-            "רולים ואובייקטי הרשאה:",
-        ]
-        if roles:
-            for role_entry in roles:
-                lines.append(f"- {role_entry.get('agr_name', '')}")
-                for obj, fld, low in role_entry.get("objects", []):
-                    lines.append(f"    {obj} | {fld} | {low}")
-        else:
-            lines.append("- לא נמצאו רולים להצגה")
-        details_box.setPlainText(self.format_rtl_text("\n".join(lines)))
-        layout.addWidget(details_box)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-        buttons.accepted.connect(dialog.accept)
-        layout.addWidget(buttons)
-        dialog.exec()
+        self._show_permission_user_dialog(
+            row_index,
+            self.data_mgmt_users_table,
+            self.data_mgmt_summary_table,
+            self.data_mgmt_users_by_control,
+            "פירוט הרשאות ניהול נתונים",
+        )
 
     # ------------------------------------------------------------------
     # Transport / Change-Management Permissions (MA-TRANSPORT-01)
@@ -7436,261 +6933,40 @@ class ValidationDesktopApp(QMainWindow):
         self._refresh_transport_summary_table()
 
     def _compute_transport_permissions(self) -> None:
-        """Recompute transport/change-management permission findings from cached AGR_1251 + AGR_USERS rows.
-
-        OR logic: any single qualifying row in AGR_1251 makes the AGR_NAME a match.
-        """
-        if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
-            return
-
-        control_id = "MA1-1_AYALON_43"
-        control_meta = get_audit_control_definition(control_id)
-
-        # Step A: find AGR_NAMEs that carry transport permission objects.
-        qualifying_map: dict[tuple[str, str], set[str]] = {
-            (obj.upper(), fld.upper()): {v.upper() for v in vals}
-            for (obj, fld), vals in TRANSPORT_PERMISSION_CRITERIA.items()
-        }
-
-        # agr_name_objects: AGR_NAME -> set of (OBJECT, FIELD, LOW_display) tuples that qualified
-        agr_name_objects: dict[str, set[tuple[str, str, str]]] = {}
-        for row in self.agr_1251_cached_rows:
-            obj_val = self._resolve_row_value_by_priority(row, "OBJECT")
-            fld_val = self._resolve_row_value_by_priority(row, "FIELD")
-            low_val = self._resolve_row_value_by_priority(row, "LOW")
-            high_val = self._resolve_row_value_by_priority(row, "HIGH")
-            if obj_val is None or fld_val is None:
-                continue
-            obj_upper = str(obj_val).strip().upper()
-            fld_upper = str(fld_val).strip().upper()
-            key = (obj_upper, fld_upper)
-            if key not in qualifying_map:
-                continue
-            low_str = str(low_val).strip().upper() if low_val is not None else ""
-            high_str = str(high_val).strip().upper() if high_val is not None else ""
-            if low_str == "*" or high_str == "*":
-                qualifies = True
-            else:
-                qualifies = bool(low_str and low_str in qualifying_map[key]) or bool(
-                    high_str and high_str in qualifying_map[key]
-                )
-            if not qualifies:
-                continue
-            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
-            if agr_name_val is None or not str(agr_name_val).strip():
-                continue
-            agr_name_upper = str(agr_name_val).strip().upper()
-            low_display = low_str if low_str else "-"
-            agr_name_objects.setdefault(agr_name_upper, set()).add((obj_upper, fld_upper, low_display))
-
-        matching_agr_names: set[str] = set(agr_name_objects.keys())
-
-        # Step B: cross-join with AGR_USERS to collect users per client.
-        users_by_client: dict[str, dict[str, set[str]]] = {}
-        for row in self.agr_users_cached_rows:
-            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
-            if agr_name_val is None:
-                continue
-            agr_name_upper = str(agr_name_val).strip().upper()
-            if agr_name_upper not in matching_agr_names:
-                continue
-
-            mandt_val = self._resolve_row_value_by_priority(row, "MANDT")
-            if mandt_val is not None and str(mandt_val).strip():
-                mandt = str(mandt_val).strip()
-            else:
-                source_file = str(row.get("__source_file", ""))
-                digits_match = re.search(r"\d{3}", Path(source_file).name)
-                mandt = digits_match.group(0) if digits_match else "-"
-
-            uname_val = self._resolve_row_value_by_priority(row, "UNAME")
-            if uname_val is None or not str(uname_val).strip():
-                continue
-            uname = str(uname_val).strip().upper()
-
-            client_users = users_by_client.setdefault(mandt, {})
-            client_users.setdefault(uname, set()).add(agr_name_upper)
-
-        # Step C+D: store results.
-        self.transport_summary_records.clear()
-        self.transport_users_by_control.clear()
-
-        if not users_by_client:
-            record_key = f"{control_id}|-"
-            self.transport_summary_records[record_key] = {
-                "record_key": record_key,
-                "client": "-",
-                "finding_text": "לא נמצאו משתמשים בעלי הרשאת העברת שינויים",
-                "users_count": 0,
-                "risk_level": control_meta.get("risk_level", "-"),
-                "status": "תקין",
-            }
-            self.transport_users_by_control[record_key] = []
-        else:
-            for mandt, client_users in sorted(users_by_client.items()):
-                users_count = len(client_users)
-                record_key = f"{control_id}|{mandt}"
-                self.transport_summary_records[record_key] = {
-                    "record_key": record_key,
-                    "client": mandt,
-                    "finding_text": f"נמצאו {users_count} משתמשים בעלי הרשאת העברת שינויים",
-                    "users_count": users_count,
-                    "risk_level": control_meta.get("risk_level", "-"),
-                    "status": "עם ממצא" if users_count > 0 else "תקין",
-                }
-                self.transport_users_by_control[record_key] = [
-                    {
-                        "client": mandt,
-                        "user_name": uname,
-                        "roles": [
-                            {
-                                "agr_name": r,
-                                "objects": sorted(agr_name_objects.get(r, set())),
-                            }
-                            for r in sorted(roles)
-                        ],
-                    }
-                    for uname, roles in sorted(client_users.items())
-                ]
-
-        self._refresh_transport_summary_table()
+        """Recompute transport/change-management permission findings from cached AGR_1251 + AGR_USERS rows."""
+        self._compute_agr_permission_findings_or(
+            control_id="MA1-1_AYALON_43",
+            criteria=TRANSPORT_PERMISSION_CRITERIA,
+            summary_records=self.transport_summary_records,
+            users_by_control=self.transport_users_by_control,
+            refresh_fn=self._refresh_transport_summary_table,
+            finding_found_text="נמצאו {count} משתמשים בעלי הרשאת העברת שינויים",
+            finding_none_text="לא נמצאו משתמשים בעלי הרשאת העברת שינויים",
+        )
 
     def _refresh_transport_summary_table(self) -> None:
-        self.transport_summary_table.setRowCount(0)
-        self.transport_users_table.setRowCount(0)
-        if not self.transport_summary_records:
-            self.transport_users_table.insertRow(0)
-            empty_item = QTableWidgetItem(self.format_rtl_text("יש לטעון קבצי AGR_1251 ו-AGR_USERS"))
-            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.transport_users_table.setItem(0, 1, empty_item)
-            return
-
-        for row_data in sorted(
-            self.transport_summary_records.values(),
-            key=lambda item: str(item.get("client", "")),
-        ):
-            row_index = self.transport_summary_table.rowCount()
-            self.transport_summary_table.insertRow(row_index)
-            values = [
-                str(row_data.get("client", "-")),
-                str(row_data.get("finding_text", "-")),
-                str(row_data.get("users_count", 0)),
-                str(row_data.get("risk_level", "-")),
-                str(row_data.get("status", "-")),
-            ]
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(self.format_rtl_text(value))
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if column == 0:
-                    item.setData(Qt.ItemDataRole.UserRole, row_data.get("record_key", ""))
-                self.transport_summary_table.setItem(row_index, column, item)
-
-        if self.transport_summary_table.rowCount() > 0:
-            self.transport_summary_table.selectRow(0)
-            self._refresh_selected_transport_users()
-        self.transport_summary_table.resizeColumnsToContents()
+        self._refresh_permission_summary_table(
+            self.transport_summary_table,
+            self.transport_users_table,
+            self.transport_summary_records,
+            self._refresh_selected_transport_users,
+        )
 
     def _refresh_selected_transport_users(self) -> None:
-        selected_items = self.transport_summary_table.selectedItems()
-        if not selected_items:
-            return
-
-        selected_row = selected_items[0].row()
-        control_item = self.transport_summary_table.item(selected_row, 0)
-        if control_item is None:
-            return
-
-        record_key = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text())
-        user_rows = self.transport_users_by_control.get(record_key, [])
-        self.transport_users_table.setRowCount(0)
-
-        if not user_rows:
-            self.transport_users_table.insertRow(0)
-            empty_item = QTableWidgetItem(self.format_rtl_text("לא נמצאו משתמשים להצגה"))
-            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.transport_users_table.setItem(0, 1, empty_item)
-            return
-
-        for user_data in user_rows:
-            row_index = self.transport_users_table.rowCount()
-            self.transport_users_table.insertRow(row_index)
-            client_name = str(user_data.get("client", "-") or "-")
-            user_name = str(user_data.get("user_name", "-") or "-")
-            client_item = QTableWidgetItem(self.format_rtl_text(client_name))
-            client_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            user_item = QTableWidgetItem(self.format_rtl_text(user_name))
-            user_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            user_item.setData(Qt.ItemDataRole.UserRole, {"client": client_name, "user": user_name})
-            self.transport_users_table.setItem(row_index, 0, client_item)
-            self.transport_users_table.setItem(row_index, 1, user_item)
-        self.transport_users_table.resizeColumnsToContents()
+        self._refresh_selected_control_users(
+            self.transport_summary_table,
+            self.transport_users_table,
+            self.transport_users_by_control,
+        )
 
     def show_transport_user_dialog(self, row_index: int, _column: int) -> None:
-        if row_index < 0 or row_index >= self.transport_users_table.rowCount():
-            return
-
-        user_item = self.transport_users_table.item(row_index, 1)
-        if user_item is None:
-            return
-
-        user_payload = user_item.data(Qt.ItemDataRole.UserRole)
-        user_name = ""
-        client_name = "-"
-        if isinstance(user_payload, dict):
-            user_name = str(user_payload.get("user", "") or "").strip()
-            client_name = str(user_payload.get("client", "-") or "-").strip()
-        if not user_name:
-            user_name = str(user_item.text() or "").strip()
-        if not user_name or user_name.startswith("לא נמצאו") or user_name.startswith("אין "):
-            return
-
-        selected_items = self.transport_summary_table.selectedItems()
-        if not selected_items:
-            return
-
-        summary_item = self.transport_summary_table.item(selected_items[0].row(), 0)
-        if summary_item is None:
-            return
-
-        record_key = str(summary_item.data(Qt.ItemDataRole.UserRole) or summary_item.text())
-        user_rows = self.transport_users_by_control.get(record_key, [])
-        roles: list[dict] = []
-        for user_data in user_rows:
-            if (
-                str(user_data.get("user_name", "")).strip().upper() == user_name.upper()
-                and str(user_data.get("client", "-") or "-").strip() == client_name
-            ):
-                roles = list(user_data.get("roles", []))
-                break
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("פירוט הרשאת העברת שינויים")
-        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        dialog.resize(640, 480)
-
-        layout = QVBoxLayout(dialog)
-        details_box = QTextEdit()
-        details_box.setReadOnly(True)
-        lines = [
-            f"קליינט: {client_name}",
-            f"משתמש: {user_name}",
-            "",
-            "רולים ואובייקטי הרשאה:",
-        ]
-        if roles:
-            for role_entry in roles:
-                lines.append(f"- {role_entry.get('agr_name', '')}")
-                for obj, fld, low in role_entry.get("objects", []):
-                    lines.append(f"    {obj} | {fld} | {low}")
-        else:
-            lines.append("- לא נמצאו רולים להצגה")
-        details_box.setPlainText(self.format_rtl_text("\n".join(lines)))
-        layout.addWidget(details_box)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-        buttons.accepted.connect(dialog.accept)
-        layout.addWidget(buttons)
-        dialog.exec()
+        self._show_permission_user_dialog(
+            row_index,
+            self.transport_users_table,
+            self.transport_summary_table,
+            self.transport_users_by_control,
+            "פירוט הרשאת העברת שינויים",
+        )
 
     # ------------------------------------------------------------------
     # DEBUG Permissions (MA-DEBUG-01)
@@ -7764,266 +7040,40 @@ class ValidationDesktopApp(QMainWindow):
         self._refresh_debug_summary_table()
 
     def _compute_debug_permissions(self) -> None:
-        """Recompute DEBUG permission findings from cached AGR_1251 + AGR_USERS rows.
-
-        OR logic: any single qualifying row in AGR_1251 makes the AGR_NAME a match.
-        Special wildcard criterion: if the qualifying set for a (OBJECT, FIELD) pair
-        contains "*", then any non-empty LOW or HIGH value qualifies.
-        """
-        if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
-            return
-
-        control_id = "MA1-1_AYALON_45"
-        control_meta = get_audit_control_definition(control_id)
-
-        # Step A: find AGR_NAMEs that carry DEBUG permission objects.
-        qualifying_map: dict[tuple[str, str], set[str]] = {
-            (obj.upper(), fld.upper()): {v.upper() for v in vals}
-            for (obj, fld), vals in DEBUG_PERMISSION_CRITERIA.items()
-        }
-
-        # agr_name_objects: AGR_NAME -> set of (OBJECT, FIELD, LOW_display) tuples that qualified
-        agr_name_objects: dict[str, set[tuple[str, str, str]]] = {}
-        for row in self.agr_1251_cached_rows:
-            obj_val = self._resolve_row_value_by_priority(row, "OBJECT")
-            fld_val = self._resolve_row_value_by_priority(row, "FIELD")
-            low_val = self._resolve_row_value_by_priority(row, "LOW")
-            high_val = self._resolve_row_value_by_priority(row, "HIGH")
-            if obj_val is None or fld_val is None:
-                continue
-            obj_upper = str(obj_val).strip().upper()
-            fld_upper = str(fld_val).strip().upper()
-            key = (obj_upper, fld_upper)
-            if key not in qualifying_map:
-                continue
-            low_str = str(low_val).strip().upper() if low_val is not None else ""
-            high_str = str(high_val).strip().upper() if high_val is not None else ""
-            if low_str == "*" or high_str == "*":
-                qualifies = True
-            elif "*" in qualifying_map[key]:
-                # Criterion allows any value → any non-empty LOW or HIGH qualifies
-                qualifies = bool(low_str) or bool(high_str)
-            else:
-                qualifies = bool(low_str and low_str in qualifying_map[key]) or bool(
-                    high_str and high_str in qualifying_map[key]
-                )
-            if not qualifies:
-                continue
-            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
-            if agr_name_val is None or not str(agr_name_val).strip():
-                continue
-            agr_name_upper = str(agr_name_val).strip().upper()
-            low_display = low_str if low_str else "-"
-            agr_name_objects.setdefault(agr_name_upper, set()).add((obj_upper, fld_upper, low_display))
-
-        matching_agr_names: set[str] = set(agr_name_objects.keys())
-
-        # Step B: cross-join with AGR_USERS to collect users per client.
-        users_by_client: dict[str, dict[str, set[str]]] = {}
-        for row in self.agr_users_cached_rows:
-            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
-            if agr_name_val is None:
-                continue
-            agr_name_upper = str(agr_name_val).strip().upper()
-            if agr_name_upper not in matching_agr_names:
-                continue
-
-            mandt_val = self._resolve_row_value_by_priority(row, "MANDT")
-            if mandt_val is not None and str(mandt_val).strip():
-                mandt = str(mandt_val).strip()
-            else:
-                source_file = str(row.get("__source_file", ""))
-                digits_match = re.search(r"\d{3}", Path(source_file).name)
-                mandt = digits_match.group(0) if digits_match else "-"
-
-            uname_val = self._resolve_row_value_by_priority(row, "UNAME")
-            if uname_val is None or not str(uname_val).strip():
-                continue
-            uname = str(uname_val).strip().upper()
-
-            client_users = users_by_client.setdefault(mandt, {})
-            client_users.setdefault(uname, set()).add(agr_name_upper)
-
-        # Step C+D: store results.
-        self.debug_summary_records.clear()
-        self.debug_users_by_control.clear()
-
-        if not users_by_client:
-            record_key = f"{control_id}|-"
-            self.debug_summary_records[record_key] = {
-                "record_key": record_key,
-                "client": "-",
-                "finding_text": "לא נמצאו משתמשים בעלי הרשאות DEBUG",
-                "users_count": 0,
-                "risk_level": control_meta.get("risk_level", "-"),
-                "status": "תקין",
-            }
-            self.debug_users_by_control[record_key] = []
-        else:
-            for mandt, client_users in sorted(users_by_client.items()):
-                users_count = len(client_users)
-                record_key = f"{control_id}|{mandt}"
-                self.debug_summary_records[record_key] = {
-                    "record_key": record_key,
-                    "client": mandt,
-                    "finding_text": f"נמצאו {users_count} משתמשים בעלי הרשאות DEBUG",
-                    "users_count": users_count,
-                    "risk_level": control_meta.get("risk_level", "-"),
-                    "status": "עם ממצא" if users_count > 0 else "תקין",
-                }
-                self.debug_users_by_control[record_key] = [
-                    {
-                        "client": mandt,
-                        "user_name": uname,
-                        "roles": [
-                            {
-                                "agr_name": r,
-                                "objects": sorted(agr_name_objects.get(r, set())),
-                            }
-                            for r in sorted(roles)
-                        ],
-                    }
-                    for uname, roles in sorted(client_users.items())
-                ]
-
-        self._refresh_debug_summary_table()
+        """Recompute DEBUG permission findings from cached AGR_1251 + AGR_USERS rows."""
+        self._compute_agr_permission_findings_or(
+            control_id="MA1-1_AYALON_45",
+            criteria=DEBUG_PERMISSION_CRITERIA,
+            summary_records=self.debug_summary_records,
+            users_by_control=self.debug_users_by_control,
+            refresh_fn=self._refresh_debug_summary_table,
+            finding_found_text="נמצאו {count} משתמשים בעלי הרשאות DEBUG",
+            finding_none_text="לא נמצאו משתמשים בעלי הרשאות DEBUG",
+        )
 
     def _refresh_debug_summary_table(self) -> None:
-        self.debug_summary_table.setRowCount(0)
-        self.debug_users_table.setRowCount(0)
-        if not self.debug_summary_records:
-            self.debug_users_table.insertRow(0)
-            empty_item = QTableWidgetItem(self.format_rtl_text("יש לטעון קבצי AGR_1251 ו-AGR_USERS"))
-            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.debug_users_table.setItem(0, 1, empty_item)
-            return
-
-        for row_data in sorted(
-            self.debug_summary_records.values(),
-            key=lambda item: str(item.get("client", "")),
-        ):
-            row_index = self.debug_summary_table.rowCount()
-            self.debug_summary_table.insertRow(row_index)
-            values = [
-                str(row_data.get("client", "-")),
-                str(row_data.get("finding_text", "-")),
-                str(row_data.get("users_count", 0)),
-                str(row_data.get("risk_level", "-")),
-                str(row_data.get("status", "-")),
-            ]
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(self.format_rtl_text(value))
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if column == 0:
-                    item.setData(Qt.ItemDataRole.UserRole, row_data.get("record_key", ""))
-                self.debug_summary_table.setItem(row_index, column, item)
-
-        if self.debug_summary_table.rowCount() > 0:
-            self.debug_summary_table.selectRow(0)
-            self._refresh_selected_debug_users()
-        self.debug_summary_table.resizeColumnsToContents()
+        self._refresh_permission_summary_table(
+            self.debug_summary_table,
+            self.debug_users_table,
+            self.debug_summary_records,
+            self._refresh_selected_debug_users,
+        )
 
     def _refresh_selected_debug_users(self) -> None:
-        selected_items = self.debug_summary_table.selectedItems()
-        if not selected_items:
-            return
-
-        selected_row = selected_items[0].row()
-        control_item = self.debug_summary_table.item(selected_row, 0)
-        if control_item is None:
-            return
-
-        record_key = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text())
-        user_rows = self.debug_users_by_control.get(record_key, [])
-        self.debug_users_table.setRowCount(0)
-
-        if not user_rows:
-            self.debug_users_table.insertRow(0)
-            empty_item = QTableWidgetItem(self.format_rtl_text("לא נמצאו משתמשים להצגה"))
-            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.debug_users_table.setItem(0, 1, empty_item)
-            return
-
-        for user_data in user_rows:
-            row_index = self.debug_users_table.rowCount()
-            self.debug_users_table.insertRow(row_index)
-            client_name = str(user_data.get("client", "-") or "-")
-            user_name = str(user_data.get("user_name", "-") or "-")
-            client_item = QTableWidgetItem(self.format_rtl_text(client_name))
-            client_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            user_item = QTableWidgetItem(self.format_rtl_text(user_name))
-            user_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            user_item.setData(Qt.ItemDataRole.UserRole, {"client": client_name, "user": user_name})
-            self.debug_users_table.setItem(row_index, 0, client_item)
-            self.debug_users_table.setItem(row_index, 1, user_item)
-        self.debug_users_table.resizeColumnsToContents()
+        self._refresh_selected_control_users(
+            self.debug_summary_table,
+            self.debug_users_table,
+            self.debug_users_by_control,
+        )
 
     def show_debug_user_dialog(self, row_index: int, _column: int) -> None:
-        if row_index < 0 or row_index >= self.debug_users_table.rowCount():
-            return
-
-        user_item = self.debug_users_table.item(row_index, 1)
-        if user_item is None:
-            return
-
-        user_payload = user_item.data(Qt.ItemDataRole.UserRole)
-        user_name = ""
-        client_name = "-"
-        if isinstance(user_payload, dict):
-            user_name = str(user_payload.get("user", "") or "").strip()
-            client_name = str(user_payload.get("client", "-") or "-").strip()
-        if not user_name:
-            user_name = str(user_item.text() or "").strip()
-        if not user_name or user_name.startswith("לא נמצאו") or user_name.startswith("אין "):
-            return
-
-        selected_items = self.debug_summary_table.selectedItems()
-        if not selected_items:
-            return
-
-        summary_item = self.debug_summary_table.item(selected_items[0].row(), 0)
-        if summary_item is None:
-            return
-
-        record_key = str(summary_item.data(Qt.ItemDataRole.UserRole) or summary_item.text())
-        user_rows = self.debug_users_by_control.get(record_key, [])
-        roles: list[dict] = []
-        for user_data in user_rows:
-            if (
-                str(user_data.get("user_name", "")).strip().upper() == user_name.upper()
-                and str(user_data.get("client", "-") or "-").strip() == client_name
-            ):
-                roles = list(user_data.get("roles", []))
-                break
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("פירוט הרשאות DEBUG")
-        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        dialog.resize(640, 480)
-
-        layout = QVBoxLayout(dialog)
-        details_box = QTextEdit()
-        details_box.setReadOnly(True)
-        lines = [
-            f"קליינט: {client_name}",
-            f"משתמש: {user_name}",
-            "",
-            "רולים ואובייקטי הרשאה:",
-        ]
-        if roles:
-            for role_entry in roles:
-                lines.append(f"- {role_entry.get('agr_name', '')}")
-                for obj, fld, low in role_entry.get("objects", []):
-                    lines.append(f"    {obj} | {fld} | {low}")
-        else:
-            lines.append("- לא נמצאו רולים להצגה")
-        details_box.setPlainText(self.format_rtl_text("\n".join(lines)))
-        layout.addWidget(details_box)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-        buttons.accepted.connect(dialog.accept)
-        layout.addWidget(buttons)
-        dialog.exec()
+        self._show_permission_user_dialog(
+            row_index,
+            self.debug_users_table,
+            self.debug_summary_table,
+            self.debug_users_by_control,
+            "פירוט הרשאות DEBUG",
+        )
 
     # ------------------------------------------------------------------
     # Job-Management Permissions (MA-JOBMGMT-01)
@@ -8096,264 +7146,40 @@ class ValidationDesktopApp(QMainWindow):
         self._refresh_job_mgmt_summary_table()
 
     def _compute_job_mgmt_permissions(self) -> None:
-        """Recompute job-management permission findings from cached AGR_1251 + AGR_USERS rows.
-
-        OR logic: any single qualifying row in AGR_1251 makes the AGR_NAME a match.
-        Special wildcard criterion: if the qualifying set for a (OBJECT, FIELD) pair
-        contains "*", then any non-empty LOW or HIGH value qualifies.
-        """
-        if not self.agr_1251_cached_rows or not self.agr_users_cached_rows:
-            return
-
-        control_id = "MA1-1_AYALON_67"
-        control_meta = get_audit_control_definition(control_id)
-
-        qualifying_map: dict[tuple[str, str], set[str]] = {
-            (obj.upper(), fld.upper()): {v.upper() for v in vals}
-            for (obj, fld), vals in JOB_MGMT_PERMISSION_CRITERIA.items()
-        }
-
-        # agr_name_objects: AGR_NAME -> set of (OBJECT, FIELD, LOW_display) tuples that qualified
-        agr_name_objects: dict[str, set[tuple[str, str, str]]] = {}
-        for row in self.agr_1251_cached_rows:
-            obj_val = self._resolve_row_value_by_priority(row, "OBJECT")
-            fld_val = self._resolve_row_value_by_priority(row, "FIELD")
-            low_val = self._resolve_row_value_by_priority(row, "LOW")
-            high_val = self._resolve_row_value_by_priority(row, "HIGH")
-            if obj_val is None or fld_val is None:
-                continue
-            obj_upper = str(obj_val).strip().upper()
-            fld_upper = str(fld_val).strip().upper()
-            key = (obj_upper, fld_upper)
-            if key not in qualifying_map:
-                continue
-            low_str = str(low_val).strip().upper() if low_val is not None else ""
-            high_str = str(high_val).strip().upper() if high_val is not None else ""
-            if low_str == "*" or high_str == "*":
-                qualifies = True
-            elif "*" in qualifying_map[key]:
-                # Criterion allows any value → any non-empty LOW or HIGH qualifies
-                qualifies = bool(low_str) or bool(high_str)
-            else:
-                qualifies = bool(low_str and low_str in qualifying_map[key]) or bool(
-                    high_str and high_str in qualifying_map[key]
-                )
-            if not qualifies:
-                continue
-            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
-            if agr_name_val is None or not str(agr_name_val).strip():
-                continue
-            agr_name_upper = str(agr_name_val).strip().upper()
-            low_display = low_str if low_str else "-"
-            agr_name_objects.setdefault(agr_name_upper, set()).add((obj_upper, fld_upper, low_display))
-
-        matching_agr_names: set[str] = set(agr_name_objects.keys())
-
-        # Cross-join with AGR_USERS to collect users per client.
-        users_by_client: dict[str, dict[str, set[str]]] = {}
-        for row in self.agr_users_cached_rows:
-            agr_name_val = self._resolve_row_value_by_priority(row, "AGR_NAME")
-            if agr_name_val is None:
-                continue
-            agr_name_upper = str(agr_name_val).strip().upper()
-            if agr_name_upper not in matching_agr_names:
-                continue
-
-            mandt_val = self._resolve_row_value_by_priority(row, "MANDT")
-            if mandt_val is not None and str(mandt_val).strip():
-                mandt = str(mandt_val).strip()
-            else:
-                source_file = str(row.get("__source_file", ""))
-                digits_match = re.search(r"\d{3}", Path(source_file).name)
-                mandt = digits_match.group(0) if digits_match else "-"
-
-            uname_val = self._resolve_row_value_by_priority(row, "UNAME")
-            if uname_val is None or not str(uname_val).strip():
-                continue
-            uname = str(uname_val).strip().upper()
-
-            client_users = users_by_client.setdefault(mandt, {})
-            client_users.setdefault(uname, set()).add(agr_name_upper)
-
-        self.job_mgmt_summary_records.clear()
-        self.job_mgmt_users_by_control.clear()
-
-        if not users_by_client:
-            record_key = f"{control_id}|-"
-            self.job_mgmt_summary_records[record_key] = {
-                "record_key": record_key,
-                "client": "-",
-                "finding_text": "לא נמצאו משתמשים בעלי הרשאות עידכון ג'ובים",
-                "users_count": 0,
-                "risk_level": control_meta.get("risk_level", "-"),
-                "status": "תקין",
-            }
-            self.job_mgmt_users_by_control[record_key] = []
-        else:
-            for mandt, client_users in sorted(users_by_client.items()):
-                users_count = len(client_users)
-                record_key = f"{control_id}|{mandt}"
-                self.job_mgmt_summary_records[record_key] = {
-                    "record_key": record_key,
-                    "client": mandt,
-                    "finding_text": f"נמצאו {users_count} משתמשים בעלי הרשאות עידכון ג'ובים",
-                    "users_count": users_count,
-                    "risk_level": control_meta.get("risk_level", "-"),
-                    "status": "עם ממצא" if users_count > 0 else "תקין",
-                }
-                self.job_mgmt_users_by_control[record_key] = [
-                    {
-                        "client": mandt,
-                        "user_name": uname,
-                        "roles": [
-                            {
-                                "agr_name": r,
-                                "objects": sorted(agr_name_objects.get(r, set())),
-                            }
-                            for r in sorted(roles)
-                        ],
-                    }
-                    for uname, roles in sorted(client_users.items())
-                ]
-
-        self._refresh_job_mgmt_summary_table()
+        """Recompute job-management permission findings from cached AGR_1251 + AGR_USERS rows."""
+        self._compute_agr_permission_findings_or(
+            control_id="MA1-1_AYALON_67",
+            criteria=JOB_MGMT_PERMISSION_CRITERIA,
+            summary_records=self.job_mgmt_summary_records,
+            users_by_control=self.job_mgmt_users_by_control,
+            refresh_fn=self._refresh_job_mgmt_summary_table,
+            finding_found_text="נמצאו {count} משתמשים בעלי הרשאות עידכון ג'ובים",
+            finding_none_text="לא נמצאו משתמשים בעלי הרשאות עידכון ג'ובים",
+        )
 
     def _refresh_job_mgmt_summary_table(self) -> None:
-        self.job_mgmt_summary_table.setRowCount(0)
-        self.job_mgmt_users_table.setRowCount(0)
-        if not self.job_mgmt_summary_records:
-            self.job_mgmt_users_table.insertRow(0)
-            empty_item = QTableWidgetItem(self.format_rtl_text("יש לטעון קבצי AGR_1251 ו-AGR_USERS"))
-            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.job_mgmt_users_table.setItem(0, 1, empty_item)
-            return
-
-        for row_data in sorted(
-            self.job_mgmt_summary_records.values(),
-            key=lambda item: str(item.get("client", "")),
-        ):
-            row_index = self.job_mgmt_summary_table.rowCount()
-            self.job_mgmt_summary_table.insertRow(row_index)
-            values = [
-                str(row_data.get("client", "-")),
-                str(row_data.get("finding_text", "-")),
-                str(row_data.get("users_count", 0)),
-                str(row_data.get("risk_level", "-")),
-                str(row_data.get("status", "-")),
-            ]
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(self.format_rtl_text(value))
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if column == 0:
-                    item.setData(Qt.ItemDataRole.UserRole, row_data.get("record_key", ""))
-                self.job_mgmt_summary_table.setItem(row_index, column, item)
-
-        if self.job_mgmt_summary_table.rowCount() > 0:
-            self.job_mgmt_summary_table.selectRow(0)
-            self._refresh_selected_job_mgmt_users()
-        self.job_mgmt_summary_table.resizeColumnsToContents()
+        self._refresh_permission_summary_table(
+            self.job_mgmt_summary_table,
+            self.job_mgmt_users_table,
+            self.job_mgmt_summary_records,
+            self._refresh_selected_job_mgmt_users,
+        )
 
     def _refresh_selected_job_mgmt_users(self) -> None:
-        selected_items = self.job_mgmt_summary_table.selectedItems()
-        if not selected_items:
-            return
-
-        selected_row = selected_items[0].row()
-        control_item = self.job_mgmt_summary_table.item(selected_row, 0)
-        if control_item is None:
-            return
-
-        record_key = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text())
-        user_rows = self.job_mgmt_users_by_control.get(record_key, [])
-        self.job_mgmt_users_table.setRowCount(0)
-
-        if not user_rows:
-            self.job_mgmt_users_table.insertRow(0)
-            empty_item = QTableWidgetItem(self.format_rtl_text("לא נמצאו משתמשים להצגה"))
-            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.job_mgmt_users_table.setItem(0, 1, empty_item)
-            return
-
-        for user_data in user_rows:
-            row_index = self.job_mgmt_users_table.rowCount()
-            self.job_mgmt_users_table.insertRow(row_index)
-            client_name = str(user_data.get("client", "-") or "-")
-            user_name = str(user_data.get("user_name", "-") or "-")
-            client_item = QTableWidgetItem(self.format_rtl_text(client_name))
-            client_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            user_item = QTableWidgetItem(self.format_rtl_text(user_name))
-            user_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            user_item.setData(Qt.ItemDataRole.UserRole, {"client": client_name, "user": user_name})
-            self.job_mgmt_users_table.setItem(row_index, 0, client_item)
-            self.job_mgmt_users_table.setItem(row_index, 1, user_item)
-        self.job_mgmt_users_table.resizeColumnsToContents()
+        self._refresh_selected_control_users(
+            self.job_mgmt_summary_table,
+            self.job_mgmt_users_table,
+            self.job_mgmt_users_by_control,
+        )
 
     def show_job_mgmt_user_dialog(self, row_index: int, _column: int) -> None:
-        if row_index < 0 or row_index >= self.job_mgmt_users_table.rowCount():
-            return
-
-        user_item = self.job_mgmt_users_table.item(row_index, 1)
-        if user_item is None:
-            return
-
-        user_payload = user_item.data(Qt.ItemDataRole.UserRole)
-        user_name = ""
-        client_name = "-"
-        if isinstance(user_payload, dict):
-            user_name = str(user_payload.get("user", "") or "").strip()
-            client_name = str(user_payload.get("client", "-") or "-").strip()
-        if not user_name:
-            user_name = str(user_item.text() or "").strip()
-        if not user_name or user_name.startswith("לא נמצאו") or user_name.startswith("אין "):
-            return
-
-        selected_items = self.job_mgmt_summary_table.selectedItems()
-        if not selected_items:
-            return
-
-        summary_item = self.job_mgmt_summary_table.item(selected_items[0].row(), 0)
-        if summary_item is None:
-            return
-
-        record_key = str(summary_item.data(Qt.ItemDataRole.UserRole) or summary_item.text())
-        user_rows = self.job_mgmt_users_by_control.get(record_key, [])
-        roles: list[dict] = []
-        for user_data in user_rows:
-            if (
-                str(user_data.get("user_name", "")).strip().upper() == user_name.upper()
-                and str(user_data.get("client", "-") or "-").strip() == client_name
-            ):
-                roles = list(user_data.get("roles", []))
-                break
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("פירוט הרשאות עידכון ג'ובים")
-        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        dialog.resize(640, 480)
-
-        layout = QVBoxLayout(dialog)
-        details_box = QTextEdit()
-        details_box.setReadOnly(True)
-        lines = [
-            f"קליינט: {client_name}",
-            f"משתמש: {user_name}",
-            "",
-            "רולים ואובייקטי הרשאה:",
-        ]
-        if roles:
-            for role_entry in roles:
-                lines.append(f"- {role_entry.get('agr_name', '')}")
-                for obj, fld, low in role_entry.get("objects", []):
-                    lines.append(f"    {obj} | {fld} | {low}")
-        else:
-            lines.append("- לא נמצאו רולים להצגה")
-        details_box.setPlainText(self.format_rtl_text("\n".join(lines)))
-        layout.addWidget(details_box)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-        buttons.accepted.connect(dialog.accept)
-        layout.addWidget(buttons)
-        dialog.exec()
+        self._show_permission_user_dialog(
+            row_index,
+            self.job_mgmt_users_table,
+            self.job_mgmt_summary_table,
+            self.job_mgmt_users_by_control,
+            "פירוט הרשאות עידכון ג'ובים",
+        )
 
     def _build_audit_detail_row(
         self,

@@ -78,4 +78,4 @@ class UserReviewActivityLogger:
     def _normalize_value(value: object) -> str:
         if value is None:
             return ""
-        return str(value).strip()
+        return str(value).strip().replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
