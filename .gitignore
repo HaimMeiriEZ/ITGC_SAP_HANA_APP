@@ -84,3 +84,6 @@ Icon?
 *.tmp
 *.bak
 
+# Developer tools (not part of the app — contains hardcoded infra URLs)
+reviewer_cli.py
+
