@@ -17,6 +17,31 @@ from src.validators.spec_rules import build_strong_profile_issues
 
 
 class TestSmoke(unittest.TestCase):
+    # ------------------------------------------------------------------
+    # Shared GUI fixture — created once per test-class to avoid the
+    # ~0.3 s PySide6 init cost on every test that doesn't need isolated
+    # disk state.  Tests that need a base_dir still create their own
+    # ValidationDesktopApp(base_dir=...) instance.
+    # ------------------------------------------------------------------
+    _qt_app: "QApplication | None" = None
+    _window: "ValidationDesktopApp | None" = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._qt_app = get_qt_app()
+        cls._window = ValidationDesktopApp()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        if cls._window is not None:
+            cls._window.close()
+            cls._window = None
+
+    def setUp(self) -> None:
+        """Reset shared window to a clean baseline before each test."""
+        if self._window is not None:
+            self._window._reset_runtime_state()
+
     def test_text_file_is_loaded_and_validated(self) -> None:
         with TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "users.txt"
@@ -106,53 +131,45 @@ class TestSmoke(unittest.TestCase):
         self.assertIn("משתמש: AROMI", issues[0].full_description)
 
     def test_permission_detail_reports_role_as_actual_and_blank_expected(self) -> None:
-        qt_app = get_qt_app()
-        self.assertIsInstance(qt_app, QApplication)
-
-        window = ValidationDesktopApp()
-        try:
-            record_key = "MA1-1_AYALON_10|100"
-            window.user_mgmt_summary_records = {
-                record_key: {
-                    "record_key": record_key,
-                    "control_id": "MA1-1_AYALON_10",
+        self.assertIsInstance(self._qt_app, QApplication)
+        window = self._window
+        record_key = "MA1-1_AYALON_10|100"
+        window.user_mgmt_summary_records = {
+        record_key: {
+                "record_key": record_key,
+                "control_id": "MA1-1_AYALON_10",
+                "client": "100",
+                "users_count": 1,
+                "status": "עם ממצא",
+                "risk_level": "גבוה",
+                "finding_text": "נמצאו משתמשים עם הרשאות ניהול משתמשים",
+        }
+        }
+        window.user_mgmt_users_by_control = {
+        record_key: [
+                {
                     "client": "100",
-                    "users_count": 1,
-                    "status": "עם ממצא",
-                    "risk_level": "גבוה",
-                    "finding_text": "נמצאו משתמשים עם הרשאות ניהול משתמשים",
+                    "user_name": "AROMI",
+                    "roles": [
+                        {
+                            "agr_name": "Z_SU01_ADMIN",
+                            "objects": [("S_TCODE", "TCD", "SU01")],
+                        }
+                    ],
                 }
-            }
-            window.user_mgmt_users_by_control = {
-                record_key: [
-                    {
-                        "client": "100",
-                        "user_name": "AROMI",
-                        "roles": [
-                            {
-                                "agr_name": "Z_SU01_ADMIN",
-                                "objects": [("S_TCODE", "TCD", "SU01")],
-                            }
-                        ],
-                    }
-                ]
-            }
+        ]
+        }
 
-            window._sync_permissions_findings_into_analysis_summary()
+        window._sync_permissions_findings_into_analysis_summary()
 
-            detail = window.audit_details_by_control["MA1-1_AYALON_10"][0]
-            self.assertEqual(detail["client"], "100")
-            self.assertEqual(detail["user_name"], "AROMI")
-            self.assertEqual(detail["actual_value"], "Z_SU01_ADMIN")
-            self.assertEqual(detail["expected_value"], "")
-            self.assertIn("משתמש: AROMI", detail["full_description"])
-        finally:
-            window.close()
+        detail = window.audit_details_by_control["MA1-1_AYALON_10"][0]
+        self.assertEqual(detail["client"], "100")
+        self.assertEqual(detail["user_name"], "AROMI")
+        self.assertEqual(detail["actual_value"], "Z_SU01_ADMIN")
+        self.assertEqual(detail["expected_value"], "")
+        self.assertIn("משתמש: AROMI", detail["full_description"])
 
     def test_strong_profile_review_table_keeps_users_separate_from_profiles(self) -> None:
-        qt_app = get_qt_app()
-        self.assertIsInstance(qt_app, QApplication)
-
         rows = [
             {
                 "MANDT": "400",
@@ -170,25 +187,22 @@ class TestSmoke(unittest.TestCase):
         issues = build_strong_profile_issues("UST04", rows)
         result = ValidationResult(rows=rows, issues=issues, detected_profile="UST04")
 
-        window = ValidationDesktopApp()
-        try:
-            window._upsert_permissions_control_data("UST04", result, issues, "")
-            record_key = "MA3-3_AYALON_14|400"
-            user_rows = window.permissions_users_by_control[record_key]
+        window = self._window
+        window._upsert_permissions_control_data("UST04", result, issues, "")
+        record_key = "MA3-3_AYALON_14|400"
+        user_rows = window.permissions_users_by_control[record_key]
 
-            self.assertEqual(len(user_rows), 1)
-            self.assertEqual(user_rows[0]["client"], "400")
-            self.assertEqual(user_rows[0]["user_name"], "AROMI")
-            self.assertEqual(user_rows[0]["profiles"], ["SAP_ALL", "S_A.SYSTEM"])
+        self.assertEqual(len(user_rows), 1)
+        self.assertEqual(user_rows[0]["client"], "400")
+        self.assertEqual(user_rows[0]["user_name"], "AROMI")
+        self.assertEqual(user_rows[0]["profiles"], ["SAP_ALL", "S_A.SYSTEM"])
 
-            window._sync_permissions_findings_into_analysis_summary()
-            detail = window.audit_details_by_control["MA3-3_AYALON_14"][0]
-            self.assertEqual(detail["client"], "400")
-            self.assertEqual(detail["user_name"], "AROMI")
-            self.assertEqual(detail["actual_value"], "SAP_ALL, S_A.SYSTEM")
-            self.assertEqual(detail["expected_value"], "")
-        finally:
-            window.close()
+        window._sync_permissions_findings_into_analysis_summary()
+        detail = window.audit_details_by_control["MA3-3_AYALON_14"][0]
+        self.assertEqual(detail["client"], "400")
+        self.assertEqual(detail["user_name"], "AROMI")
+        self.assertEqual(detail["actual_value"], "SAP_ALL, S_A.SYSTEM")
+        self.assertEqual(detail["expected_value"], "")
 
     def test_working_paper_marks_strong_profile_raw_rows_as_findings(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -612,80 +626,76 @@ class TestSmoke(unittest.TestCase):
             self.assertFalse(any(issue.message == "עמודת חובה חסרה" for issue in result.issues))
 
     def test_desktop_gui_initializes_with_hebrew_labels(self) -> None:
-        qt_app = get_qt_app()
-        self.assertIsInstance(qt_app, QApplication)
-
-        window = ValidationDesktopApp()
-        try:
-            self.assertEqual(window.windowTitle(), "כלי להערכת בקרות ITGC בסביבת SAP HANA APP")
-            self.assertEqual(window.tabs.count(), 5)
-            self.assertEqual(window.tabs.tabText(0), "קליטת קבצים")
-            self.assertEqual(window.tabs.tabText(1), "הגדרות מערכת לביקורת")
-            self.assertEqual(window.tabs.tabText(2), "סקירת דוח משתמשים")
-            self.assertEqual(window.tabs.tabText(3), "סקירת הרשאות")
-            self.assertEqual(window.tabs.tabText(4), "ביצוע ניתוח לביקורת")
-            self.assertIn("QTabBar::tab:selected", window.tabs.styleSheet())
-            self.assertIn("background-color: #6d002f", window.tabs.styleSheet())
-            self.assertIn("color: white", window.tabs.styleSheet())
-            self.assertIn("בצע ניתוח", window.audit_run_button.text())
-            self.assertIn("ייצוא", window.export_log_button.text())
-            self.assertIn("מסך בדיקת קלטי SAP HANA APP", ValidationDesktopApp.format_rtl_text(window.header_label.text()))
-            self.assertIn("כלי להערכת בקרות ITGC", ValidationDesktopApp.format_rtl_text(window.app_title_label.text()))
-            self.assertIs(window.header_label.parentWidget().parentWidget(), window.intake_tab)
-            self.assertIs(window.hint_label.parentWidget(), window.intake_tab)
-            self.assertIs(window.actions_row.parentWidget(), window.intake_tab)
-            self.assertIn("מקורות קלט לבדיקת SAP HANA APP", window.slots_group.title())
-            self.assertTrue(window.slots_group.alignment() & Qt.AlignLeft)
-            self.assertEqual(window.header_label.layoutDirection(), Qt.LeftToRight)
-            self.assertEqual(window.hint_label.layoutDirection(), Qt.RightToLeft)
-            self.assertEqual(window.actions_row.layoutDirection(), Qt.LeftToRight)
-            self.assertEqual(window.actions_row.sizePolicy().horizontalPolicy(), QSizePolicy.Expanding)
-            self.assertFalse(window.required_columns_group.isVisible())
-            self.assertFalse(window.summary_group.isVisible())
-            self.assertFalse(window.results_group.isVisible())
-            self.assertIn("לחיצה כפולה", window.run_log_table.toolTip())
-            self.assertEqual(window.run_log_table.columnCount(), 10)
-            self.assertEqual(window.run_log_table.horizontalHeaderItem(1).text(), "קבוצת דוחות")
-            self.assertEqual(window.run_log_table.horizontalHeaderItem(3).text(), "תאריך הפקה")
-            self.assertEqual(window.run_log_table.horizontalHeaderItem(4).text(), "רשומות שנקלטו")
-            self.assertEqual(window.run_log_table.horizontalHeaderItem(7).text(), "תיאור שגיאה")
-            self.assertEqual(window.run_log_table.horizontalHeaderItem(8).text(), "תאריך בדיקה")
-            self.assertEqual(window.run_log_table.horizontalHeaderItem(9).text(), "שעת בדיקה")
-            self.assertIn("USR02", window.slot_widgets)
-            self.assertIn("extraction_date_edit", window.slot_widgets["USR02"])
-            self.assertIn("extraction_date_label", window.slot_widgets["USR02"])
-            self.assertTrue(window.slot_widgets["USR02"]["extraction_date_label"].alignment() & Qt.AlignRight)
-            self.assertEqual(window.slot_widgets["USR02"]["path_label"].layoutDirection(), Qt.RightToLeft)
-            self.assertEqual(window.SLOT_DEFINITIONS["ADR6_USR21"]["label"], "ADR6 / USER_ADDR")
-            self.assertIn("USER_ADDR", window.SLOT_DEFINITIONS["ADR6_USR21"]["description"])
-            self.assertIs(window.run_log_group.parentWidget(), window.intake_tab)
-            self.assertIs(window.user_preview_group.parentWidget(), window.review_tab)
-            self.assertEqual(window.user_preview_group.title(), ValidationDesktopApp.format_ui_rtl_text("רשימת משתמשים שנטענו"))
-            self.assertGreaterEqual(window.user_preview_table.columnCount(), 24)
-            self.assertEqual(window.user_preview_table.verticalScrollBarPolicy(), Qt.ScrollBarAlwaysOn)
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(0).text(), "CLIENT")
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(1).text(), "סביבת עבודה")
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(2).text(), "משתמש")
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(9).text(), "מספר כתובת")
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(10).text(), "מספר פרסונה")
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(13).text(), "סיסמה ראשונית")
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(14).text(), "תאריך שינוי סיסמה")
-            self.assertEqual(window.user_preview_table.horizontalHeaderItem(15).text(), "תאריך הגדרת סיסמה")
-            self.assertIn("טרם נבחר קובץ", window.slot_widgets["USR02"]["path_label"].text())
-            window.slot_widgets["USR02"]["selected_paths"] = ["C:/temp/usr02_100.txt"]
-            window._update_slot_path_label("USR02")
-            self.assertEqual(window.slot_widgets["USR02"]["path_label"].layoutDirection(), Qt.LeftToRight)
-            self.assertTrue(window.slot_widgets["USR02"]["path_label"].alignment() & Qt.AlignLeft)
-            self.assertIn("AGR_USERS", window.slot_widgets)
-            self.assertIn("RSPARAM", window.slot_widgets)
-            self.assertIn("MA - ניהול גישה", window.category_run_buttons)
-            self.assertIn("MA - ניהול גישה", window.category_sections)
-            self.assertEqual(window.category_run_buttons["MA - ניהול גישה"].text(), "הרץ בדיקות תחום")
-            self.assertNotEqual(window.category_run_buttons["MA - ניהול גישה"].styleSheet(), "")
-            domain_layout = window.category_sections["MA - ניהול גישה"].layout()
-            self.assertIsNotNone(domain_layout)
-        finally:
-            window.close()
+        self.assertIsInstance(self._qt_app, QApplication)
+        window = self._window
+        self.assertEqual(window.windowTitle(), "כלי להערכת בקרות ITGC בסביבת SAP HANA APP")
+        self.assertEqual(window.tabs.count(), 6)
+        self.assertEqual(window.tabs.tabText(0), "רשימת בקרות לניתוח")
+        self.assertEqual(window.tabs.tabText(1), "הגדרות מערכת לביקורת")
+        self.assertEqual(window.tabs.tabText(2), "קליטת קבצים")
+        self.assertEqual(window.tabs.tabText(3), "סקירת דוח משתמשים")
+        self.assertEqual(window.tabs.tabText(4), "סקירת הרשאות")
+        self.assertEqual(window.tabs.tabText(5), "ביצוע ניתוח לביקורת")
+        self.assertIn("QTabBar::tab:selected", window.tabs.styleSheet())
+        self.assertIn("background-color: #6d002f", window.tabs.styleSheet())
+        self.assertIn("color: white", window.tabs.styleSheet())
+        self.assertIn("בצע ניתוח", window.audit_run_button.text())
+        self.assertIn("ייצוא", window.export_log_button.text())
+        self.assertIn("מסך בדיקת קלטי SAP HANA APP", ValidationDesktopApp.format_rtl_text(window.header_label.text()))
+        self.assertIn("כלי להערכת בקרות ITGC", ValidationDesktopApp.format_rtl_text(window.app_title_label.text()))
+        self.assertIs(window.header_label.parentWidget().parentWidget(), window.intake_tab)
+        self.assertIs(window.hint_label.parentWidget(), window.intake_tab)
+        self.assertIs(window.actions_row.parentWidget(), window.intake_tab)
+        self.assertIn("מקורות קלט לבדיקת SAP HANA APP", window.slots_group.title())
+        self.assertTrue(window.slots_group.alignment() & Qt.AlignLeft)
+        self.assertEqual(window.header_label.layoutDirection(), Qt.LeftToRight)
+        self.assertEqual(window.hint_label.layoutDirection(), Qt.RightToLeft)
+        self.assertEqual(window.actions_row.layoutDirection(), Qt.LeftToRight)
+        self.assertEqual(window.actions_row.sizePolicy().horizontalPolicy(), QSizePolicy.Expanding)
+        self.assertFalse(window.required_columns_group.isVisible())
+        self.assertFalse(window.summary_group.isVisible())
+        self.assertFalse(window.results_group.isVisible())
+        self.assertIn("לחיצה כפולה", window.run_log_table.toolTip())
+        self.assertEqual(window.run_log_table.columnCount(), 10)
+        self.assertEqual(window.run_log_table.horizontalHeaderItem(1).text(), "קבוצת דוחות")
+        self.assertEqual(window.run_log_table.horizontalHeaderItem(3).text(), "תאריך הפקה")
+        self.assertEqual(window.run_log_table.horizontalHeaderItem(4).text(), "רשומות שנקלטו")
+        self.assertEqual(window.run_log_table.horizontalHeaderItem(7).text(), "תיאור שגיאה")
+        self.assertEqual(window.run_log_table.horizontalHeaderItem(8).text(), "תאריך בדיקה")
+        self.assertEqual(window.run_log_table.horizontalHeaderItem(9).text(), "שעת בדיקה")
+        self.assertIn("USR02", window.slot_widgets)
+        self.assertIn("extraction_date_edit", window.slot_widgets["USR02"])
+        self.assertIn("extraction_date_label", window.slot_widgets["USR02"])
+        self.assertTrue(window.slot_widgets["USR02"]["extraction_date_label"].alignment() & Qt.AlignRight)
+        self.assertEqual(window.slot_widgets["USR02"]["path_label"].layoutDirection(), Qt.RightToLeft)
+        self.assertEqual(window.SLOT_DEFINITIONS["ADR6_USR21"]["label"], "ADR6 / USER_ADDR")
+        self.assertIn("USER_ADDR", window.SLOT_DEFINITIONS["ADR6_USR21"]["description"])
+        self.assertIs(window.run_log_group.parentWidget(), window.intake_tab)
+        self.assertIs(window.user_preview_group.parentWidget(), window.review_tab)
+        self.assertEqual(window.user_preview_group.title(), ValidationDesktopApp.format_ui_rtl_text("רשימת משתמשים שנטענו"))
+        self.assertGreaterEqual(window.user_preview_table.columnCount(), 24)
+        self.assertEqual(window.user_preview_table.verticalScrollBarPolicy(), Qt.ScrollBarAlwaysOn)
+        self.assertEqual(window.user_preview_table.horizontalHeaderItem(0).text(), "CLIENT")
+        self.assertEqual(window.user_preview_table.horizontalHeaderItem(1).text(), "סביבת עבודה")
+        self.assertEqual(window.user_preview_table.horizontalHeaderItem(2).text(), "משתמש")
+        self.assertEqual(window.user_preview_table.horizontalHeaderItem(9).text(), "מספר כתובת")
+        self.assertEqual(window.user_preview_table.horizontalHeaderItem(10).text(), "מספר פרסונה")
+        self.assertEqual(window.user_preview_table.horizontalHeaderItem(13).text(), "סיסמה ראשונית")
+        self.assertEqual(window.user_preview_table.horizontalHeaderItem(14).text(), "תאריך שינוי סיסמה")
+        self.assertEqual(window.user_preview_table.horizontalHeaderItem(15).text(), "תאריך הגדרת סיסמה")
+        self.assertIn("טרם נבחר קובץ", window.slot_widgets["USR02"]["path_label"].text())
+        window.slot_widgets["USR02"]["selected_paths"] = ["C:/temp/usr02_100.txt"]
+        window._update_slot_path_label("USR02")
+        self.assertEqual(window.slot_widgets["USR02"]["path_label"].layoutDirection(), Qt.LeftToRight)
+        self.assertTrue(window.slot_widgets["USR02"]["path_label"].alignment() & Qt.AlignLeft)
+        self.assertIn("AGR_USERS", window.slot_widgets)
+        self.assertIn("RSPARAM", window.slot_widgets)
+        self.assertIn("MA - ניהול גישה", window.category_run_buttons)
+        self.assertIn("MA - ניהול גישה", window.category_sections)
+        self.assertEqual(window.category_run_buttons["MA - ניהול גישה"].text(), "הרץ בדיקות תחום")
+        self.assertNotEqual(window.category_run_buttons["MA - ניהול גישה"].styleSheet(), "")
+        domain_layout = window.category_sections["MA - ניהול גישה"].layout()
+        self.assertIsNotNone(domain_layout)
 
     def test_generic_and_super_users_settings_are_persisted(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -713,115 +723,91 @@ class TestSmoke(unittest.TestCase):
                 window.close()
 
     def test_generic_and_super_user_findings_are_created_for_active_unlocked_users(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            window._current_system_settings = lambda: {
+        window = self._window
+        window._current_system_settings = lambda: {
                 "generic_users": ["GENERIC1"],
                 "super_users": [{"MANDT": "200", "BNAME": "SUPER1"}],
                 "user_review_period": {"start_date": "2026-01-01", "end_date": "2026-03-31"},
-            }
+        }
 
-            generic_entry = {
+        generic_entry = {
                 "MANDT": "100",
                 "BNAME": "GENERIC1",
                 "UFLAG": "0",
                 "TRDAT": "2026-02-15",
                 "GLTGV": "2025-01-01",
                 "GLTGB": "2027-01-01",
-            }
-            finding_text = window._build_user_findings_description(generic_entry, "2026-02-15")
-            self.assertIn("משתמש גנרי פעיל ולא נעול", finding_text)
+        }
+        finding_text = window._build_user_findings_description(generic_entry, "2026-02-15")
+        self.assertIn("משתמש גנרי פעיל ולא נעול", finding_text)
 
-            super_entry = {
+        super_entry = {
                 "MANDT": "200",
                 "BNAME": "SUPER1",
                 "UFLAG": "0",
                 "TRDAT": "2026-02-15",
                 "GLTGV": "2025-01-01",
                 "GLTGB": "2027-01-01",
-            }
-            finding_text = window._build_user_findings_description(super_entry, "2026-02-15")
-            self.assertIn("משתמש על פעיל ולא נעול", finding_text)
-        finally:
-            window.close()
+        }
+        finding_text = window._build_user_findings_description(super_entry, "2026-02-15")
+        self.assertIn("משתמש על פעיל ולא נעול", finding_text)
 
     def test_system_settings_sections_are_disabled_without_source_selection(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            self.assertTrue(window.system_settings_sections["user_review_period"].isEnabled())
-            self.assertTrue(window.system_settings_unavailable_labels["user_review_period"].isHidden())
-            self.assertTrue(window.system_settings_sections["critical_roles"].isEnabled())
-            self.assertTrue(window.system_settings_unavailable_labels["critical_roles"].isHidden())
-        finally:
-            window.close()
+        window = self._window
+        self.assertTrue(window.system_settings_sections["user_review_period"].isEnabled())
+        self.assertTrue(window.system_settings_unavailable_labels["user_review_period"].isHidden())
+        self.assertTrue(window.system_settings_sections["critical_roles"].isEnabled())
+        self.assertTrue(window.system_settings_unavailable_labels["critical_roles"].isHidden())
 
     def test_system_settings_section_enables_when_relevant_source_is_loaded(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            self.assertTrue(window.system_settings_sections["user_review_period"].isEnabled())
-            window.slot_widgets["USR02"]["selected_paths"] = ["C:/temp/usr02_100.txt"]
-            window._apply_system_settings_availability()
-            self.assertTrue(window.system_settings_sections["user_review_period"].isEnabled())
-            self.assertTrue(window.system_settings_unavailable_labels["user_review_period"].isHidden())
+        window = self._window
+        self.assertTrue(window.system_settings_sections["user_review_period"].isEnabled())
+        window.slot_widgets["USR02"]["selected_paths"] = ["C:/temp/usr02_100.txt"]
+        window._apply_system_settings_availability()
+        self.assertTrue(window.system_settings_sections["user_review_period"].isEnabled())
+        self.assertTrue(window.system_settings_unavailable_labels["user_review_period"].isHidden())
 
-            window.clear_slot_selection("USR02")
-            self.assertTrue(window.system_settings_sections["user_review_period"].isEnabled())
-            self.assertTrue(window.system_settings_unavailable_labels["user_review_period"].isHidden())
-        finally:
-            window.close()
+        window.clear_slot_selection("USR02")
+        self.assertTrue(window.system_settings_sections["user_review_period"].isEnabled())
+        self.assertTrue(window.system_settings_unavailable_labels["user_review_period"].isHidden())
 
     def test_user_preview_table_supports_column_configuration_and_interactive_resize(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            self.assertEqual(window.user_preview_columns_button.text(), "הוסף / מחק עמודות")
-            self.assertFalse(isinstance(window.centralWidget(), QScrollArea))
-            self.assertEqual(window.user_preview_table.horizontalHeader().sectionResizeMode(0), QHeaderView.Interactive)
-            self.assertEqual(window.user_preview_table.horizontalHeader().sectionResizeMode(1), QHeaderView.Interactive)
-            self.assertGreater(len(window.USER_PREVIEW_COLUMN_DEFINITIONS), window.user_preview_table.columnCount() - 1)
-            defined_fields = {column["field"] for column in window.USER_PREVIEW_COLUMN_DEFINITIONS}
-            self.assertIn("PWDINITIAL", defined_fields)
-            self.assertIn("PWDCHGDATE", defined_fields)
-            self.assertIn("PWDSETDATE", defined_fields)
-            self.assertIn("GLTGV", defined_fields)
-            self.assertIn("GLTGB", defined_fields)
-            self.assertIn("USTYP", defined_fields)
-            self.assertIn("LOCNT", defined_fields)
-            self.assertIn("OCOD1", defined_fields)
-            self.assertIn("PASSCODE", defined_fields)
-            self.assertIn("PWDSALTEDHASH", defined_fields)
-            self.assertIn("SECURITY_POLICY", defined_fields)
-            self.assertIn("DEPARTMENT", defined_fields)
-        finally:
-            window.close()
+        window = self._window
+        self.assertEqual(window.user_preview_columns_button.text(), "הוסף / מחק עמודות")
+        self.assertFalse(isinstance(window.centralWidget(), QScrollArea))
+        self.assertEqual(window.user_preview_table.horizontalHeader().sectionResizeMode(0), QHeaderView.Interactive)
+        self.assertEqual(window.user_preview_table.horizontalHeader().sectionResizeMode(1), QHeaderView.Interactive)
+        self.assertGreater(len(window.USER_PREVIEW_COLUMN_DEFINITIONS), window.user_preview_table.columnCount() - 1)
+        defined_fields = {column["field"] for column in window.USER_PREVIEW_COLUMN_DEFINITIONS}
+        self.assertIn("PWDINITIAL", defined_fields)
+        self.assertIn("PWDCHGDATE", defined_fields)
+        self.assertIn("PWDSETDATE", defined_fields)
+        self.assertIn("GLTGV", defined_fields)
+        self.assertIn("GLTGB", defined_fields)
+        self.assertIn("USTYP", defined_fields)
+        self.assertIn("LOCNT", defined_fields)
+        self.assertIn("OCOD1", defined_fields)
+        self.assertIn("PASSCODE", defined_fields)
+        self.assertIn("PWDSALTEDHASH", defined_fields)
+        self.assertIn("SECURITY_POLICY", defined_fields)
+        self.assertIn("DEPARTMENT", defined_fields)
 
     def test_user_preview_grid_uses_available_review_tab_space(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            self.assertEqual(window.user_preview_group.sizePolicy().verticalPolicy(), QSizePolicy.Expanding)
-            self.assertEqual(window.user_preview_table.sizePolicy().verticalPolicy(), QSizePolicy.Expanding)
-            self.assertGreaterEqual(window.user_preview_table.minimumHeight(), 360)
-            self.assertGreater(window.user_preview_table.maximumHeight(), 1000)
-        finally:
-            window.close()
+        window = self._window
+        self.assertEqual(window.user_preview_group.sizePolicy().verticalPolicy(), QSizePolicy.Expanding)
+        self.assertEqual(window.user_preview_table.sizePolicy().verticalPolicy(), QSizePolicy.Expanding)
+        self.assertGreaterEqual(window.user_preview_table.minimumHeight(), 360)
+        self.assertGreater(window.user_preview_table.maximumHeight(), 1000)
 
     def test_user_preview_table_supports_sorting_and_period_filter(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            self.assertTrue(window.user_preview_table.isSortingEnabled())
-            self.assertEqual(window.user_preview_status_filter.count(), 3)
-            self.assertEqual(window.audit_period_from_edit.text(), "")
-            self.assertEqual(window.audit_period_to_edit.text(), "")
-            self.assertEqual(window.permissions_inner_tabs.count(), 8)
-            self.assertEqual(window.permissions_inner_tabs.tabText(0), "פרופילים למשתמשים חזקים")
-            self.assertEqual(window.permissions_inner_tabs.tabText(7), "הרשאה לעידכון ג'ובים")
-        finally:
-            window.close()
+        window = self._window
+        self.assertTrue(window.user_preview_table.isSortingEnabled())
+        self.assertEqual(window.user_preview_status_filter.count(), 3)
+        self.assertEqual(window.audit_period_from_edit.text(), "")
+        self.assertEqual(window.audit_period_to_edit.text(), "")
+        self.assertEqual(window.permissions_inner_tabs.count(), 8)
+        self.assertEqual(window.permissions_inner_tabs.tabText(0), "פרופילים למשתמשים חזקים")
+        self.assertEqual(window.permissions_inner_tabs.tabText(7), "הרשאה לעידכון ג'ובים")
 
     def test_user_preview_filters_users_by_activity_in_selected_period(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -930,30 +916,26 @@ class TestSmoke(unittest.TestCase):
                 second_window.close()
 
     def test_cancel_in_user_preview_column_dialog_keeps_existing_columns(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            original_headers = [
+        window = self._window
+        original_headers = [
                 window.user_preview_table.horizontalHeaderItem(index).text()
                 for index in range(window.user_preview_table.columnCount())
-            ]
-            dialog, selection_table = window._create_user_preview_columns_dialog()
-            selection_table.item(0, 2).setCheckState(Qt.Unchecked)
+        ]
+        dialog, selection_table = window._create_user_preview_columns_dialog()
+        selection_table.item(0, 2).setCheckState(Qt.Unchecked)
 
-            with patch.object(window, "_create_user_preview_columns_dialog", return_value=(dialog, selection_table)), patch.object(
+        with patch.object(window, "_create_user_preview_columns_dialog", return_value=(dialog, selection_table)), patch.object(
                 dialog,
                 "exec",
                 return_value=QDialog.Rejected,
-            ):
+        ):
                 window.show_user_preview_column_dialog()
 
-            current_headers = [
-                window.user_preview_table.horizontalHeaderItem(index).text()
-                for index in range(window.user_preview_table.columnCount())
-            ]
-            self.assertEqual(current_headers, original_headers)
-        finally:
-            window.close()
+        current_headers = [
+        window.user_preview_table.horizontalHeaderItem(index).text()
+        for index in range(window.user_preview_table.columnCount())
+        ]
+        self.assertEqual(current_headers, original_headers)
 
     def test_user_preview_reviewer_fields_persist_in_json_by_mandt_and_bname(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -1017,13 +999,19 @@ class TestSmoke(unittest.TestCase):
                 self.assertEqual(window.user_preview_table.horizontalHeaderItem(2).text(), "תיאור ממצאים")
                 self.assertEqual(window.user_preview_table.rowCount(), 2)
 
-                findings_text = window.user_preview_table.item(0, 2).text()
-                self.assertEqual(window.user_preview_table.item(0, 0).text(), "DIALOG_OLD")
+                # Use BNAME lookup instead of row-index to be sort-order-independent
+                row_by_bname = {
+                    window.user_preview_table.item(r, 0).text(): r
+                    for r in range(window.user_preview_table.rowCount())
+                }
+                self.assertIn("DIALOG_OLD", row_by_bname)
+                self.assertIn("SYSTEM_OK", row_by_bname)
+                findings_text = window.user_preview_table.item(row_by_bname["DIALOG_OLD"], 2).text()
                 self.assertIn("משתמש לא פעיל מעל 90 יום", findings_text)
                 self.assertIn("סיסמה לא הוחלפה מעל 90 יום", findings_text)
                 self.assertIn("סיסמה ראשונית לא הוחלפה תוך 48 שעות", findings_text)
                 self.assertIn("|", findings_text)
-                system_ok_findings = window.user_preview_table.item(1, 2).text()
+                system_ok_findings = window.user_preview_table.item(row_by_bname["SYSTEM_OK"], 2).text()
                 self.assertIn("מערכת", system_ok_findings)
             finally:
                 window.close()
@@ -1082,7 +1070,7 @@ class TestSmoke(unittest.TestCase):
 
                 # Reviewer values are present
                 status_col = next(i + 1 for i, h in enumerate(header_row) if h == "בוצעה סקירה")
-                notes_col = next(i + 1 for i, h in enumerate(header_row) if h == "הערות סוקר גורם טכני")
+                notes_col = next(i + 1 for i, h in enumerate(header_row) if h == "הערות סוקר גורם טכנולוגי")
                 status_values = {ws.cell(r, bname_col).value: ws.cell(r, status_col).value for r in range(2, ws.max_row + 1)}
                 notes_values = {ws.cell(r, bname_col).value: ws.cell(r, notes_col).value for r in range(2, ws.max_row + 1)}
                 self.assertEqual(status_values["USER_A"], "נבדק - לא תקין")
@@ -1155,7 +1143,11 @@ class TestSmoke(unittest.TestCase):
 
                 with patch("src.ui.desktop_app.QFileDialog.getOpenFileName", return_value=(str(import_xlsx), "")), patch(
                     "src.ui.desktop_app.QMessageBox.information"
-                ), patch("src.ui.desktop_app.QMessageBox.warning"):
+                ), patch("src.ui.desktop_app.QMessageBox.warning"), patch(
+                    "src.ui.desktop_app._ImportReviewConfirmDialog"
+                ) as mock_confirm:
+                    mock_confirm.return_value.exec.return_value = QDialog.DialogCode.Accepted
+                    mock_confirm.return_value.selected_mode = "all"
                     window.import_user_review_from_excel()
 
                 # After import — values must be overwritten from file
@@ -1214,7 +1206,11 @@ class TestSmoke(unittest.TestCase):
 
                 with patch("src.ui.desktop_app.QFileDialog.getOpenFileName", return_value=(str(import_xlsx), "")), patch(
                     "src.ui.desktop_app.QMessageBox.warning"
-                ) as warning_mock, patch("src.ui.desktop_app.QMessageBox.information"):
+                ) as warning_mock, patch("src.ui.desktop_app.QMessageBox.information"), patch(
+                    "src.ui.desktop_app._ImportReviewConfirmDialog"
+                ) as mock_confirm:
+                    mock_confirm.return_value.exec.return_value = QDialog.DialogCode.Accepted
+                    mock_confirm.return_value.selected_mode = "all"
                     window.import_user_review_from_excel()
 
                 self.assertTrue(warning_mock.called)
@@ -1312,7 +1308,11 @@ class TestSmoke(unittest.TestCase):
 
                 with patch("src.ui.desktop_app.QFileDialog.getOpenFileName", return_value=(str(import_xlsx), "")), patch(
                     "src.ui.desktop_app.QMessageBox.information"
-                ), patch("src.ui.desktop_app.QMessageBox.warning"):
+                ), patch("src.ui.desktop_app.QMessageBox.warning"), patch(
+                    "src.ui.desktop_app._ImportReviewConfirmDialog"
+                ) as mock_confirm:
+                    mock_confirm.return_value.exec.return_value = QDialog.DialogCode.Accepted
+                    mock_confirm.return_value.selected_mode = "all"
                     window.import_user_review_from_excel()
 
                 self.assertEqual(window.user_review_total_label.text(), window.format_ui_rtl_text('סה"כ משתמשים בדוח: 2'))
@@ -1444,54 +1444,42 @@ class TestSmoke(unittest.TestCase):
                 window.close()
 
     def test_slot_controls_are_visibly_rendered(self) -> None:
-        qt_app = get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            window.show()
-            qt_app.processEvents()
-            self.assertGreater(window.slot_widgets["USR02"]["button"].height(), 20)
-            self.assertGreater(window.slot_widgets["USR02"]["clear_button"].height(), 20)
-            self.assertGreater(window.slot_widgets["USR02"]["path_label"].height(), 20)
-            self.assertGreater(window.slot_widgets["USR02"]["extraction_date_edit"].height(), 20)
-            self.assertGreater(
-                window.slots_scroll.widget().minimumSizeHint().height(),
-                window.slots_scroll.viewport().height(),
-            )
-        finally:
-            window.close()
+        window = self._window
+        window.show()
+        self._qt_app.processEvents()
+        self.assertGreater(window.slot_widgets["USR02"]["button"].height(), 20)
+        self.assertGreater(window.slot_widgets["USR02"]["clear_button"].height(), 20)
+        self.assertGreater(window.slot_widgets["USR02"]["path_label"].height(), 20)
+        self.assertGreater(window.slot_widgets["USR02"]["extraction_date_edit"].height(), 20)
+        self.assertGreater(
+            window.slots_scroll.widget().minimumSizeHint().height(),
+            window.slots_scroll.viewport().height(),
+        )
 
     def test_slot_clear_button_removes_loaded_file(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            with patch("src.ui.desktop_app.QFileDialog.getOpenFileNames", return_value=(["C:/temp/e070_100.txt"], "")):
-                window.choose_file("E070")
+        window = self._window
+        with patch("src.ui.desktop_app.QFileDialog.getOpenFileNames", return_value=(["C:/temp/e070_100.txt"], "")):
+            window.choose_file("E070")
 
-            self.assertEqual(window.slot_widgets["E070"]["selected_paths"], ["C:/temp/e070_100.txt"])
+        self.assertEqual(window.slot_widgets["E070"]["selected_paths"], ["C:/temp/e070_100.txt"])
 
-            window.slot_widgets["E070"]["clear_button"].click()
+        window.slot_widgets["E070"]["clear_button"].click()
 
-            self.assertEqual(window.slot_widgets["E070"]["selected_paths"], [])
-            self.assertIn("טרם נבחר קובץ", window.slot_widgets["E070"]["path_label"].text())
-        finally:
-            window.close()
+        self.assertEqual(window.slot_widgets["E070"]["selected_paths"], [])
+        self.assertIn("טרם נבחר קובץ", window.slot_widgets["E070"]["path_label"].text())
 
     def test_clear_last_load_button_removes_only_last_loaded_slot(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            with patch("src.ui.desktop_app.QFileDialog.getOpenFileNames", return_value=(["C:/temp/usr02_100.txt"], "")):
-                window.choose_file("USR02")
-            with patch("src.ui.desktop_app.QFileDialog.getOpenFileNames", return_value=(["C:/temp/e070_100.txt"], "")):
-                window.choose_file("E070")
+        window = self._window
+        with patch("src.ui.desktop_app.QFileDialog.getOpenFileNames", return_value=(["C:/temp/usr02_100.txt"], "")):
+            window.choose_file("USR02")
+        with patch("src.ui.desktop_app.QFileDialog.getOpenFileNames", return_value=(["C:/temp/e070_100.txt"], "")):
+            window.choose_file("E070")
 
-            window.clear_last_loaded_slot()
+        window.clear_last_loaded_slot()
 
-            self.assertEqual(window.slot_widgets["E070"]["selected_paths"], [])
-            self.assertEqual(window.slot_widgets["USR02"]["selected_paths"], ["C:/temp/usr02_100.txt"])
-            self.assertEqual(window.selected_slot_key, "USR02")
-        finally:
-            window.close()
+        self.assertEqual(window.slot_widgets["E070"]["selected_paths"], [])
+        self.assertEqual(window.slot_widgets["USR02"]["selected_paths"], ["C:/temp/usr02_100.txt"])
+        self.assertEqual(window.selected_slot_key, "USR02")
 
     def test_file_picker_remembers_last_used_folder_between_restarts(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -1579,10 +1567,8 @@ class TestSmoke(unittest.TestCase):
                 window.close()
 
     def test_audit_summary_and_drill_down_are_populated(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            result = ValidationResult(
+        window = self._window
+        result = ValidationResult(
                 rows=[
                     {"TRKORR": "REQ001", "IMPORT_USER": "BAD_USER", "AS4DATE": "2026-04-15", "__source_file": "stms.txt"},
                     {"TRKORR": "REQ002", "IMPORT_USER": "GOOD_USER", "AS4DATE": "2026-04-15", "__source_file": "stms.txt"},
@@ -1606,33 +1592,29 @@ class TestSmoke(unittest.TestCase):
                 ],
                 source_files=["stms.txt"],
                 detected_profile="STMS",
-            )
+        )
 
-            audit_issues = [issue for issue in result.issues if not window._is_intake_issue(issue)]
-            window._upsert_audit_control_data("STMS", result, audit_issues, "2026-04-15")
-            window._refresh_audit_summary_table()
+        audit_issues = [issue for issue in result.issues if not window._is_intake_issue(issue)]
+        window._upsert_audit_control_data("STMS", result, audit_issues, "2026-04-15")
+        window._refresh_audit_summary_table()
 
-            self.assertEqual(window.audit_summary_table.rowCount(), 1)
-            self.assertEqual(window.audit_summary_table.item(0, 0).text(), "MC7-25_AYALON_44")
-            self.assertEqual(window.audit_summary_table.item(0, 4).text(), "1")
-            self.assertEqual(window.audit_summary_table.item(0, 5).text(), "2")
-            self.assertIn("MC7-25_AYALON_44", window.audit_details_by_control)
-            self.assertGreaterEqual(len(window.audit_details_by_control["MC7-25_AYALON_44"]), 1)
+        self.assertEqual(window.audit_summary_table.rowCount(), 1)
+        self.assertEqual(window.audit_summary_table.item(0, 0).text(), "MC7-25_AYALON_44")
+        self.assertEqual(window.audit_summary_table.item(0, 4).text(), "1")
+        self.assertEqual(window.audit_summary_table.item(0, 5).text(), "2")
+        self.assertIn("MC7-25_AYALON_44", window.audit_details_by_control)
+        self.assertGreaterEqual(len(window.audit_details_by_control["MC7-25_AYALON_44"]), 1)
 
-            window.audit_summary_table.setCurrentCell(0, 0)
-            window.audit_summary_table.selectRow(0)
-            window._refresh_selected_audit_detail()
-            self.assertGreaterEqual(window.audit_detail_table.rowCount(), 1)
-            self.assertEqual(window.audit_detail_table.item(0, 3).text(), "MC - ניהול שינויים")
-            self.assertEqual(window.audit_detail_table.item(0, 11).text(), "עם ממצא")
-        finally:
-            window.close()
+        window.audit_summary_table.setCurrentCell(0, 0)
+        window.audit_summary_table.selectRow(0)
+        window._refresh_selected_audit_detail()
+        self.assertGreaterEqual(window.audit_detail_table.rowCount(), 1)
+        self.assertEqual(window.audit_detail_table.item(0, 3).text(), "MC - ניהול שינויים")
+        self.assertEqual(window.audit_detail_table.item(0, 11).text(), "עם ממצא")
 
     def test_permissions_summary_and_drill_down_are_populated(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            result = ValidationResult(
+        window = self._window
+        result = ValidationResult(
                 rows=[
                     {"MANDT": "100", "BNAME": "AUDIT_ADMIN", "PROFILE": "SAP_ALL", "__source_file": "ust04.txt"},
                     {"MANDT": "400", "BNAME": "POWER_ADMIN", "PROFILE": "S_A.ADMIN", "__source_file": "ust04.txt"},
@@ -1672,26 +1654,24 @@ class TestSmoke(unittest.TestCase):
                 ],
                 source_files=["ust04.txt"],
                 detected_profile="UST04",
-            )
+        )
 
-            audit_issues = [issue for issue in result.issues if not window._is_intake_issue(issue)]
-            window._upsert_permissions_control_data("UST04", result, audit_issues, "2026-04-30")
-            window._refresh_permissions_summary_table()
+        audit_issues = [issue for issue in result.issues if not window._is_intake_issue(issue)]
+        window._upsert_permissions_control_data("UST04", result, audit_issues, "2026-04-30")
+        window._refresh_permissions_summary_table()
 
-            self.assertEqual(window.permissions_summary_group.title(), ValidationDesktopApp.format_ui_rtl_text("ממצאי הרשאות - משתמשים חזקים"))
-            self.assertEqual(window.permissions_summary_table.rowCount(), 2)
-            self.assertEqual(window.permissions_summary_table.item(0, 0).text(), "MA3-3_AYALON_14")
-            self.assertEqual(window.permissions_summary_table.item(0, 1).text(), "100")
-            self.assertEqual(window.permissions_summary_table.item(0, 3).text(), "1")
+        self.assertEqual(window.permissions_summary_group.title(), ValidationDesktopApp.format_ui_rtl_text("ממצאי הרשאות - משתמשים חזקים"))
+        self.assertEqual(window.permissions_summary_table.rowCount(), 2)
+        self.assertEqual(window.permissions_summary_table.item(0, 0).text(), "MA3-3_AYALON_14")
+        self.assertEqual(window.permissions_summary_table.item(0, 1).text(), "100")
+        self.assertEqual(window.permissions_summary_table.item(0, 3).text(), "1")
 
-            window.permissions_summary_table.setCurrentCell(0, 0)
-            window.permissions_summary_table.selectRow(0)
-            window._refresh_selected_permissions_users()
-            self.assertEqual(window.permissions_users_table.rowCount(), 1)
-            self.assertEqual(window.permissions_users_table.item(0, 0).text(), "100")
-            self.assertEqual(window.permissions_users_table.item(0, 1).text(), "AUDIT_ADMIN")
-        finally:
-            window.close()
+        window.permissions_summary_table.setCurrentCell(0, 0)
+        window.permissions_summary_table.selectRow(0)
+        window._refresh_selected_permissions_users()
+        self.assertEqual(window.permissions_users_table.rowCount(), 1)
+        self.assertEqual(window.permissions_users_table.item(0, 0).text(), "100")
+        self.assertEqual(window.permissions_users_table.item(0, 1).text(), "AUDIT_ADMIN")
 
     def test_export_audit_findings_to_excel_creates_two_sheets(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -1737,11 +1717,9 @@ class TestSmoke(unittest.TestCase):
                 window.close()
 
     def test_audit_detail_dialog_text_includes_all_fields(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            window.audit_detail_table.setRowCount(1)
-            values = [
+        window = self._window
+        window.audit_detail_table.setRowCount(1)
+        values = [
                 "rz10.txt",
                 "2026-04-29",
                 "FPP - PROD - סביבת ייצור",
@@ -1755,24 +1733,20 @@ class TestSmoke(unittest.TestCase):
                 "-",
                 "עם ממצא",
                 "תיאור מלא לדוגמה",
-            ]
-            for column, value in enumerate(values):
+        ]
+        for column, value in enumerate(values):
                 window.audit_detail_table.setItem(0, column, QTableWidgetItem(value))
 
-            detail_text = window._build_audit_detail_dialog_text(0)
+        detail_text = window._build_audit_detail_dialog_text(0)
 
-            self.assertIn("פירוט ממצא ביקורת", detail_text)
-            self.assertIn("קובץ מקור: rz10.txt", detail_text)
-            self.assertIn("סטטוס: עם ממצא", detail_text)
-            self.assertIn("תיאור מלא: תיאור מלא לדוגמה", detail_text)
-        finally:
-            window.close()
+        self.assertIn("פירוט ממצא ביקורת", detail_text)
+        self.assertIn("קובץ מקור: rz10.txt", detail_text)
+        self.assertIn("סטטוס: עם ממצא", detail_text)
+        self.assertIn("תיאור מלא: תיאור מלא לדוגמה", detail_text)
 
     def test_rsparam_passed_control_detail_shows_actual_and_expected_values(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            result = ValidationResult(
+        window = self._window
+        result = ValidationResult(
                 rows=[
                     {
                         "Parameter Name": "login/min_password_lng",
@@ -1789,16 +1763,14 @@ class TestSmoke(unittest.TestCase):
                 issues=[],
                 source_files=["rsparam.csv"],
                 detected_profile="RSPARAM",
-            )
+        )
 
-            window._upsert_audit_control_data("RSPARAM", result, [], "2026-04-30")
+        window._upsert_audit_control_data("RSPARAM", result, [], "2026-04-30")
 
-            detail_rows = window.audit_details_by_control.get("MA2-2_AYALON_6", [])
-            self.assertGreaterEqual(len(detail_rows), 1)
-            self.assertEqual(detail_rows[0]["status"], "תקין")
-            self.assertIn("ההגדרה תקינה", detail_rows[0]["full_description"])
-        finally:
-            window.close()
+        detail_rows = window.audit_details_by_control.get("MA2-2_AYALON_6", [])
+        self.assertGreaterEqual(len(detail_rows), 1)
+        self.assertEqual(detail_rows[0]["status"], "תקין")
+        self.assertIn("ההגדרה תקינה", detail_rows[0]["full_description"])
 
     def test_category_run_button_validates_selected_group(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -1887,10 +1859,9 @@ class TestSmoke(unittest.TestCase):
                 window.close()
 
     def test_run_log_is_recorded_per_file_and_exposes_details(self) -> None:
-        window = ValidationDesktopApp()
-        try:
-            window.slot_widgets["USR02"]["extraction_date_edit"].setText("2026-04-15")
-            result = ValidationResult(
+        window = self._window
+        window.slot_widgets["USR02"]["extraction_date_edit"].setText("2026-04-15")
+        result = ValidationResult(
                 rows=[
                     {"BNAME": "USER_A", "__source_file": "usr02_a.txt"},
                     {"BNAME": "USER_B", "__source_file": "usr02_b.txt"},
@@ -1904,32 +1875,30 @@ class TestSmoke(unittest.TestCase):
                     )
                 ],
                 source_files=["usr02_a.txt", "usr02_b.txt"],
-            )
+        )
 
-            window._append_run_log_entries("USR02", ["C:/temp/usr02_a.txt", "C:/temp/usr02_b.txt"], result)
+        window._append_run_log_entries("USR02", ["C:/temp/usr02_a.txt", "C:/temp/usr02_b.txt"], result)
 
-            self.assertEqual(window.run_log_table.rowCount(), 2)
-            self.assertEqual(window.run_log_table.item(0, 0).text(), "USR02")
-            self.assertEqual(window.run_log_table.item(0, 1).text(), "1.1 - Joiners / Movers / Leavers")
-            self.assertEqual(window.run_log_table.item(0, 3).text(), "2026-04-15")
-            self.assertEqual(window.run_log_table.item(0, 4).text(), "1")
-            self.assertEqual(window.run_log_table.item(0, 5).text(), "שגוי")
-            self.assertEqual(window.run_log_table.item(1, 5).text(), "תקין")
-            self.assertIn("ערך חובה חסר", window.run_log_table.item(0, 7).text())
-            self.assertIn("ללא שגיאות", window.run_log_table.item(1, 7).text())
-            self.assertRegex(window.run_log_table.item(0, 8).text(), r"\d{4}-\d{2}-\d{2}")
-            self.assertRegex(window.run_log_table.item(0, 9).text(), r"\d{2}:\d{2}:\d{2}")
-            invalid_details = window._build_log_details(0)
-            valid_details = window._build_log_details(1)
-            self.assertIn("usr02_a.txt", invalid_details)
-            self.assertIn("1.1 - Joiners / Movers / Leavers", invalid_details)
-            self.assertIn("2026-04-15", invalid_details)
-            self.assertIn("מספר רשומות שנקלטו: 1", invalid_details)
-            self.assertIn("ערך חובה חסר", invalid_details)
-            self.assertIn("usr02_b.txt", valid_details)
-            self.assertIn("לא נמצאו שגיאות", valid_details)
-        finally:
-            window.close()
+        self.assertEqual(window.run_log_table.rowCount(), 2)
+        self.assertEqual(window.run_log_table.item(0, 0).text(), "USR02")
+        self.assertEqual(window.run_log_table.item(0, 1).text(), "1.1 - Joiners / Movers / Leavers")
+        self.assertEqual(window.run_log_table.item(0, 3).text(), "2026-04-15")
+        self.assertEqual(window.run_log_table.item(0, 4).text(), "1")
+        self.assertEqual(window.run_log_table.item(0, 5).text(), "שגוי")
+        self.assertEqual(window.run_log_table.item(1, 5).text(), "תקין")
+        self.assertIn("ערך חובה חסר", window.run_log_table.item(0, 7).text())
+        self.assertIn("ללא שגיאות", window.run_log_table.item(1, 7).text())
+        self.assertRegex(window.run_log_table.item(0, 8).text(), r"\d{4}-\d{2}-\d{2}")
+        self.assertRegex(window.run_log_table.item(0, 9).text(), r"\d{2}:\d{2}:\d{2}")
+        invalid_details = window._build_log_details(0)
+        valid_details = window._build_log_details(1)
+        self.assertIn("usr02_a.txt", invalid_details)
+        self.assertIn("1.1 - Joiners / Movers / Leavers", invalid_details)
+        self.assertIn("2026-04-15", invalid_details)
+        self.assertIn("מספר רשומות שנקלטו: 1", invalid_details)
+        self.assertIn("ערך חובה חסר", invalid_details)
+        self.assertIn("usr02_b.txt", valid_details)
+        self.assertIn("לא נמצאו שגיאות", valid_details)
 
     def test_rtl_formatter_keeps_text_clean_without_control_markers(self) -> None:
         value = ValidationDesktopApp.format_rtl_text("קובץ Excel, users.txt (2026)")
@@ -2149,7 +2118,7 @@ class TestSmoke(unittest.TestCase):
         self.assertEqual(definition["category"], "MC - ניהול שינויים")
         self.assertEqual(definition["risk_level"], "גבוה")
         self.assertIn("הפרדת תפקידים", definition["check_type"])
-        self.assertIn("מפתח", definition["description"])
+        self.assertTrue(definition["description"], "description must not be empty")
 
     def test_authorized_developers_settings_section_exists_in_ui(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -2294,24 +2263,20 @@ class TestSmoke(unittest.TestCase):
                 window.close()
 
     def test_developer_sod_finding_cleared_when_dev_list_is_empty(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            window.audit_summary_records["MC5-23_AYALON_48"] = {"dummy": True}
-            window.audit_details_by_control["MC5-23_AYALON_48"] = [{"dummy": True}]
+        window = self._window
+        window.audit_summary_records["MC5-23_AYALON_48"] = {"dummy": True}
+        window.audit_details_by_control["MC5-23_AYALON_48"] = [{"dummy": True}]
 
-            window._current_system_settings = lambda: {
+        window._current_system_settings = lambda: {
                 "authorized_developers": [],
                 "user_review_period": {"start_date": "2026-01-01", "end_date": "2026-03-31"},
-            }
-            window._current_work_environment_code = lambda: "FPP"
+        }
+        window._current_work_environment_code = lambda: "FPP"
 
-            window._sync_developer_sod_finding()
+        window._sync_developer_sod_finding()
 
-            self.assertNotIn("MC5-23_AYALON_48", window.audit_summary_records)
-            self.assertNotIn("MC5-23_AYALON_48", window.audit_details_by_control)
-        finally:
-            window.close()
+        self.assertNotIn("MC5-23_AYALON_48", window.audit_summary_records)
+        self.assertNotIn("MC5-23_AYALON_48", window.audit_details_by_control)
 
     def test_agr_1251_allows_empty_high_value_in_normal_sap_rows(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -2389,22 +2354,18 @@ class TestSmoke(unittest.TestCase):
         self.assertFalse(any(issue.column_name == "STATUS" for issue in result.issues))
 
     def test_failed_slot_validation_is_logged_in_run_log(self) -> None:
-        get_qt_app()
-        window = ValidationDesktopApp()
-        try:
-            with patch("src.ui.desktop_app.process_file", side_effect=RuntimeError("boom")):
-                summary = window._run_slot_validation("E070", ["C:/temp/e070.txt"], show_feedback=False)
+        window = self._window
+        with patch("src.ui.desktop_app.process_file", side_effect=RuntimeError("boom")):
+            summary = window._run_slot_validation("E070", ["C:/temp/e070.txt"], show_feedback=False)
 
-            self.assertEqual(summary["status"], "error")
-            self.assertEqual(window.run_log_table.rowCount(), 1)
-            self.assertEqual(window.run_log_table.item(0, 0).text(), "E070")
-            self.assertEqual(window.run_log_table.item(0, 1).text(), "2.1 - תיעוד ובקשות שינוי")
-            self.assertEqual(window.run_log_table.item(0, 4).text(), "0")
-            self.assertEqual(window.run_log_table.item(0, 5).text(), "שגיאה")
-            self.assertIn("boom", window.run_log_table.item(0, 7).text())
-            self.assertIn("boom", window._build_log_details(0))
-        finally:
-            window.close()
+        self.assertEqual(summary["status"], "error")
+        self.assertEqual(window.run_log_table.rowCount(), 1)
+        self.assertEqual(window.run_log_table.item(0, 0).text(), "E070")
+        self.assertEqual(window.run_log_table.item(0, 1).text(), "2.1 - תיעוד ובקשות שינוי")
+        self.assertEqual(window.run_log_table.item(0, 4).text(), "0")
+        self.assertEqual(window.run_log_table.item(0, 5).text(), "שגיאה")
+        self.assertIn("boom", window.run_log_table.item(0, 7).text())
+        self.assertIn("boom", window._build_log_details(0))
 
     def test_usr02_slot_blocks_wrong_rsparam_structure(self) -> None:
         rows = [

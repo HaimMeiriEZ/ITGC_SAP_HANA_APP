@@ -1702,6 +1702,29 @@ class ValidationDesktopApp(QMainWindow):
 
         user_preview_filter_layout.addStretch(1)
 
+        self.audit_period_from_edit = QLineEdit()
+        self.audit_period_from_edit.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.audit_period_from_edit.setPlaceholderText("מ- YYYY-MM-DD")
+        self.audit_period_from_edit.setFixedWidth(112)
+        self.audit_period_from_edit.setToolTip(self.format_rtl_text("תאריך תחילת תקופת הסקירה (YYYY-MM-DD)"))
+        user_preview_filter_layout.addWidget(self.audit_period_from_edit)
+
+        self.audit_period_to_edit = QLineEdit()
+        self.audit_period_to_edit.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.audit_period_to_edit.setPlaceholderText("עד- YYYY-MM-DD")
+        self.audit_period_to_edit.setFixedWidth(112)
+        self.audit_period_to_edit.setToolTip(self.format_rtl_text("תאריך סיום תקופת הסקירה (YYYY-MM-DD)"))
+        user_preview_filter_layout.addWidget(self.audit_period_to_edit)
+
+        self.user_preview_status_filter = QComboBox()
+        self.user_preview_status_filter.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.user_preview_status_filter.addItem(self.format_ui_rtl_text("כל המשתמשים"), "all")
+        self.user_preview_status_filter.addItem(self.format_ui_rtl_text("פעילים בתקופה"), "active")
+        self.user_preview_status_filter.addItem(self.format_ui_rtl_text("לא פעילים בתקופה"), "inactive")
+        self.user_preview_status_filter.setToolTip(self.format_rtl_text("סנן לפי מצב פעילות המשתמש בתקופת הסקירה"))
+        self.user_preview_status_filter.currentIndexChanged.connect(self.refresh_user_preview)
+        user_preview_filter_layout.addWidget(self.user_preview_status_filter)
+
         self.clear_column_filters_button = QPushButton(self.format_ui_rtl_text("נקה סינוני עמודות"))
         self.clear_column_filters_button.setToolTip(self.format_rtl_text("נקה את כל סינוני העמודות הפעילים"))
         self.clear_column_filters_button.clicked.connect(self._clear_all_user_preview_column_filters)
@@ -4266,10 +4289,20 @@ class ValidationDesktopApp(QMainWindow):
 
     def _filter_user_preview_rows(self, preview_rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], str]:
         filter_mode = self._get_user_preview_filter_mode()
-        start_widget = self.system_settings_widgets.get("user_review_period.start_date")
-        end_widget = self.system_settings_widgets.get("user_review_period.end_date")
-        start_text = start_widget.date().toString("yyyy-MM-dd") if isinstance(start_widget, QDateEdit) else ""
-        end_text = end_widget.date().toString("yyyy-MM-dd") if isinstance(end_widget, QDateEdit) else ""
+        # Prefer the review-tab QLineEdit period inputs (audit_period_from/to_edit);
+        # fall back to the system-settings QDateEdit when the QLineEdit is absent or empty.
+        from_edit = getattr(self, "audit_period_from_edit", None)
+        to_edit = getattr(self, "audit_period_to_edit", None)
+        if isinstance(from_edit, QLineEdit) and from_edit.text().strip():
+            start_text = from_edit.text().strip()
+        else:
+            start_widget = self.system_settings_widgets.get("user_review_period.start_date")
+            start_text = start_widget.date().toString("yyyy-MM-dd") if isinstance(start_widget, QDateEdit) else ""
+        if isinstance(to_edit, QLineEdit) and to_edit.text().strip():
+            end_text = to_edit.text().strip()
+        else:
+            end_widget = self.system_settings_widgets.get("user_review_period.end_date")
+            end_text = end_widget.date().toString("yyyy-MM-dd") if isinstance(end_widget, QDateEdit) else ""
         return filter_user_preview_rows(preview_rows, filter_mode, start_text, end_text)
 
     def _build_user_preview_rows(
@@ -5832,7 +5865,9 @@ class ValidationDesktopApp(QMainWindow):
                             finding_users.add(user_key)
 
                 # For AGR-based controls: population = all unique users in AGR_USERS.
-                # MA3-3_AYALON_14 uses UST04/USH04 data, so it keeps the current logic.
+                # MA3-3_AYALON_14 uses UST04/USH04 data: count distinct (MANDT, BNAME)
+                # pairs from the raw slot rows, mirroring _distinct_user_pairs() in the
+                # working paper so the app screen and the report show the same denominator.
                 is_agr_control = (
                     control_id != "MA3-3_AYALON_14"
                     and bool(self.agr_users_population_by_mandt)
@@ -5841,7 +5876,19 @@ class ValidationDesktopApp(QMainWindow):
                     total_records = sum(self.agr_users_population_by_mandt.values())
                     finding_records = len(all_users)
                 elif all_users:
-                    total_records = len(all_users)
+                    if control_id == "MA3-3_AYALON_14":
+                        # Population = distinct (client, user) pairs from raw UST04+USH04
+                        # rows stored in control_to_slot_rows — includes clean users too.
+                        _pop_pairs: set[tuple[str, str]] = set()
+                        for _r in self.control_to_slot_rows.get(control_id, []):
+                            if isinstance(_r, dict):
+                                _c = str(_r.get("MANDT") or _r.get("CLIENT") or "").strip().upper()
+                                _u = str(_r.get("BNAME") or _r.get("UNAME") or "").strip().upper()
+                                if _c and _u:
+                                    _pop_pairs.add((_c, _u))
+                        total_records = len(_pop_pairs) if _pop_pairs else len(all_users)
+                    else:
+                        total_records = len(all_users)
                     finding_records = len(finding_users)
                 else:
                     total_records = sum(max(self._to_int(row.get("users_count", 0)), 0) for row in sorted_rows)
@@ -7752,6 +7799,40 @@ class ValidationDesktopApp(QMainWindow):
         self.run_log_table.setRowCount(0)
         self.refresh_user_preview()
         self.tabs.setCurrentIndex(0)
+
+    def _reset_runtime_state(self) -> None:
+        """Full in-memory reset used by the test suite to reuse a shared window instance.
+
+        Extends clear_results() with the AGR caches and per-control permission records
+        that clear_results() intentionally leaves untouched.
+        """
+        self.clear_results()
+        self.agr_1251_cached_rows = []
+        self.agr_users_cached_rows = []
+        self.agr_users_population_by_mandt = {}
+        self.user_mgmt_summary_records = {}
+        self.user_mgmt_users_by_control = {}
+        self.auth_mgmt_summary_records = {}
+        self.auth_mgmt_users_by_control = {}
+        self.rscdok99_summary_records = {}
+        self.rscdok99_users_by_control = {}
+        self.data_mgmt_summary_records = {}
+        self.data_mgmt_users_by_control = {}
+        self.transport_summary_records = {}
+        self.transport_users_by_control = {}
+        self.debug_summary_records = {}
+        self.debug_users_by_control = {}
+        self.job_mgmt_summary_records = {}
+        self.job_mgmt_users_by_control = {}
+        self.user_reviewer_state = {}
+        self.user_preview_visible_columns = list(self.DEFAULT_USER_PREVIEW_COLUMNS)
+        self.user_preview_column_filters = {}
+        if hasattr(self, "audit_period_from_edit"):
+            self.audit_period_from_edit.setText("")
+        if hasattr(self, "audit_period_to_edit"):
+            self.audit_period_to_edit.setText("")
+        if hasattr(self, "user_preview_status_filter"):
+            self.user_preview_status_filter.setCurrentIndex(0)
 
     def export_run_log_to_excel(self, open_after_export: bool = False) -> Path | None:
         if not self.run_log_records:
