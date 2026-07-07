@@ -8,9 +8,13 @@ Each working paper Excel file contains 3 sheets:
 """
 from __future__ import annotations
 
+import json
+import logging
 import re
 from pathlib import Path
 from typing import Any, Callable, Iterable
+
+_logger = logging.getLogger(__name__)
 
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
@@ -370,6 +374,41 @@ def _ordered_keys(
     return seen
 
 
+# ---------------------------------------------------------------------------
+# Field-label helpers
+# ---------------------------------------------------------------------------
+
+_FIELD_LABELS_PATH = (
+    Path(__file__).parent.parent.parent / "data" / "knowledge_base" / "field_labels.json"
+)
+_field_labels_cache: dict[str, dict[str, str]] | None = None
+
+
+def _load_field_labels(table_name: str) -> dict[str, str]:
+    """Return {UPPERCASE_FIELD_CODE: 'English SAP Description'} for *table_name*.
+
+    Loads ``data/knowledge_base/field_labels.json`` on first call and caches the
+    result.  Returns an empty dict (no renaming) when the file is absent or the
+    table has no entry — callers receive graceful fallback to technical codes.
+    """
+    global _field_labels_cache
+    if _field_labels_cache is None:
+        if _FIELD_LABELS_PATH.exists():
+            try:
+                raw = json.loads(_FIELD_LABELS_PATH.read_text(encoding="utf-8"))
+                _field_labels_cache = {
+                    k.upper(): {fk.upper(): fv for fk, fv in v.items()}
+                    for k, v in raw.items()
+                    if not k.startswith("_") and isinstance(v, dict)
+                }
+            except Exception as exc:
+                _logger.warning("field_labels.json could not be loaded: %s", exc)
+                _field_labels_cache = {}
+        else:
+            _field_labels_cache = {}
+    return _field_labels_cache.get(table_name.upper(), {})
+
+
 def _write_table_block(
     sheet,
     *,
@@ -381,6 +420,7 @@ def _write_table_block(
     use_status_column: bool = False,
     drop_columns: set[str] | None = None,
     row_status_matcher: Callable[[dict[str, Any]], bool] | None = None,
+    column_labels: dict[str, str] | None = None,
 ) -> int:
     """Write a titled table to *sheet* starting at *start_row*. Returns next free row."""
     section_cell = sheet.cell(row=start_row, column=1, value=title)
@@ -408,10 +448,15 @@ def _write_table_block(
 
     header_row = start_row + 1
     for col_idx, header in enumerate(columns_with_status, start=1):
-        cell = sheet.cell(row=header_row, column=col_idx, value=header)
+        display = (
+            column_labels.get(header.upper(), header)
+            if column_labels
+            else header
+        )
+        cell = sheet.cell(row=header_row, column=col_idx, value=display)
         _apply_header(cell)
         sheet.column_dimensions[get_column_letter(col_idx)].width = max(
-            14, min(40, len(str(header)) + 4)
+            14, min(40, len(str(display)) + 4)
         )
 
     for row_offset, row in enumerate(rows, start=header_row + 1):
@@ -717,6 +762,8 @@ def _write_examined_population_sheet(
     else:
         raw_for_table = raw_population_rows
 
+    column_labels = _load_field_labels(profile) if profile else {}
+
     next_row = _write_table_block(
         sheet,
         start_row=1,
@@ -725,6 +772,7 @@ def _write_examined_population_sheet(
         finding_keys=finding_keys,
         key_columns=key_columns,
         row_status_matcher=_raw_status_matcher,
+        column_labels=column_labels or None,
     )
 
     if raw_population_note:

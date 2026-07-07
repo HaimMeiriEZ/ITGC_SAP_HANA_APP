@@ -399,7 +399,6 @@ class _FilterableHeaderView(QHeaderView):
         painter.restore()
 
         is_active = logicalIndex in self._active_filter_sections
-        icon_rect_type = rect.__class__
         from PySide6.QtCore import QRect  # noqa: PLC0415
         icon_rect = QRect(rect.left(), rect.top() + 2, self._ICON_WIDTH, rect.height() - 4)
 
@@ -765,6 +764,7 @@ class ValidationDesktopApp(QMainWindow):
         self.user_reviewer_state = self._load_user_reviewer_state()
         self.user_preview_visible_columns = self._load_user_preview_column_selection()
         self.user_preview_column_filters: dict[str, set[str]] = self._load_user_preview_column_filters()
+        self.catalog_column_filters: dict[int, set[str]] = {}
         self._loading_dialog: QDialog | None = None
         self.system_settings_widgets: dict[str, Any] = {}
         self.system_settings_sections: dict[str, QGroupBox] = {}
@@ -1965,6 +1965,14 @@ class ValidationDesktopApp(QMainWindow):
         layout.addWidget(hint)
 
         self.controls_catalog_table = QTableWidget()
+        # --- NEW: Use _FilterableHeaderView ---
+        filterable_header = _FilterableHeaderView(Qt.Orientation.Horizontal, self.controls_catalog_table)
+        self.controls_catalog_table.setHorizontalHeader(filterable_header)
+        filterable_header.filterRequested.connect(self._on_catalog_header_filter_requested)
+        filterable_header.setSectionsClickable(True)
+        filterable_header.setSortIndicatorShown(True)
+        filterable_header.sortIndicatorChanged.connect(self._on_catalog_sort_indicator_changed)
+        # --- END NEW ---
         self.controls_catalog_table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.controls_catalog_table.setColumnCount(9)
         # Use setHorizontalHeaderItem (not setHorizontalHeaderLabels) so we can
@@ -2035,6 +2043,10 @@ class ValidationDesktopApp(QMainWindow):
     def _refresh_controls_catalog_table(self) -> None:
         """Populate the controls catalog table from self._controls_catalog + AUDIT_CONTROL_DEFINITIONS."""
         table = self.controls_catalog_table
+        hdr = table.horizontalHeader()
+        saved_sort_section = hdr.sortIndicatorSection()
+        saved_sort_order = hdr.sortIndicatorOrder()
+        hdr.setSectionsClickable(False)
         table.setRowCount(0)
 
         catalog_by_id: dict[str, dict[str, Any]] = {
@@ -2042,6 +2054,15 @@ class ValidationDesktopApp(QMainWindow):
             for e in self._controls_catalog
             if e.get("control_id")
         }
+
+        def _item(
+            text: str,
+            align: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        ) -> SortableTableWidgetItem:
+            it = SortableTableWidgetItem(self.format_rtl_text(text))
+            it.setData(SortableTableWidgetItem.SORT_ROLE, text)
+            it.setTextAlignment(align)
+            return it
 
         for control_id, defn in AUDIT_CONTROL_DEFINITIONS.items():
             cat_entry = catalog_by_id.get(control_id, {})
@@ -2055,11 +2076,6 @@ class ValidationDesktopApp(QMainWindow):
             row_index = table.rowCount()
             table.insertRow(row_index)
 
-            def _item(text: str, align: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter) -> QTableWidgetItem:
-                it = QTableWidgetItem(self.format_rtl_text(text))
-                it.setTextAlignment(align)
-                return it
-
             table.setItem(row_index, 0, _item(control_id))
             table.setItem(row_index, 1, _item(str(defn.get("check_type", "") or "")))
             table.setItem(row_index, 2, _item(str(defn.get("category", "") or "")))
@@ -2067,7 +2083,8 @@ class ValidationDesktopApp(QMainWindow):
             table.setItem(row_index, 4, _item(process))
             table.setItem(row_index, 5, _item(str(defn.get("risk_level", "") or "")))
 
-            scope_item = QTableWidgetItem(self.format_rtl_text("✓" if in_scope else "✗"))
+            scope_item = SortableTableWidgetItem(self.format_rtl_text("✓" if in_scope else "✗"))
+            scope_item.setData(SortableTableWidgetItem.SORT_ROLE, "0" if in_scope else "1")
             scope_item.setTextAlignment(
                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
             )
@@ -2078,13 +2095,182 @@ class ValidationDesktopApp(QMainWindow):
             table.setItem(row_index, 7, _item(str(defn.get("it_owner_role", "") or "")))
             table.setItem(row_index, 8, _item(str(defn.get("business_owner_role", "") or "")))
 
+        hdr.setSectionsClickable(True)
+        hdr.blockSignals(True)
+        sort_section = saved_sort_section if saved_sort_section >= 0 else 0
+        hdr.setSortIndicator(sort_section, saved_sort_order)
+        hdr.blockSignals(False)
+        table.model().sort(sort_section, saved_sort_order)
         table.resizeRowsToContents()
+        self._apply_catalog_column_filters()
 
     def _on_catalog_row_double_clicked(self, row: int, _column: int) -> None:
         item = self.controls_catalog_table.item(row, 0)
         if item is None:
             return
         self._show_control_edit_dialog(self.format_rtl_text(item.text()))
+
+    def _on_catalog_sort_indicator_changed(self, logical_index: int, order: Qt.SortOrder) -> None:
+        """Called when Qt toggles the sort indicator after a column-header click."""
+        self.controls_catalog_table.model().sort(logical_index, order)
+
+    def _on_catalog_header_filter_requested(self, logical_index: int) -> None:
+        """Called when the ▼ filter icon in a catalog column header is clicked."""
+        if logical_index < 0 or logical_index >= 9:
+            return
+        self._show_catalog_column_filter_popup(logical_index)
+
+    def _show_catalog_column_filter_popup(self, column_index: int) -> None:
+        """Open an Excel-style filter popup for the given catalog table column."""
+        _CATALOG_COL_LABELS = [
+            "מזהה בקרה", "שם הבקרה", "קטגוריה", "תת-קטגוריה", "תהליך",
+            "רמת סיכון", "בסקופ", "אחראי IT", "אחראי עסקי",
+        ]
+        formal_name = _CATALOG_COL_LABELS[column_index] if column_index < len(_CATALOG_COL_LABELS) else str(column_index)
+        table = self.controls_catalog_table
+
+        # Collect unique cell values from all rows (including currently hidden ones)
+        all_display_values: set[str] = set()
+        for row in range(table.rowCount()):
+            cell_item = table.item(row, column_index)
+            cell_text = cell_item.text().strip() if cell_item else ""
+            all_display_values.add(cell_text if cell_text else "(ריקים)")
+
+        sorted_values = sorted(all_display_values, key=lambda x: ("" if x == "(ריקים)" else x))
+
+        # Current selection for this column (None = show all)
+        current_selected: set[str] | None = self.catalog_column_filters.get(column_index)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.format_rtl_text(f"סינון לפי: {formal_name}"))
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dialog.resize(320, 440)
+        dlg_layout = QVBoxLayout(dialog)
+        dlg_layout.setSpacing(6)
+
+        search_edit = QLineEdit()
+        search_edit.setPlaceholderText("חיפוש...")
+        search_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        search_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        dlg_layout.addWidget(search_edit)
+
+        from PySide6.QtWidgets import QCheckBox, QListWidget, QListWidgetItem  # noqa: PLC0415
+        select_all_cb = QCheckBox(self.format_rtl_text("(בחר הכל)"))
+        select_all_cb.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dlg_layout.addWidget(select_all_cb)
+
+        values_list = QListWidget()
+        values_list.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        values_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+
+        def _populate_list(filter_text: str = "") -> None:
+            values_list.blockSignals(True)
+            values_list.clear()
+            for val in sorted_values:
+                if filter_text and filter_text.lower() not in val.lower():
+                    continue
+                li = QListWidgetItem(val)
+                li.setFlags(li.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                li.setCheckState(
+                    Qt.CheckState.Checked
+                    if (current_selected is None or val in current_selected)
+                    else Qt.CheckState.Unchecked
+                )
+                values_list.addItem(li)
+            values_list.blockSignals(False)
+            _sync_select_all()
+
+        def _sync_select_all() -> None:
+            total = values_list.count()
+            checked_count = sum(
+                1 for i in range(total)
+                if values_list.item(i) and values_list.item(i).checkState() == Qt.CheckState.Checked
+            )
+            select_all_cb.blockSignals(True)
+            if checked_count == 0:
+                select_all_cb.setCheckState(Qt.CheckState.Unchecked)
+            elif checked_count == total:
+                select_all_cb.setCheckState(Qt.CheckState.Checked)
+            else:
+                select_all_cb.setCheckState(Qt.CheckState.PartiallyChecked)
+            select_all_cb.blockSignals(False)
+
+        def _on_select_all(state: int) -> None:
+            new_state = Qt.CheckState.Checked if state == Qt.CheckState.Checked.value else Qt.CheckState.Unchecked
+            values_list.blockSignals(True)
+            for i in range(values_list.count()):
+                li = values_list.item(i)
+                if li:
+                    li.setCheckState(new_state)
+            values_list.blockSignals(False)
+
+        def _on_item_changed(_item: Any) -> None:
+            _sync_select_all()
+
+        select_all_cb.setTristate(True)
+        select_all_cb.stateChanged.connect(_on_select_all)
+        values_list.itemChanged.connect(_on_item_changed)
+        search_edit.textChanged.connect(_populate_list)
+
+        _populate_list()
+        dlg_layout.addWidget(values_list)
+
+        btn_row = QHBoxLayout()
+        ok_btn = QPushButton(self.format_rtl_text("אישור"))
+        cancel_btn = QPushButton(self.format_rtl_text("ביטול"))
+        clear_btn = QPushButton(self.format_rtl_text("נקה סינון"))
+        clear_btn.setToolTip(self.format_rtl_text("הסר את סינון העמודה הזו"))
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(clear_btn)
+        dlg_layout.addLayout(btn_row)
+
+        def _on_ok() -> None:
+            selected_vals: set[str] = set()
+            for i in range(values_list.count()):
+                li = values_list.item(i)
+                if li and li.checkState() == Qt.CheckState.Checked:
+                    selected_vals.add(li.text().strip())
+            if selected_vals >= all_display_values:
+                self.catalog_column_filters.pop(column_index, None)
+            else:
+                self.catalog_column_filters[column_index] = selected_vals
+            self._apply_catalog_column_filters()
+            dialog.accept()
+
+        def _on_clear() -> None:
+            self.catalog_column_filters.pop(column_index, None)
+            self._apply_catalog_column_filters()
+            dialog.accept()
+
+        ok_btn.clicked.connect(_on_ok)
+        cancel_btn.clicked.connect(dialog.reject)
+        clear_btn.clicked.connect(_on_clear)
+        dialog.exec()
+
+    def _apply_catalog_column_filters(self) -> None:
+        """Show/hide catalog rows based on self.catalog_column_filters and update header icons."""
+        table = self.controls_catalog_table
+        active = {col: vals for col, vals in self.catalog_column_filters.items() if vals}
+        for row in range(table.rowCount()):
+            if active:
+                visible = True
+                for col, allowed in active.items():
+                    cell_item = table.item(row, col)
+                    cell_text = cell_item.text().strip() if cell_item else ""
+                    if not cell_text:
+                        cell_text = "(ריקים)"
+                    if cell_text not in allowed:
+                        visible = False
+                        break
+                table.setRowHidden(row, not visible)
+            else:
+                table.setRowHidden(row, False)
+        header = table.horizontalHeader()
+        if isinstance(header, _FilterableHeaderView):
+            header.set_active_filter_sections(
+                {col for col, vals in self.catalog_column_filters.items() if vals}
+            )
 
     def _show_control_edit_dialog(self, control_id: str) -> None:
         """Open the edit dialog for a single control entry."""
@@ -7286,6 +7472,145 @@ class ValidationDesktopApp(QMainWindow):
             self._build_user_review_incomplete_reason,
         )
 
+    def _compute_joiners_findings(self) -> None:
+        """Identify new users (GLTGV within audit period) for MA5.1-13_AYALON_24.
+
+        Filters USR02 rows where GLTGV falls within the configured audit period.
+        Each new user is surfaced as a finding for manual auditor review.
+        Populates audit_summary_records, audit_details_by_control, and
+        control_to_slot_rows so that the working paper export works correctly.
+        """
+        control_id = "MA5.1-13_AYALON_24"
+        self.audit_summary_records.pop(control_id, None)
+        self.audit_details_by_control.pop(control_id, None)
+
+        usr02_rows = self._load_preview_rows("USR02")
+        if not usr02_rows:
+            return
+
+        settings = self._current_system_settings()
+        period_cfg = settings.get("user_review_period", {}) if isinstance(settings, dict) else {}
+        start_text = str(period_cfg.get("start_date", "")).strip()
+        end_text = str(period_cfg.get("end_date", "")).strip()
+
+        period_start = self._parse_user_preview_date(start_text)
+        if period_start is None:
+            return
+        period_start_date = period_start.date()
+        period_end = self._parse_user_preview_date(end_text)
+        period_end_date = period_end.date() if period_end else None
+
+        control_meta = get_audit_control_definition(control_id)
+        source_file = self._get_slot_display_name("USR02")
+        extraction_date = self._get_slot_extraction_date("USR02") or "-"
+        work_env = self._current_work_environment_label()
+        period_note = f"{start_text} \u2014 {end_text}" if end_text else f"\u05de-{start_text}"
+
+        new_user_rows: list[dict[str, Any]] = []
+        findings: list[dict[str, Any]] = []
+
+        for row in usr02_rows:
+            if not isinstance(row, dict):
+                continue
+
+            # --- Creation-date resolution: prefer ERDAT, fall back to GLTGV ---
+            # Try ERDAT (technical) then common formal-header variants
+            erdat_raw = (
+                str(row.get("ERDAT", "") or "").strip()
+                or str(row.get("CREATION DATE", "") or "").strip()
+                or str(row.get("CREATED ON", "") or "").strip()
+            )
+            erdat_parsed = self._parse_user_preview_date(erdat_raw)
+
+            if erdat_parsed is not None:
+                creation_date = erdat_parsed.date()
+                date_field_used = "ERDAT"
+                date_value_display = erdat_raw
+            else:
+                # ERDAT absent/unparseable — fall back to GLTGV
+                gltgv_raw = str(row.get("GLTGV", "") or "").strip()
+                gltgv_parsed = self._parse_user_preview_date(gltgv_raw)
+                if gltgv_parsed is None:
+                    continue  # no usable creation date → skip row
+                creation_date = gltgv_parsed.date()
+                date_field_used = "GLTGV"
+                date_value_display = gltgv_raw
+
+            # --- Period filter ---
+            if creation_date < period_start_date:
+                continue
+            if period_end_date is not None and creation_date > period_end_date:
+                continue
+
+            bname = self._get_row_value(row, "BNAME")
+            mandt = self._get_row_value(row, "MANDT")
+            gltgv_str = str(row.get("GLTGV", "-") or "-").strip()
+            gltgb_str = str(row.get("GLTGB", "-") or "-").strip()
+            ustyp = str(row.get("USTYP", "-") or "-").strip()
+            status_raw = str(row.get("STATUS", "-") or "-").strip()
+            trdat = str(row.get("TRDAT", "-") or "-").strip()
+
+            new_user_rows.append(row)
+            findings.append({
+                "control_id": control_id,
+                "source_file": source_file,
+                "extraction_date": extraction_date,
+                "work_environment": work_env,
+                "category": control_meta.get("category", "-"),
+                "risk_level": control_meta.get("risk_level", "-"),
+                "description": control_meta.get("description", "-"),
+                "check_type": control_meta.get("check_type", "-"),
+                "actual_value": date_value_display,
+                "expected_value": period_note,
+                "auth_object": date_field_used,
+                "status": "\u05e2\u05dd \u05de\u05de\u05e6\u05d0",
+                "full_description": (
+                    f"\u05e7\u05dc\u05d9\u05d9\u05e0\u05d8: {mandt} | "
+                    f"\u05de\u05e9\u05ea\u05de\u05e9: {bname} | "
+                    f"\u05ea\u05d0\u05e8\u05d9\u05da \u05d4\u05e7\u05de\u05d4 ({date_field_used}): {date_value_display} | "
+                    f"GLTGV: {gltgv_str} | "
+                    f"\u05ea\u05d5\u05e7\u05e3 \u05e2\u05d3 (GLTGB): {gltgb_str} | "
+                    f"\u05e1\u05d5\u05d2 \u05de\u05e9\u05ea\u05de\u05e9: {ustyp} | "
+                    f"\u05e1\u05d8\u05d8\u05d5\u05e1: {status_raw} | "
+                    f"\u05db\u05e0\u05d9\u05e1\u05d4 \u05d0\u05d7\u05e8\u05d5\u05e0\u05d4: {trdat}"
+                ),
+                "client": mandt,
+                "user_name": bname,
+            })
+
+        total_count = len(usr02_rows)
+        finding_count = len(new_user_rows)
+
+        if findings:
+            self.audit_summary_records[control_id] = {
+                "control_id": control_id,
+                "check_type": control_meta.get("check_type", "-"),
+                "source_file": source_file,
+                "extraction_date": extraction_date,
+                "work_environment": work_env,
+                "risk_level": control_meta.get("risk_level", "-"),
+                "description": control_meta.get("description", "-"),
+                "valid_records": max(total_count - finding_count, 0),
+                "finding_records": finding_count,
+                "total_records": total_count,
+            }
+            self.audit_details_by_control[control_id] = findings
+            self.control_to_slot_rows[control_id] = new_user_rows
+            self.control_to_slot_key.setdefault(control_id, "USR02")
+        else:
+            self.audit_summary_records[control_id] = {
+                "control_id": control_id,
+                "check_type": control_meta.get("check_type", "-"),
+                "source_file": source_file,
+                "extraction_date": extraction_date,
+                "work_environment": work_env,
+                "risk_level": control_meta.get("risk_level", "-"),
+                "description": control_meta.get("description", "-"),
+                "valid_records": total_count,
+                "finding_records": 0,
+                "total_records": total_count,
+            }
+
     def _sync_developer_sod_finding(self) -> None:
         control_id = "MC5-23_AYALON_48"
         self.audit_summary_records.pop(control_id, None)
@@ -7362,6 +7687,7 @@ class ValidationDesktopApp(QMainWindow):
     def _refresh_audit_summary_table(self) -> None:
         self._sync_user_review_completion_finding()
         self._sync_developer_sod_finding()
+        self._compute_joiners_findings()
         self.audit_summary_table.setRowCount(0)
         if not self.audit_summary_records:
             self.audit_detail_table.setRowCount(0)
@@ -7482,7 +7808,7 @@ class ValidationDesktopApp(QMainWindow):
         _AGR_CROSS_JOIN_CONTROLS = frozenset({
             "MA1-1_AYALON_10", "MA1-1_AYALON_11", "MA1-1_AYALON_12",
             "MA1-1_AYALON_16", "MA1-1_AYALON_43", "MA1-1_AYALON_45",
-            "MA1-1_AYALON_67", "MA5.1-13_AYALON_24", "MA7-17_AYALON_30",
+            "MA1-1_AYALON_67", "MA7-17_AYALON_30",
         })
         raw_population_note: str | None = None
         if not raw_population_rows and control_id in _AGR_CROSS_JOIN_CONTROLS:
