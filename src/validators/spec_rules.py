@@ -47,6 +47,8 @@ PROFILE_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "UNAME": ("USER", "USER NAME", "USERNAME"),
     "USER_NAME": ("USER", "USER NAME", "USERNAME"),
     "AGR_NAME": ("ROLE", "ROLE NAME"),
+    "FROM_DAT": ("FROM DATE", "START DATE", "VALID FROM", "DATE FROM"),
+    "TO_DAT": ("TO DATE", "END DATE", "VALID TO", "DATE TO"),
     "PROFILE": ("PROFILE NAME",),
     "PARAMETER": ("NAME", "PARAMETER NAME", "PROPERTY"),
     "VALUE": (
@@ -398,7 +400,11 @@ CONTROL_VALIDATION_PARAMS: dict[str, list[str]] = {
         "ADR6.SMTP_ADDR",
         "USR21.PERSNUMBER",
     ],
-    "MA5.1-13_AYALON_24": ["USR02.GLTGV (תאריך הקמת משתמש)"],
+    "MA5.1-13_AYALON_24": [
+        "USR02.ERDAT / USR02.GLTGV (תאריך הקמת משתמש)",
+        "AGR_USERS.FROM_DAT / AGR_USERS.TO_DAT (תאריך שיוך רול)",
+        "AGR_1251.OBJECT / FIELD / LOW / HIGH",
+    ],
     "MA5.3-13_AYALON_25": ["USH04.PROFS (שינוי פרופיל)"],
     "MA7-17_AYALON_30": ["USR02 + AGR_1251 × AGR_USERS"],
     "MC5-23_AYALON_48": ["USR02.USTYP, רשימת מפתחות מורשים"],
@@ -418,7 +424,12 @@ CONTROL_FILTER_CRITERIA: dict[str, str] = {
     "MA1-1_AYALON_45": "סינון רולים עם הרשאות DEBUG, מיפוי משתמשים דרך AGR_USERS.",
     "MA1-1_AYALON_67": "סינון רולים עם הרשאות ניהול ג'ובים, מיפוי משתמשים דרך AGR_USERS.",
     "MA1-1&MA7-17_AYALON_2": "סינון משתמשים פעילים מ-USR02 (לפי GLTGB/USTYP), הוספת מידע אימייל מ-ADR6/USR21, וזיהוי ממצאים לפי כללי השלמת סקירת המשתמשים.",
-    "MA5.1-13_AYALON_24": "סינון משתמשים שתאריך הקמתם (GLTGV) חל בתקופת הביקורת שהוגדרה.",
+    "MA5.1-13_AYALON_24": (
+        "סינון משתמשים חדשים מ-USR02 שתאריך הקמתם (ERDAT/GLTGV) חל בתקופת הביקורת; "
+        "צירוף שיוכי רולים מ-AGR_USERS עם FROM_DAT בתקופה (ולאחר מכן AGR_1251 לפי AGR_NAME); "
+        "סימון השיוך הראשוני למשתמש; "
+        "אם תאריכי שיוך חסרים — הצגת כל הרולים הנוכחיים עם הערה בנייר העבודה."
+    ),
     "MA5.3-13_AYALON_25": "סינון רשומות USH04 בהן שדה PROFS השתנה במהלך תקופת הביקורת.",
     "MA7-17_AYALON_30": "צירוף משתמשים פעילים מ-USR02 עם רשימת הרולים שלהם (AGR_USERS) לצורך סקירת הרשאות תקופתית.",
     "MC5-23_AYALON_48": "זיהוי מפתחים פעילים בסביבת ייצור על-ידי חיתוך USR02 (משתמשים פעילים) עם רשימת המפתחות שהוגדרה.",

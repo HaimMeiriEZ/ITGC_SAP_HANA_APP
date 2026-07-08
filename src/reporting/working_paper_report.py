@@ -34,6 +34,7 @@ _HEADER_FONT = Font(bold=True, color="FFFFFFFF", size=11)
 _KEY_FILL = PatternFill(start_color="FFD9E1F2", end_color="FFD9E1F2", fill_type="solid")
 _KEY_FONT = Font(bold=True, size=11)
 _FINDING_FILL = PatternFill(start_color="FFFFE6E6", end_color="FFFFE6E6", fill_type="solid")
+_INITIAL_ASSIGNMENT_FILL = PatternFill(start_color="FFE2EFDA", end_color="FFE2EFDA", fill_type="solid")
 _SECTION_FILL = PatternFill(start_color="FF8EA9DB", end_color="FF8EA9DB", fill_type="solid")
 _SECTION_FONT = Font(bold=True, color="FFFFFFFF", size=12)
 _THIN = Side(border_style="thin", color="FF808080")
@@ -81,6 +82,9 @@ def write_control_working_paper(
     notes: list[str] | None = None,
     critical_roles: list[str] | None = None,
     raw_population_note: str | None = None,
+    privilege_rows: list[dict[str, Any]] | None = None,
+    privilege_note: str | None = None,
+    privilege_sheet_name: str = "הרשאות משתמשים חדשים",
 ) -> Path:
     """Build the working-paper workbook and save to *output_path*.
 
@@ -101,6 +105,12 @@ def write_control_working_paper(
         Current work environment string ("ייצור", "פיתוח", etc.).
     output_path : Path
         Destination .xlsx path.
+    privilege_rows : list[dict] | None
+        Optional expanded privilege rows for a dedicated sheet (joiners auth).
+    privilege_note : str | None
+        Optional note shown above the privilege sheet table.
+    privilege_sheet_name : str
+        Title for the optional privilege sheet.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook()
@@ -132,6 +142,15 @@ def write_control_working_paper(
 
     findings_sheet = workbook.create_sheet("ריכוז ממצאים")
     _write_findings_sheet(findings_sheet, detail_rows)
+
+    if privilege_rows is not None or privilege_note:
+        privilege_sheet = workbook.create_sheet(_sanitize_sheet_name(privilege_sheet_name))
+        _write_privilege_rows_sheet(
+            privilege_sheet,
+            privilege_rows or [],
+            note=privilege_note,
+            title=privilege_sheet_name,
+        )
 
     workbook.save(output_path)
     return output_path
@@ -785,6 +804,92 @@ def _write_examined_population_sheet(
         note_cell.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
         sheet.row_dimensions[next_row].height = 28
         next_row += 2
+
+
+def _write_privilege_rows_sheet(
+    sheet,
+    privilege_rows: list[dict[str, Any]],
+    *,
+    note: str | None = None,
+    title: str = "הרשאות משתמשים חדשים",
+) -> None:
+    """Write expanded joiners privilege rows (AGR_USERS × AGR_1251)."""
+    _set_rtl(sheet)
+
+    preferred_columns = [
+        "MANDT",
+        "UNAME",
+        "AGR_NAME",
+        "FROM_DAT",
+        "TO_DAT",
+        "OBJECT",
+        "FIELD",
+        "LOW",
+        "HIGH",
+        "is_initial_assignment",
+        "assignment_source",
+    ]
+    column_labels = {
+        "MANDT": "קליינט",
+        "UNAME": "משתמש",
+        "AGR_NAME": "רול",
+        "FROM_DAT": "תאריך התחלה",
+        "TO_DAT": "תאריך סיום",
+        "OBJECT": "אובייקט",
+        "FIELD": "שדה",
+        "LOW": "LOW",
+        "HIGH": "HIGH",
+        "is_initial_assignment": "שיוך ראשוני",
+        "assignment_source": "מקור שיוך",
+    }
+
+    title_cell = sheet.cell(row=1, column=1, value=title)
+    title_cell.font = _SECTION_FONT
+    title_cell.fill = _SECTION_FILL
+    title_cell.alignment = _CENTER
+
+    next_row = 3
+    if note:
+        note_cell = sheet.cell(row=next_row, column=1, value=note)
+        note_cell.font = Font(bold=True, color="FFC00000", size=11)
+        note_cell.fill = PatternFill(start_color="FFFCE4D6", end_color="FFFCE4D6", fill_type="solid")
+        note_cell.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+        sheet.merge_cells(start_row=next_row, start_column=1, end_row=next_row, end_column=6)
+        sheet.row_dimensions[next_row].height = 36
+        next_row += 2
+
+    if not privilege_rows:
+        empty_cell = sheet.cell(row=next_row, column=1, value="אין רשומות הרשאה להצגה.")
+        empty_cell.alignment = _WRAP_RIGHT
+        return
+
+    present_keys = set()
+    for row in privilege_rows:
+        present_keys.update(str(k) for k in row.keys() if not str(k).startswith("__"))
+    columns = [col for col in preferred_columns if col in present_keys]
+    for key in sorted(present_keys):
+        if key not in columns:
+            columns.append(key)
+
+    for col_idx, key in enumerate(columns, start=1):
+        display = column_labels.get(key, key)
+        cell = sheet.cell(row=next_row, column=col_idx, value=display)
+        _apply_header(cell)
+        sheet.column_dimensions[get_column_letter(col_idx)].width = max(
+            12, min(36, len(str(display)) + 4)
+        )
+    header_row = next_row
+
+    for row_offset, row in enumerate(privilege_rows, start=header_row + 1):
+        is_initial = str(row.get("is_initial_assignment", "")).strip() == "כן"
+        row_fill = _INITIAL_ASSIGNMENT_FILL if is_initial else None
+        for col_idx, key in enumerate(columns, start=1):
+            cell = sheet.cell(
+                row=row_offset,
+                column=col_idx,
+                value=_excel_safe(row.get(key, "")),
+            )
+            _apply_value_cell(cell, fill=row_fill)
 
 
 def _write_findings_sheet(

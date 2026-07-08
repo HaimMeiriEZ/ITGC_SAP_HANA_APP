@@ -740,6 +740,9 @@ class ValidationDesktopApp(QMainWindow):
         self.agr_1251_cached_rows: list[dict[str, Any]] = []
         self.agr_users_cached_rows: list[dict[str, Any]] = []
         self.agr_users_population_by_mandt: dict[str, int] = {}
+        # Working-paper privilege expansion for joiners (MA5.1-13_AYALON_24)
+        self.joiners_auth_rows_by_control: dict[str, list[dict[str, Any]]] = {}
+        self.joiners_auth_notes_by_control: dict[str, str] = {}
         self.user_mgmt_summary_records: dict[str, dict[str, Any]] = {}
         self.user_mgmt_users_by_control: dict[str, list[dict[str, Any]]] = {}
         self.auth_mgmt_summary_records: dict[str, dict[str, Any]] = {}
@@ -7483,6 +7486,8 @@ class ValidationDesktopApp(QMainWindow):
         control_id = "MA5.1-13_AYALON_24"
         self.audit_summary_records.pop(control_id, None)
         self.audit_details_by_control.pop(control_id, None)
+        self.joiners_auth_rows_by_control.pop(control_id, None)
+        self.joiners_auth_notes_by_control.pop(control_id, None)
 
         usr02_rows = self._load_preview_rows("USR02")
         if not usr02_rows:
@@ -7610,6 +7615,200 @@ class ValidationDesktopApp(QMainWindow):
                 "finding_records": 0,
                 "total_records": total_count,
             }
+
+        self._build_joiners_auth_rows_for_control(
+            control_id=control_id,
+            new_user_rows=new_user_rows,
+            period_start_date=period_start_date,
+            period_end_date=period_end_date,
+        )
+
+    def _build_joiners_auth_rows_for_control(
+        self,
+        *,
+        control_id: str,
+        new_user_rows: list[dict[str, Any]],
+        period_start_date: date,
+        period_end_date: date | None,
+    ) -> None:
+        """Build AGR_USERS × AGR_1251 privilege rows for new users (joiners).
+
+        Prefer role assignments whose FROM_DAT falls inside the audit period.
+        When FROM_DAT is unavailable for a user, fall back to that user's current
+        roles and record a working-paper note.
+        """
+        self.joiners_auth_rows_by_control.pop(control_id, None)
+        self.joiners_auth_notes_by_control.pop(control_id, None)
+
+        if not new_user_rows:
+            return
+
+        if not self.agr_users_cached_rows or not self.agr_1251_cached_rows:
+            self.joiners_auth_rows_by_control[control_id] = []
+            self.joiners_auth_notes_by_control[control_id] = (
+                "לא נטענו AGR_USERS ו/או AGR_1251 — לא ניתן להציג הרשאות משתמשים חדשים."
+            )
+            return
+
+        new_user_keys: set[tuple[str, str]] = set()
+        for row in new_user_rows:
+            mandt = self._get_row_value(row, "MANDT").strip().upper()
+            bname = self._get_row_value(row, "BNAME").strip().upper()
+            if mandt and bname:
+                new_user_keys.add((mandt, bname))
+        if not new_user_keys:
+            return
+
+        agr1251_by_role: dict[str, list[dict[str, Any]]] = {}
+        for auth_row in self.agr_1251_cached_rows:
+            agr_name = str(
+                self._resolve_row_value_by_priority(auth_row, "AGR_NAME") or ""
+            ).strip().upper()
+            if agr_name:
+                agr1251_by_role.setdefault(agr_name, []).append(auth_row)
+
+        # Collect AGR_USERS rows per joiner.
+        assignments_by_user: dict[tuple[str, str], list[dict[str, Any]]] = {
+            key: [] for key in new_user_keys
+        }
+        for user_row in self.agr_users_cached_rows:
+            uname = str(
+                self._resolve_row_value_by_priority(user_row, "UNAME") or ""
+            ).strip().upper()
+            mandt_raw = self._resolve_row_value_by_priority(user_row, "MANDT")
+            mandt = str(mandt_raw or "").strip().upper() if mandt_raw is not None else ""
+            # When MANDT is missing on AGR_USERS, match by UNAME alone across joiners.
+            if mandt:
+                key = (mandt, uname)
+                if key not in assignments_by_user:
+                    continue
+                assignments_by_user[key].append(user_row)
+            else:
+                for (jm, ju) in new_user_keys:
+                    if ju == uname:
+                        assignments_by_user[(jm, ju)].append(user_row)
+
+        privilege_rows: list[dict[str, Any]] = []
+        fallback_users: list[str] = []
+        MAX_PRIVILEGE_ROWS = 100_000
+
+        for (mandt, uname), assignments in assignments_by_user.items():
+            if not assignments:
+                continue
+
+            dated_in_period: list[tuple[date, dict[str, Any]]] = []
+            undated: list[dict[str, Any]] = []
+            for assignment in assignments:
+                from_raw = self._resolve_row_value_by_priority(assignment, "FROM_DAT")
+                from_parsed = self._parse_user_preview_date(from_raw)
+                if from_parsed is None:
+                    undated.append(assignment)
+                    continue
+                from_date = from_parsed.date()
+                if from_date < period_start_date:
+                    continue
+                if period_end_date is not None and from_date > period_end_date:
+                    continue
+                dated_in_period.append((from_date, assignment))
+
+            use_fallback = not dated_in_period
+            if use_fallback:
+                selected_assignments = undated if undated else assignments
+                fallback_users.append(f"{mandt}|{uname}")
+                source = "fallback_current_roles"
+                # Without dates, mark the first role as initial for audit alignment.
+                initial_agr = str(
+                    self._resolve_row_value_by_priority(selected_assignments[0], "AGR_NAME") or ""
+                ).strip().upper()
+            else:
+                selected_assignments = [row for _, row in dated_in_period]
+                source = "period_from_dat"
+                dated_in_period.sort(key=lambda item: item[0])
+                initial_agr = str(
+                    self._resolve_row_value_by_priority(dated_in_period[0][1], "AGR_NAME") or ""
+                ).strip().upper()
+
+            for assignment in selected_assignments:
+                agr_name = str(
+                    self._resolve_row_value_by_priority(assignment, "AGR_NAME") or ""
+                ).strip()
+                agr_name_upper = agr_name.upper()
+                from_raw = self._resolve_row_value_by_priority(assignment, "FROM_DAT")
+                to_raw = self._resolve_row_value_by_priority(assignment, "TO_DAT")
+                from_display = str(from_raw or "-").strip() or "-"
+                to_display = str(to_raw or "-").strip() or "-"
+                is_initial = agr_name_upper == initial_agr and bool(agr_name_upper)
+
+                auth_rows = agr1251_by_role.get(agr_name_upper, [])
+                if not auth_rows:
+                    privilege_rows.append({
+                        "__profile": "AGR_1251 × AGR_USERS",
+                        "MANDT": mandt or "-",
+                        "UNAME": uname or "-",
+                        "AGR_NAME": agr_name or "-",
+                        "FROM_DAT": from_display,
+                        "TO_DAT": to_display,
+                        "OBJECT": "-",
+                        "FIELD": "-",
+                        "LOW": "-",
+                        "HIGH": "-",
+                        "is_initial_assignment": "כן" if is_initial else "לא",
+                        "assignment_source": source,
+                    })
+                    if len(privilege_rows) >= MAX_PRIVILEGE_ROWS:
+                        break
+                    continue
+
+                for auth_row in auth_rows:
+                    privilege_rows.append({
+                        "__profile": "AGR_1251 × AGR_USERS",
+                        "MANDT": mandt or "-",
+                        "UNAME": uname or "-",
+                        "AGR_NAME": agr_name or "-",
+                        "FROM_DAT": from_display,
+                        "TO_DAT": to_display,
+                        "OBJECT": str(
+                            self._resolve_row_value_by_priority(auth_row, "OBJECT") or "-"
+                        ).strip() or "-",
+                        "FIELD": str(
+                            self._resolve_row_value_by_priority(auth_row, "FIELD") or "-"
+                        ).strip() or "-",
+                        "LOW": str(
+                            self._resolve_row_value_by_priority(auth_row, "LOW") or "-"
+                        ).strip() or "-",
+                        "HIGH": str(
+                            self._resolve_row_value_by_priority(auth_row, "HIGH") or "-"
+                        ).strip() or "-",
+                        "is_initial_assignment": "כן" if is_initial else "לא",
+                        "assignment_source": source,
+                    })
+                    if len(privilege_rows) >= MAX_PRIVILEGE_ROWS:
+                        break
+                if len(privilege_rows) >= MAX_PRIVILEGE_ROWS:
+                    break
+            if len(privilege_rows) >= MAX_PRIVILEGE_ROWS:
+                break
+
+        notes: list[str] = []
+        if fallback_users:
+            sample = ", ".join(fallback_users[:8])
+            more = f" (+{len(fallback_users) - 8} נוספים)" if len(fallback_users) > 8 else ""
+            notes.append(
+                "לתאריכי שיוך רול (FROM_DAT) לא היו זמינים/לא נמצאו בתקופה עבור חלק "
+                f"מהמשתמשים החדשים — הוצגו כל הרולים הנוכחיים. משתמשים: {sample}{more}."
+            )
+        if len(privilege_rows) >= MAX_PRIVILEGE_ROWS:
+            notes.append(
+                f"אוכלוסיית ההרשאות גדולה — הוצגו עד {MAX_PRIVILEGE_ROWS:,} רשומות בלבד."
+            )
+
+        self.joiners_auth_rows_by_control[control_id] = privilege_rows
+        if notes:
+            self.joiners_auth_notes_by_control[control_id] = " ".join(notes)
+        elif not privilege_rows:
+            self.joiners_auth_notes_by_control[control_id] = (
+                "לא נמצאו שיוכי רול למשתמשים החדשים ב-AGR_USERS לתקופת הביקורת."
+            )
 
     def _sync_developer_sod_finding(self) -> None:
         control_id = "MC5-23_AYALON_48"
@@ -7945,6 +8144,18 @@ class ValidationDesktopApp(QMainWindow):
                     "לא הוגדרו פרופילי משתמשיי על בהגדרות המערכת - "
                     "בדיקת פרופילים חזקים לא בוצעה."
                 )
+            privilege_rows = None
+            privilege_note = None
+            if control_id == "MA5.1-13_AYALON_24":
+                # Always create the privilege sheet for joiners (even if empty),
+                # so auditors can see missing AGR inputs via the note.
+                privilege_rows = list(self.joiners_auth_rows_by_control.get(control_id, []))
+                privilege_note = self.joiners_auth_notes_by_control.get(control_id)
+                if not privilege_note and not privilege_rows:
+                    privilege_note = (
+                        "לא נבנו שורות הרשאה למשתמשים חדשים "
+                        "(חסרים AGR_USERS/AGR_1251 או אין שיוכי רול)."
+                    )
             write_control_working_paper(
                 control_id=control_id,
                 summary_record=summary_record,
@@ -7956,6 +8167,8 @@ class ValidationDesktopApp(QMainWindow):
                 notes=notes,
                 critical_roles=self._get_critical_roles(),
                 raw_population_note=raw_population_note,
+                privilege_rows=privilege_rows,
+                privilege_note=privilege_note,
             )
         except Exception as exc:
             QMessageBox.critical(
@@ -8117,6 +8330,8 @@ class ValidationDesktopApp(QMainWindow):
         self._slot_file_row_counts = {}
         self.control_to_slot_rows = {}
         self.control_to_slot_key = {}
+        self.joiners_auth_rows_by_control = {}
+        self.joiners_auth_notes_by_control = {}
         self.audit_summary_table.setRowCount(0)
         self.audit_detail_table.setRowCount(0)
         self.permissions_summary_table.setRowCount(0)

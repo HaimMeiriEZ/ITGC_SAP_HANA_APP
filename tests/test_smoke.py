@@ -506,6 +506,189 @@ class TestSmoke(unittest.TestCase):
 
             self.assertEqual(summary_text, "נמצאו 2 ממצאים מתוך 5 רשומות שנבדקו (40.0%).")
 
+    def test_joiners_auth_rows_period_from_dat_and_initial_flag(self) -> None:
+        window = self._window
+        window._reset_runtime_state()
+        window.agr_users_cached_rows = [
+            {
+                "MANDT": "100",
+                "UNAME": "NEWUSER",
+                "AGR_NAME": "Z_ROLE_FIRST",
+                "FROM_DAT": "20260115",
+                "TO_DAT": "99991231",
+            },
+            {
+                "MANDT": "100",
+                "UNAME": "NEWUSER",
+                "AGR_NAME": "Z_ROLE_LATER",
+                "FROM_DAT": "20260201",
+                "TO_DAT": "99991231",
+            },
+            {
+                "MANDT": "100",
+                "UNAME": "NEWUSER",
+                "AGR_NAME": "Z_ROLE_OLD",
+                "FROM_DAT": "20250101",
+                "TO_DAT": "99991231",
+            },
+        ]
+        window.agr_1251_cached_rows = [
+            {
+                "AGR_NAME": "Z_ROLE_FIRST",
+                "OBJECT": "S_TCODE",
+                "FIELD": "TCD",
+                "LOW": "SU01",
+                "HIGH": "",
+            },
+            {
+                "AGR_NAME": "Z_ROLE_LATER",
+                "OBJECT": "S_TCODE",
+                "FIELD": "TCD",
+                "LOW": "SE16",
+                "HIGH": "",
+            },
+        ]
+        from datetime import date
+
+        window._build_joiners_auth_rows_for_control(
+            control_id="MA5.1-13_AYALON_24",
+            new_user_rows=[{"MANDT": "100", "BNAME": "NEWUSER", "ERDAT": "20260110"}],
+            period_start_date=date(2026, 1, 1),
+            period_end_date=date(2026, 3, 31),
+        )
+        rows = window.joiners_auth_rows_by_control.get("MA5.1-13_AYALON_24") or []
+        self.assertTrue(rows)
+        agr_names = {str(r.get("AGR_NAME")) for r in rows}
+        self.assertIn("Z_ROLE_FIRST", agr_names)
+        self.assertIn("Z_ROLE_LATER", agr_names)
+        self.assertNotIn("Z_ROLE_OLD", agr_names)
+        initial_rows = [r for r in rows if r.get("is_initial_assignment") == "כן"]
+        self.assertTrue(initial_rows)
+        self.assertTrue(all(r.get("AGR_NAME") == "Z_ROLE_FIRST" for r in initial_rows))
+        self.assertTrue(all(r.get("assignment_source") == "period_from_dat" for r in rows))
+
+    def test_joiners_auth_rows_fallback_when_from_dat_missing(self) -> None:
+        window = self._window
+        window._reset_runtime_state()
+        window.agr_users_cached_rows = [
+            {
+                "MANDT": "100",
+                "UNAME": "NEWUSER",
+                "AGR_NAME": "Z_ROLE_A",
+            },
+            {
+                "MANDT": "100",
+                "UNAME": "NEWUSER",
+                "AGR_NAME": "Z_ROLE_B",
+            },
+        ]
+        window.agr_1251_cached_rows = [
+            {
+                "AGR_NAME": "Z_ROLE_A",
+                "OBJECT": "S_TCODE",
+                "FIELD": "TCD",
+                "LOW": "SU01",
+                "HIGH": "",
+            },
+            {
+                "AGR_NAME": "Z_ROLE_B",
+                "OBJECT": "S_TCODE",
+                "FIELD": "TCD",
+                "LOW": "PFCG",
+                "HIGH": "",
+            },
+        ]
+        from datetime import date
+
+        window._build_joiners_auth_rows_for_control(
+            control_id="MA5.1-13_AYALON_24",
+            new_user_rows=[{"MANDT": "100", "BNAME": "NEWUSER", "ERDAT": "20260110"}],
+            period_start_date=date(2026, 1, 1),
+            period_end_date=date(2026, 3, 31),
+        )
+        rows = window.joiners_auth_rows_by_control.get("MA5.1-13_AYALON_24") or []
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r.get("assignment_source") == "fallback_current_roles" for r in rows))
+        note = window.joiners_auth_notes_by_control.get("MA5.1-13_AYALON_24", "")
+        self.assertIn("לא היו זמינים", note)
+
+    def test_working_paper_includes_joiners_privilege_sheet(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "MA5.1-13_AYALON_24_working_paper.xlsx"
+            privilege_rows = [
+                {
+                    "__profile": "AGR_1251 × AGR_USERS",
+                    "MANDT": "100",
+                    "UNAME": "NEWUSER",
+                    "AGR_NAME": "Z_ROLE_FIRST",
+                    "FROM_DAT": "20260115",
+                    "TO_DAT": "99991231",
+                    "OBJECT": "S_TCODE",
+                    "FIELD": "TCD",
+                    "LOW": "SU01",
+                    "HIGH": "-",
+                    "is_initial_assignment": "כן",
+                    "assignment_source": "period_from_dat",
+                },
+                {
+                    "__profile": "AGR_1251 × AGR_USERS",
+                    "MANDT": "100",
+                    "UNAME": "NEWUSER",
+                    "AGR_NAME": "Z_ROLE_LATER",
+                    "FROM_DAT": "20260201",
+                    "TO_DAT": "99991231",
+                    "OBJECT": "S_TCODE",
+                    "FIELD": "TCD",
+                    "LOW": "SE16",
+                    "HIGH": "-",
+                    "is_initial_assignment": "לא",
+                    "assignment_source": "period_from_dat",
+                },
+            ]
+            write_control_working_paper(
+                control_id="MA5.1-13_AYALON_24",
+                summary_record={
+                    "control_id": "MA5.1-13_AYALON_24",
+                    "source_file": "USR02",
+                    "extraction_date": "2026-05-31",
+                    "total_records": 10,
+                    "finding_records": 1,
+                    "description": "משתמשים חדשים",
+                },
+                detail_rows=[
+                    {
+                        "control_id": "MA5.1-13_AYALON_24",
+                        "client": "100",
+                        "user_name": "NEWUSER",
+                        "actual_value": "20260110",
+                        "status": "עם ממצא",
+                    }
+                ],
+                raw_population_rows=[
+                    {
+                        "MANDT": "100",
+                        "BNAME": "NEWUSER",
+                        "ERDAT": "20260110",
+                        "__profile": "USR02",
+                    }
+                ],
+                ipe_entries=[],
+                work_environment_label="FPP - PROD - סביבת ייצור",
+                output_path=output_path,
+                privilege_rows=privilege_rows,
+                privilege_note=None,
+            )
+            workbook = load_workbook(output_path)
+            self.assertIn("הרשאות משתמשים חדשים", workbook.sheetnames)
+            sheet = workbook["הרשאות משתמשים חדשים"]
+            headers = [
+                sheet.cell(row=3, column=col).value
+                for col in range(1, 12)
+                if sheet.cell(row=3, column=col).value
+            ]
+            self.assertIn("רול", headers)
+            self.assertIn("שיוך ראשוני", headers)
+
     def test_excel_report_is_created_with_summary_and_issues(self) -> None:
         with TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "users.txt"
