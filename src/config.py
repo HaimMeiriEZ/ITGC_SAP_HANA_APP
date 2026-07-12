@@ -10,6 +10,7 @@ SLOT_DEFAULT_CONTROLS: dict[str, list[str]] = {
     "USR02": [
         "MA2-2_AYALON_6", "MA1-1_AYALON_5", "MA3-3_AYALON_14",
         "MA1-1&MA7-17_AYALON_2", "MC5-23_AYALON_48", "MA5.1-13_AYALON_24",
+        "MA7-17_AYALON_30",
     ],
     "ADR6_USR21": ["MA1-1&MA7-17_AYALON_2"],
     "AGR_USERS": [

@@ -694,6 +694,356 @@ class TestSmoke(unittest.TestCase):
             self.assertIn("רול", headers)
             self.assertIn("שיוך ראשוני", headers)
 
+    def test_ma717_active_user_filter_trdat_or_validity(self) -> None:
+        window = self._window
+        window._reset_runtime_state()
+        window._current_system_settings = lambda: {
+            "user_review_period": {"start_date": "2026-01-01", "end_date": "2026-03-31"},
+        }
+        window._get_slot_display_name = lambda _slot: "USR02"
+        window._get_slot_extraction_date = lambda _slot: "2026-05-31"
+        window._current_work_environment_label = lambda: "FPP - PROD"
+        window._load_preview_rows = lambda slot: (
+            [
+                {"MANDT": "100", "BNAME": "ACTIVE_TRDAT", "TRDAT": "20260215", "GLTGV": "", "GLTGB": ""},
+                {
+                    "MANDT": "100",
+                    "BNAME": "ACTIVE_VALIDITY",
+                    "TRDAT": "20240101",
+                    "GLTGV": "20260101",
+                    "GLTGB": "20261231",
+                },
+                {
+                    "MANDT": "100",
+                    "BNAME": "INACTIVE_USER",
+                    "TRDAT": "20240101",
+                    "GLTGV": "20240101",
+                    "GLTGB": "20241231",
+                },
+            ]
+            if slot == "USR02"
+            else []
+        )
+        window._load_all_user_preview_rows = lambda: [
+            {
+                "MANDT": "100",
+                "BNAME": "ACTIVE_TRDAT",
+                "NAME_TEXTC": "Dana",
+                "DEPARTMENT": "Finance",
+                "STATUS": "פעיל",
+                "TRDAT": "20260215",
+            },
+            {
+                "MANDT": "100",
+                "BNAME": "ACTIVE_VALIDITY",
+                "NAME_TEXTC": "Noam",
+                "DEPARTMENT": "IT",
+                "STATUS": "פעיל",
+                "TRDAT": "20240101",
+            },
+        ]
+
+        window._compute_active_users_permission_review()
+
+        summary = window.audit_summary_records.get("MA7-17_AYALON_30")
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertEqual(summary["total_records"], 2)
+        details = window.audit_details_by_control.get("MA7-17_AYALON_30") or []
+        users = {str(row.get("user_name")) for row in details}
+        self.assertEqual(users, {"ACTIVE_TRDAT", "ACTIVE_VALIDITY"})
+        self.assertNotIn("INACTIVE_USER", users)
+
+    def test_ma717_summary_population_only(self) -> None:
+        window = self._window
+        window._reset_runtime_state()
+        window._current_system_settings = lambda: {
+            "user_review_period": {"start_date": "2026-01-01", "end_date": "2026-03-31"},
+        }
+        window._get_slot_display_name = lambda _slot: "USR02"
+        window._get_slot_extraction_date = lambda _slot: "2026-05-31"
+        window._current_work_environment_label = lambda: "FPP - PROD"
+        window._load_preview_rows = lambda slot: (
+            [{"MANDT": "100", "BNAME": "ACTIVE_TRDAT", "TRDAT": "20260215", "GLTGV": "", "GLTGB": ""}]
+            if slot == "USR02"
+            else []
+        )
+        window._load_all_user_preview_rows = lambda: [
+            {"MANDT": "100", "BNAME": "ACTIVE_TRDAT", "DEPARTMENT": "Finance", "STATUS": "פעיל"},
+        ]
+
+        window._compute_active_users_permission_review()
+
+        summary = window.audit_summary_records.get("MA7-17_AYALON_30")
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertEqual(summary["finding_records"], 0)
+        self.assertEqual(summary["valid_records"], 1)
+        details = window.audit_details_by_control.get("MA7-17_AYALON_30") or []
+        self.assertEqual(len(details), 1)
+        self.assertEqual(details[0]["status"], "לסקירה")
+
+    def test_ma717_auth_rows_current_roles(self) -> None:
+        window = self._window
+        window._reset_runtime_state()
+        window.agr_users_cached_rows = [
+            {
+                "MANDT": "100",
+                "UNAME": "ACTIVE_USER",
+                "AGR_NAME": "Z_ROLE_A",
+                "FROM_DAT": "20250101",
+            },
+            {
+                "MANDT": "100",
+                "UNAME": "ACTIVE_USER",
+                "AGR_NAME": "Z_ROLE_B",
+                "FROM_DAT": "20200101",
+            },
+        ]
+        window.agr_1251_cached_rows = [
+            {
+                "AGR_NAME": "Z_ROLE_A",
+                "OBJECT": "S_TCODE",
+                "FIELD": "TCD",
+                "LOW": "SU01",
+                "HIGH": "",
+            },
+            {
+                "AGR_NAME": "Z_ROLE_B",
+                "OBJECT": "S_TCODE",
+                "FIELD": "TCD",
+                "LOW": "SE16",
+                "HIGH": "",
+            },
+        ]
+        from datetime import date
+
+        window._build_joiners_auth_rows_for_control(
+            control_id="MA7-17_AYALON_30",
+            new_user_rows=[{"MANDT": "100", "BNAME": "ACTIVE_USER"}],
+            period_start_date=date(2026, 1, 1),
+            period_end_date=date(2026, 3, 31),
+            assignment_mode="current_all_roles",
+        )
+        rows = window.joiners_auth_rows_by_control.get("MA7-17_AYALON_30") or []
+        self.assertEqual(len(rows), 2)
+        agr_names = {str(r.get("AGR_NAME")) for r in rows}
+        self.assertEqual(agr_names, {"Z_ROLE_A", "Z_ROLE_B"})
+        self.assertTrue(all(r.get("assignment_source") == "current_snapshot" for r in rows))
+        self.assertTrue(all(r.get("is_initial_assignment") == "לא" for r in rows))
+
+    def test_working_paper_includes_active_users_privilege_sheet(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "MA7-17_AYALON_30_working_paper.xlsx"
+            privilege_rows = [
+                {
+                    "__profile": "AGR_1251 × AGR_USERS",
+                    "MANDT": "100",
+                    "UNAME": "ACTIVE_USER",
+                    "AGR_NAME": "Z_ROLE_A",
+                    "FROM_DAT": "20250101",
+                    "TO_DAT": "99991231",
+                    "OBJECT": "S_TCODE",
+                    "FIELD": "TCD",
+                    "LOW": "SU01",
+                    "HIGH": "-",
+                    "is_initial_assignment": "לא",
+                    "assignment_source": "current_snapshot",
+                },
+            ]
+            write_control_working_paper(
+                control_id="MA7-17_AYALON_30",
+                summary_record={
+                    "control_id": "MA7-17_AYALON_30",
+                    "source_file": "USR02",
+                    "extraction_date": "2026-05-31",
+                    "total_records": 1,
+                    "finding_records": 0,
+                    "description": "סקירת הרשאות משתמשים",
+                },
+                detail_rows=[
+                    {
+                        "control_id": "MA7-17_AYALON_30",
+                        "client": "100",
+                        "user_name": "ACTIVE_USER",
+                        "actual_value": "2026-01-01 — 2026-03-31",
+                        "status": "לסקירה",
+                    }
+                ],
+                raw_population_rows=[
+                    {
+                        "MANDT": "100",
+                        "BNAME": "ACTIVE_USER",
+                        "DEPARTMENT": "Finance",
+                        "__profile": "USR02",
+                    }
+                ],
+                ipe_entries=[],
+                work_environment_label="FPP - PROD - סביבת ייצור",
+                output_path=output_path,
+                privilege_rows=privilege_rows,
+                privilege_note=None,
+                privilege_sheet_name="הרשאות משתמשים פעילים",
+            )
+            workbook = load_workbook(output_path)
+            self.assertIn("הרשאות משתמשים פעילים", workbook.sheetnames)
+            sheet = workbook["הרשאות משתמשים פעילים"]
+            headers = [
+                sheet.cell(row=3, column=col).value
+                for col in range(1, 12)
+                if sheet.cell(row=3, column=col).value
+            ]
+            self.assertIn("רול", headers)
+            self.assertIn("משתמש", headers)
+
+    def _setup_ma717_compute_window(
+        self,
+        window: ValidationDesktopApp,
+        *,
+        usr02_rows: list[dict[str, object]],
+        strong_profile_data: dict[str, dict[str, dict[str, set[str]]]] | None = None,
+        critical_roles: list[str] | None = None,
+    ) -> None:
+        window._reset_runtime_state()
+        window._current_system_settings = lambda: {
+            "user_review_period": {"start_date": "2026-01-01", "end_date": "2026-03-31"},
+            "critical_roles": critical_roles if critical_roles is not None else ["SAP_ALL", "SAP_NEW"],
+        }
+        window._get_slot_display_name = lambda _slot: "USR02"
+        window._get_slot_extraction_date = lambda _slot: "2026-05-31"
+        window._current_work_environment_label = lambda: "FPP - PROD"
+        window._permission_source_file_label = lambda _cid: "UST04 / USH04"
+        window._permission_extraction_date_label = lambda _cid: "2026-05-31"
+        window._load_preview_rows = lambda slot: usr02_rows if slot == "USR02" else []
+        window._load_all_user_preview_rows = lambda: []
+        window._strong_profile_data = strong_profile_data or {}
+
+    def test_ma717_splits_status_strong_vs_review(self) -> None:
+        window = self._window
+        self._setup_ma717_compute_window(
+            window,
+            usr02_rows=[
+                {"MANDT": "100", "BNAME": "STRONG_USER", "TRDAT": "20260215", "GLTGV": "", "GLTGB": ""},
+                {"MANDT": "100", "BNAME": "NORMAL_USER", "TRDAT": "20260220", "GLTGV": "", "GLTGB": ""},
+            ],
+            strong_profile_data={
+                "UST04": {"100": {"STRONG_USER": {"SAP_ALL"}}},
+            },
+        )
+
+        window._compute_active_users_permission_review()
+
+        summary = window.audit_summary_records.get("MA7-17_AYALON_30")
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertEqual(summary["total_records"], 2)
+        self.assertEqual(summary["finding_records"], 1)
+        self.assertEqual(summary["valid_records"], 1)
+
+        details = window.audit_details_by_control.get("MA7-17_AYALON_30") or []
+        by_user = {str(row.get("user_name")): row for row in details}
+        self.assertEqual(by_user["STRONG_USER"]["status"], "עם ממצא")
+        self.assertIn("SAP_ALL", str(by_user["STRONG_USER"]["actual_value"]))
+        self.assertEqual(by_user["NORMAL_USER"]["status"], "לסקירה")
+
+        strong_details = window.ma717_strong_profile_details_by_control.get("MA7-17_AYALON_30") or []
+        self.assertEqual(len(strong_details), 1)
+        self.assertEqual(strong_details[0]["user_name"], "STRONG_USER")
+
+    def test_ma717_strong_profile_sheet_in_working_paper(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "MA7-17_AYALON_30_strong_sheet.xlsx"
+            strong_rows = [
+                {
+                    "control_id": "MA3-3_AYALON_14",
+                    "client": "100",
+                    "user_name": "STRONG_USER",
+                    "actual_value": "SAP_ALL",
+                    "expected_value": "",
+                    "auth_object": "-",
+                    "status": "עם ממצא",
+                    "source_file": "UST04",
+                    "extraction_date": "2026-05-31",
+                    "work_environment": "FPP - PROD",
+                    "category": "MA - ניהול גישה",
+                    "risk_level": "גבוה",
+                    "description": "פרופילים חזקים",
+                    "check_type": "פרופילים חזקים",
+                    "full_description": "משתמש: STRONG_USER",
+                }
+            ]
+            write_control_working_paper(
+                control_id="MA7-17_AYALON_30",
+                summary_record={
+                    "control_id": "MA7-17_AYALON_30",
+                    "source_file": "USR02",
+                    "extraction_date": "2026-05-31",
+                    "total_records": 2,
+                    "finding_records": 1,
+                    "description": "סקירת הרשאות משתמשים",
+                },
+                detail_rows=[
+                    {"control_id": "MA7-17_AYALON_30", "client": "100", "user_name": "STRONG_USER", "status": "עם ממצא"},
+                    {"control_id": "MA7-17_AYALON_30", "client": "100", "user_name": "NORMAL_USER", "status": "לסקירה"},
+                ],
+                raw_population_rows=[],
+                ipe_entries=[],
+                work_environment_label="FPP - PROD - סביבת ייצור",
+                output_path=output_path,
+                strong_profile_detail_rows=strong_rows,
+                strong_profile_sheet_name="משתמשים עם פרופילים חזקים",
+            )
+            workbook = load_workbook(output_path)
+            self.assertIn("משתמשים עם פרופילים חזקים", workbook.sheetnames)
+            sheet = workbook["משתמשים עם פרופילים חזקים"]
+            self.assertEqual(
+                sheet.cell(row=1, column=1).value,
+                "אוכלוסייה רלוונטית / רשומות לפי כללי הבקרה",
+            )
+
+    def test_ma717_privilege_rows_exclude_strong_users(self) -> None:
+        window = self._window
+        self._setup_ma717_compute_window(
+            window,
+            usr02_rows=[
+                {"MANDT": "100", "BNAME": "STRONG_USER", "TRDAT": "20260215", "GLTGV": "", "GLTGB": ""},
+                {"MANDT": "100", "BNAME": "NORMAL_USER", "TRDAT": "20260220", "GLTGV": "", "GLTGB": ""},
+            ],
+            strong_profile_data={
+                "UST04": {"100": {"STRONG_USER": {"SAP_ALL"}}},
+            },
+        )
+        window.agr_users_cached_rows = [
+            {"MANDT": "100", "UNAME": "STRONG_USER", "AGR_NAME": "Z_STRONG_ROLE"},
+            {"MANDT": "100", "UNAME": "NORMAL_USER", "AGR_NAME": "Z_NORMAL_ROLE"},
+        ]
+        window.agr_1251_cached_rows = [
+            {"AGR_NAME": "Z_STRONG_ROLE", "OBJECT": "S_TCODE", "FIELD": "TCD", "LOW": "SU01", "HIGH": ""},
+            {"AGR_NAME": "Z_NORMAL_ROLE", "OBJECT": "S_TCODE", "FIELD": "TCD", "LOW": "SE16", "HIGH": ""},
+        ]
+
+        window._compute_active_users_permission_review()
+
+        rows = window.joiners_auth_rows_by_control.get("MA7-17_AYALON_30") or []
+        unames = {str(r.get("UNAME")) for r in rows}
+        self.assertIn("NORMAL_USER", unames)
+        self.assertNotIn("STRONG_USER", unames)
+
+    def test_ma717_strong_profile_note_when_no_ust04(self) -> None:
+        window = self._window
+        self._setup_ma717_compute_window(
+            window,
+            usr02_rows=[
+                {"MANDT": "100", "BNAME": "ACTIVE_USER", "TRDAT": "20260215", "GLTGV": "", "GLTGB": ""},
+            ],
+            strong_profile_data={},
+        )
+
+        window._compute_active_users_permission_review()
+
+        note = window.ma717_strong_profile_notes_by_control.get("MA7-17_AYALON_30", "")
+        self.assertIn("UST04", note)
+
     def test_excel_report_is_created_with_summary_and_issues(self) -> None:
         with TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "users.txt"

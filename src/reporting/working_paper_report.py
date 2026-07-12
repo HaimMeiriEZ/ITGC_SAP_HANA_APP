@@ -85,6 +85,9 @@ def write_control_working_paper(
     privilege_rows: list[dict[str, Any]] | None = None,
     privilege_note: str | None = None,
     privilege_sheet_name: str = "הרשאות משתמשים חדשים",
+    strong_profile_detail_rows: list[dict[str, Any]] | None = None,
+    strong_profile_note: str | None = None,
+    strong_profile_sheet_name: str = "משתמשים עם פרופילים חזקים",
 ) -> Path:
     """Build the working-paper workbook and save to *output_path*.
 
@@ -111,6 +114,12 @@ def write_control_working_paper(
         Optional note shown above the privilege sheet table.
     privilege_sheet_name : str
         Title for the optional privilege sheet.
+    strong_profile_detail_rows : list[dict] | None
+        Optional MA3-3-style findings for active users with strong profiles.
+    strong_profile_note : str | None
+        Optional note shown above the strong-profile findings sheet.
+    strong_profile_sheet_name : str
+        Title for the optional strong-profile sheet.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook()
@@ -142,6 +151,33 @@ def write_control_working_paper(
 
     findings_sheet = workbook.create_sheet("ריכוז ממצאים")
     _write_findings_sheet(findings_sheet, detail_rows)
+
+    if strong_profile_detail_rows is not None or strong_profile_note:
+        strong_sheet = workbook.create_sheet(_sanitize_sheet_name(strong_profile_sheet_name))
+        findings_start_row = 1
+        if strong_profile_note:
+            note_cell = strong_sheet.cell(row=1, column=1, value=strong_profile_note)
+            note_cell.font = Font(bold=True, color="FFC00000", size=11)
+            note_cell.fill = PatternFill(
+                start_color="FFFCE4D6", end_color="FFFCE4D6", fill_type="solid"
+            )
+            note_cell.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+            strong_sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
+            strong_sheet.row_dimensions[1].height = 36
+            findings_start_row = 3
+        if strong_profile_detail_rows:
+            _write_findings_sheet(
+                strong_sheet,
+                strong_profile_detail_rows,
+                start_row=findings_start_row,
+            )
+        else:
+            empty_cell = strong_sheet.cell(
+                row=findings_start_row,
+                column=1,
+                value="אין משתמשים פעילים עם פרופילים חזקים.",
+            )
+            empty_cell.alignment = _WRAP_RIGHT
 
     if privilege_rows is not None or privilege_note:
         privilege_sheet = workbook.create_sheet(_sanitize_sheet_name(privilege_sheet_name))
@@ -895,6 +931,8 @@ def _write_privilege_rows_sheet(
 def _write_findings_sheet(
     sheet,
     detail_rows: list[dict[str, Any]],
+    *,
+    start_row: int = 1,
 ) -> None:
     _set_rtl(sheet)
 
@@ -910,7 +948,7 @@ def _write_findings_sheet(
 
     _write_table_block(
         sheet,
-        start_row=1,
+        start_row=start_row,
         title="אוכלוסייה רלוונטית / רשומות לפי כללי הבקרה",
         rows=enriched_detail,
         finding_keys=None,

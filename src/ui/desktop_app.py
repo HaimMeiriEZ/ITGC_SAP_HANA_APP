@@ -743,6 +743,9 @@ class ValidationDesktopApp(QMainWindow):
         # Working-paper privilege expansion for joiners (MA5.1-13_AYALON_24)
         self.joiners_auth_rows_by_control: dict[str, list[dict[str, Any]]] = {}
         self.joiners_auth_notes_by_control: dict[str, str] = {}
+        # MA7-17 strong-profile findings sheet (MA3-3 intersect active users)
+        self.ma717_strong_profile_details_by_control: dict[str, list[dict[str, Any]]] = {}
+        self.ma717_strong_profile_notes_by_control: dict[str, str] = {}
         self.user_mgmt_summary_records: dict[str, dict[str, Any]] = {}
         self.user_mgmt_users_by_control: dict[str, list[dict[str, Any]]] = {}
         self.auth_mgmt_summary_records: dict[str, dict[str, Any]] = {}
@@ -7623,6 +7626,215 @@ class ValidationDesktopApp(QMainWindow):
             period_end_date=period_end_date,
         )
 
+    def _get_strong_profile_user_keys(self) -> dict[tuple[str, str], set[str]]:
+        """Return (MANDT, BNAME) → strong profile names from merged UST04+USH04 data."""
+        merged: dict[tuple[str, str], set[str]] = {}
+        for prof_bucket in self._strong_profile_data.values():
+            for client_name, users in prof_bucket.items():
+                client_upper = str(client_name or "").strip().upper()
+                if not client_upper or client_upper == "-":
+                    continue
+                for user_name, profiles in users.items():
+                    user_upper = str(user_name or "").strip().upper()
+                    if not user_upper or not profiles:
+                        continue
+                    merged.setdefault((client_upper, user_upper), set()).update(profiles)
+        return merged
+
+    def _compute_active_users_permission_review(self) -> None:
+        """Build periodic permission-review population for MA7-17_AYALON_30.
+
+        Filters active USR02 users (TRDAT in period or GLTGV-GLTGB overlap).
+        Users with strong profiles (MA3-3 / UST04+USH04) are flagged as findings;
+        remaining active users are surfaced for AGR privilege review.
+        """
+        control_id = "MA7-17_AYALON_30"
+        population_fields = (
+            "MANDT", "BNAME", "NAME_TEXTC", "SMTP_ADDR", "DEPARTMENT",
+            "STATUS", "USTYP", "GLTGV", "GLTGB", "TRDAT",
+        )
+        self.audit_summary_records.pop(control_id, None)
+        self.audit_details_by_control.pop(control_id, None)
+        self.control_to_slot_rows.pop(control_id, None)
+        self.joiners_auth_rows_by_control.pop(control_id, None)
+        self.joiners_auth_notes_by_control.pop(control_id, None)
+        self.ma717_strong_profile_details_by_control.pop(control_id, None)
+        self.ma717_strong_profile_notes_by_control.pop(control_id, None)
+
+        usr02_rows = self._load_preview_rows("USR02")
+        if not usr02_rows:
+            return
+
+        settings = self._current_system_settings()
+        period_cfg = settings.get("user_review_period", {}) if isinstance(settings, dict) else {}
+        start_text = str(period_cfg.get("start_date", "")).strip()
+        end_text = str(period_cfg.get("end_date", "")).strip()
+
+        period_start = self._parse_user_preview_date(start_text)
+        if period_start is None:
+            return
+        period_start_date = period_start.date()
+        period_end = self._parse_user_preview_date(end_text)
+        period_end_date = period_end.date() if period_end is not None else date.max
+
+        preview_by_key: dict[tuple[str, str], dict[str, str]] = {}
+        for preview_row in self._load_all_user_preview_rows():
+            mandt = str(preview_row.get("MANDT", "") or "").strip().upper()
+            bname = str(preview_row.get("BNAME", "") or "").strip().upper()
+            if mandt and bname:
+                preview_by_key[(mandt, bname)] = preview_row
+
+        control_meta = get_audit_control_definition(control_id)
+        ma3_meta = get_audit_control_definition("MA3-3_AYALON_14")
+        source_file = self._get_slot_display_name("USR02")
+        extraction_date = self._get_slot_extraction_date("USR02") or "-"
+        work_env = self._current_work_environment_label()
+        period_note = f"{start_text} \u2014 {end_text}" if end_text else f"\u05de-{start_text}"
+        strong_by_key = self._get_strong_profile_user_keys()
+        strong_source_file = self._permission_source_file_label("MA3-3_AYALON_14")
+        strong_extraction_date = self._permission_extraction_date_label("MA3-3_AYALON_14")
+
+        active_user_rows: list[dict[str, Any]] = []
+        review_rows: list[dict[str, Any]] = []
+        population_rows: list[dict[str, Any]] = []
+        strong_profile_details: list[dict[str, Any]] = []
+        strong_active_keys: set[tuple[str, str]] = set()
+
+        for row in usr02_rows:
+            if not isinstance(row, dict):
+                continue
+            if not self._is_user_active_in_period(row, period_start_date, period_end_date):
+                continue
+
+            mandt = self._get_row_value(row, "MANDT")
+            bname = self._get_row_value(row, "BNAME")
+            key = (mandt.strip().upper(), bname.strip().upper())
+            preview_row = preview_by_key.get(key, {})
+            profiles_set = strong_by_key.get(key, set())
+            has_strong_profile = bool(profiles_set)
+            if has_strong_profile:
+                strong_active_keys.add(key)
+
+            active_user_rows.append(row)
+            population_rows.append({
+                "__profile": "USR02",
+                **{
+                    field: str(preview_row.get(field, row.get(field, "-")) or "-").strip() or "-"
+                    for field in population_fields
+                },
+            })
+
+            if has_strong_profile:
+                profiles_list = sorted(profiles_set)
+                profiles_block = "\n".join(f"- {name}" for name in profiles_list)
+                full_desc_text = (
+                    f"\u05e7\u05dc\u05d9\u05d9\u05e0\u05d8: {mandt}\n"
+                    f"\u05de\u05e9\u05ea\u05de\u05e9: {bname}\n\n"
+                    f"\u05e4\u05e8\u05d5\u05e4\u05d9\u05dc\u05d9\u05dd \u05d7\u05d6\u05e7\u05d9\u05dd:\n{profiles_block}"
+                )
+                strong_detail = {
+                    "control_id": "MA3-3_AYALON_14",
+                    "source_file": strong_source_file,
+                    "extraction_date": strong_extraction_date,
+                    "work_environment": work_env,
+                    "category": ma3_meta.get("category", "-"),
+                    "risk_level": ma3_meta.get("risk_level", "-"),
+                    "description": ma3_meta.get("description", "-"),
+                    "check_type": ma3_meta.get("check_type", "-"),
+                    "client": mandt,
+                    "user_name": bname,
+                    "actual_value": ", ".join(profiles_list),
+                    "expected_value": "",
+                    "auth_object": "-",
+                    "status": "\u05e2\u05dd \u05de\u05de\u05e6\u05d0",
+                    "full_description": full_desc_text,
+                }
+                strong_profile_details.append(strong_detail)
+                review_rows.append({
+                    **strong_detail,
+                    "control_id": control_id,
+                })
+            else:
+                review_rows.append({
+                    "control_id": control_id,
+                    "source_file": source_file,
+                    "extraction_date": extraction_date,
+                    "work_environment": work_env,
+                    "category": control_meta.get("category", "-"),
+                    "risk_level": control_meta.get("risk_level", "-"),
+                    "description": control_meta.get("description", "-"),
+                    "check_type": control_meta.get("check_type", "-"),
+                    "actual_value": period_note,
+                    "expected_value": "\u05e1\u05e7\u05d9\u05e8\u05ea \u05d4\u05e8\u05e9\u05d0\u05d5\u05ea \u05ea\u05e7\u05d5\u05e4\u05ea\u05d9\u05ea",
+                    "auth_object": "-",
+                    "status": "\u05dc\u05e1\u05e7\u05d9\u05e8\u05d4",
+                    "full_description": (
+                        f"\u05e7\u05dc\u05d9\u05d9\u05e0\u05d8: {mandt} | "
+                        f"\u05de\u05e9\u05ea\u05de\u05e9: {bname} | "
+                        f"\u05de\u05d7\u05dc\u05e7\u05d4: {preview_row.get('DEPARTMENT', '-')} | "
+                        f"\u05e1\u05d8\u05d8\u05d5\u05e1: {preview_row.get('STATUS', row.get('STATUS', '-'))} | "
+                        f"\u05db\u05e0\u05d9\u05e1\u05d4 \u05d0\u05d7\u05e8\u05d5\u05e0\u05d4: {preview_row.get('TRDAT', row.get('TRDAT', '-'))}"
+                    ),
+                    "client": mandt,
+                    "user_name": bname,
+                })
+
+        active_count = len(active_user_rows)
+        finding_count = len(strong_active_keys)
+        strong_profile_notes: list[str] = []
+        if not self._get_critical_roles():
+            strong_profile_notes.append(
+                "\u05dc\u05d0 \u05d4\u05d5\u05d2\u05d3\u05e8\u05d5 \u05e4\u05e8\u05d5\u05e4\u05d9\u05dc\u05d9 \u05de\u05e9\u05ea\u05de\u05e9\u05d9\u05d9 \u05e2\u05dc "
+                "\u05d1\u05d4\u05d2\u05d3\u05e8\u05d5\u05ea \u05d4\u05de\u05e2\u05e8\u05db\u05ea \u2014 "
+                "\u05d1\u05d3\u05d9\u05e7\u05ea \u05e4\u05e8\u05d5\u05e4\u05d9\u05dc\u05d9\u05dd \u05d7\u05d6\u05e7\u05d9\u05dd \u05dc\u05d0 \u05d1\u05d5\u05e6\u05e2\u05d4."
+            )
+        elif not self._strong_profile_data:
+            strong_profile_notes.append(
+                "\u05dc\u05d0 \u05e0\u05d8\u05e2\u05e0\u05d5 UST04 \u05d5/\u05d0\u05d5 USH04 \u2014 "
+                "\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d6\u05d4\u05d5\u05ea \u05e4\u05e8\u05d5\u05e4\u05d9\u05dc\u05d9\u05dd \u05d7\u05d6\u05e7\u05d9\u05dd."
+            )
+        elif active_count > 0 and not strong_profile_details:
+            strong_profile_notes.append(
+                "\u05dc\u05d0 \u05e0\u05de\u05e6\u05d0\u05d5 \u05de\u05e9\u05ea\u05de\u05e9\u05d9\u05dd \u05e4\u05e2\u05d9\u05dc\u05d9\u05dd "
+                "\u05e2\u05dd \u05e4\u05e8\u05d5\u05e4\u05d9\u05dc\u05d9\u05dd \u05d7\u05d6\u05e7\u05d9\u05dd."
+            )
+
+        self.audit_summary_records[control_id] = {
+            "control_id": control_id,
+            "check_type": control_meta.get("check_type", "-"),
+            "source_file": source_file,
+            "extraction_date": extraction_date,
+            "work_environment": work_env,
+            "risk_level": control_meta.get("risk_level", "-"),
+            "description": control_meta.get("description", "-"),
+            "valid_records": max(active_count - finding_count, 0),
+            "finding_records": finding_count,
+            "total_records": active_count,
+        }
+        if review_rows:
+            self.audit_details_by_control[control_id] = review_rows
+            self.control_to_slot_rows[control_id] = population_rows
+            self.control_to_slot_key.setdefault(control_id, "USR02")
+
+        self.ma717_strong_profile_details_by_control[control_id] = strong_profile_details
+        if strong_profile_notes:
+            self.ma717_strong_profile_notes_by_control[control_id] = " ".join(strong_profile_notes)
+
+        non_strong_active_rows = [
+            row for row in active_user_rows
+            if (
+                self._get_row_value(row, "MANDT").strip().upper(),
+                self._get_row_value(row, "BNAME").strip().upper(),
+            ) not in strong_active_keys
+        ]
+        self._build_joiners_auth_rows_for_control(
+            control_id=control_id,
+            new_user_rows=non_strong_active_rows,
+            period_start_date=period_start_date,
+            period_end_date=period_end_date,
+            assignment_mode="current_all_roles",
+        )
+
     def _build_joiners_auth_rows_for_control(
         self,
         *,
@@ -7630,12 +7842,13 @@ class ValidationDesktopApp(QMainWindow):
         new_user_rows: list[dict[str, Any]],
         period_start_date: date,
         period_end_date: date | None,
+        assignment_mode: str = "period_from_dat",
     ) -> None:
-        """Build AGR_USERS × AGR_1251 privilege rows for new users (joiners).
+        """Build AGR_USERS × AGR_1251 privilege rows for target users.
 
-        Prefer role assignments whose FROM_DAT falls inside the audit period.
-        When FROM_DAT is unavailable for a user, fall back to that user's current
-        roles and record a working-paper note.
+        assignment_mode:
+          - ``period_from_dat`` (MA5.1-13): prefer FROM_DAT in audit period, fallback to current roles.
+          - ``current_all_roles`` (MA7-17): all current AGR_USERS assignments (snapshot).
         """
         self.joiners_auth_rows_by_control.pop(control_id, None)
         self.joiners_auth_notes_by_control.pop(control_id, None)
@@ -7645,9 +7858,14 @@ class ValidationDesktopApp(QMainWindow):
 
         if not self.agr_users_cached_rows or not self.agr_1251_cached_rows:
             self.joiners_auth_rows_by_control[control_id] = []
-            self.joiners_auth_notes_by_control[control_id] = (
-                "לא נטענו AGR_USERS ו/או AGR_1251 — לא ניתן להציג הרשאות משתמשים חדשים."
-            )
+            if control_id == "MA7-17_AYALON_30":
+                self.joiners_auth_notes_by_control[control_id] = (
+                    "לא נטענו AGR_USERS ו/או AGR_1251 — לא ניתן להציג הרשאות משתמשים פעילים."
+                )
+            else:
+                self.joiners_auth_notes_by_control[control_id] = (
+                    "לא נטענו AGR_USERS ו/או AGR_1251 — לא ניתן להציג הרשאות משתמשים חדשים."
+                )
             return
 
         new_user_keys: set[tuple[str, str]] = set()
@@ -7696,37 +7914,42 @@ class ValidationDesktopApp(QMainWindow):
             if not assignments:
                 continue
 
-            dated_in_period: list[tuple[date, dict[str, Any]]] = []
-            undated: list[dict[str, Any]] = []
-            for assignment in assignments:
-                from_raw = self._resolve_row_value_by_priority(assignment, "FROM_DAT")
-                from_parsed = self._parse_user_preview_date(from_raw)
-                if from_parsed is None:
-                    undated.append(assignment)
-                    continue
-                from_date = from_parsed.date()
-                if from_date < period_start_date:
-                    continue
-                if period_end_date is not None and from_date > period_end_date:
-                    continue
-                dated_in_period.append((from_date, assignment))
-
-            use_fallback = not dated_in_period
-            if use_fallback:
-                selected_assignments = undated if undated else assignments
-                fallback_users.append(f"{mandt}|{uname}")
-                source = "fallback_current_roles"
-                # Without dates, mark the first role as initial for audit alignment.
-                initial_agr = str(
-                    self._resolve_row_value_by_priority(selected_assignments[0], "AGR_NAME") or ""
-                ).strip().upper()
+            if assignment_mode == "current_all_roles":
+                selected_assignments = assignments
+                source = "current_snapshot"
+                initial_agr = ""
             else:
-                selected_assignments = [row for _, row in dated_in_period]
-                source = "period_from_dat"
-                dated_in_period.sort(key=lambda item: item[0])
-                initial_agr = str(
-                    self._resolve_row_value_by_priority(dated_in_period[0][1], "AGR_NAME") or ""
-                ).strip().upper()
+                dated_in_period: list[tuple[date, dict[str, Any]]] = []
+                undated: list[dict[str, Any]] = []
+                for assignment in assignments:
+                    from_raw = self._resolve_row_value_by_priority(assignment, "FROM_DAT")
+                    from_parsed = self._parse_user_preview_date(from_raw)
+                    if from_parsed is None:
+                        undated.append(assignment)
+                        continue
+                    from_date = from_parsed.date()
+                    if from_date < period_start_date:
+                        continue
+                    if period_end_date is not None and from_date > period_end_date:
+                        continue
+                    dated_in_period.append((from_date, assignment))
+
+                use_fallback = not dated_in_period
+                if use_fallback:
+                    selected_assignments = undated if undated else assignments
+                    fallback_users.append(f"{mandt}|{uname}")
+                    source = "fallback_current_roles"
+                    # Without dates, mark the first role as initial for audit alignment.
+                    initial_agr = str(
+                        self._resolve_row_value_by_priority(selected_assignments[0], "AGR_NAME") or ""
+                    ).strip().upper()
+                else:
+                    selected_assignments = [row for _, row in dated_in_period]
+                    source = "period_from_dat"
+                    dated_in_period.sort(key=lambda item: item[0])
+                    initial_agr = str(
+                        self._resolve_row_value_by_priority(dated_in_period[0][1], "AGR_NAME") or ""
+                    ).strip().upper()
 
             for assignment in selected_assignments:
                 agr_name = str(
@@ -7790,7 +8013,7 @@ class ValidationDesktopApp(QMainWindow):
                 break
 
         notes: list[str] = []
-        if fallback_users:
+        if assignment_mode != "current_all_roles" and fallback_users:
             sample = ", ".join(fallback_users[:8])
             more = f" (+{len(fallback_users) - 8} נוספים)" if len(fallback_users) > 8 else ""
             notes.append(
@@ -7806,9 +8029,14 @@ class ValidationDesktopApp(QMainWindow):
         if notes:
             self.joiners_auth_notes_by_control[control_id] = " ".join(notes)
         elif not privilege_rows:
-            self.joiners_auth_notes_by_control[control_id] = (
-                "לא נמצאו שיוכי רול למשתמשים החדשים ב-AGR_USERS לתקופת הביקורת."
-            )
+            if assignment_mode == "current_all_roles":
+                self.joiners_auth_notes_by_control[control_id] = (
+                    "לא נמצאו שיוכי רול למשתמשים הפעילים ב-AGR_USERS."
+                )
+            else:
+                self.joiners_auth_notes_by_control[control_id] = (
+                    "לא נמצאו שיוכי רול למשתמשים החדשים ב-AGR_USERS לתקופת הביקורת."
+                )
 
     def _sync_developer_sod_finding(self) -> None:
         control_id = "MC5-23_AYALON_48"
@@ -7887,6 +8115,7 @@ class ValidationDesktopApp(QMainWindow):
         self._sync_user_review_completion_finding()
         self._sync_developer_sod_finding()
         self._compute_joiners_findings()
+        self._compute_active_users_permission_review()
         self.audit_summary_table.setRowCount(0)
         if not self.audit_summary_records:
             self.audit_detail_table.setRowCount(0)
@@ -8007,7 +8236,7 @@ class ValidationDesktopApp(QMainWindow):
         _AGR_CROSS_JOIN_CONTROLS = frozenset({
             "MA1-1_AYALON_10", "MA1-1_AYALON_11", "MA1-1_AYALON_12",
             "MA1-1_AYALON_16", "MA1-1_AYALON_43", "MA1-1_AYALON_45",
-            "MA1-1_AYALON_67", "MA7-17_AYALON_30",
+            "MA1-1_AYALON_67",
         })
         raw_population_note: str | None = None
         if not raw_population_rows and control_id in _AGR_CROSS_JOIN_CONTROLS:
@@ -8146,6 +8375,10 @@ class ValidationDesktopApp(QMainWindow):
                 )
             privilege_rows = None
             privilege_note = None
+            privilege_sheet_name = "הרשאות משתמשים חדשים"
+            strong_profile_detail_rows = None
+            strong_profile_note = None
+            strong_profile_sheet_name = "משתמשים עם פרופילים חזקים"
             if control_id == "MA5.1-13_AYALON_24":
                 # Always create the privilege sheet for joiners (even if empty),
                 # so auditors can see missing AGR inputs via the note.
@@ -8155,6 +8388,32 @@ class ValidationDesktopApp(QMainWindow):
                     privilege_note = (
                         "לא נבנו שורות הרשאה למשתמשים חדשים "
                         "(חסרים AGR_USERS/AGR_1251 או אין שיוכי רול)."
+                    )
+            elif control_id == "MA7-17_AYALON_30":
+                if not self._get_critical_roles():
+                    notes.append(
+                        "לא הוגדרו פרופילי משתמשיי על בהגדרות המערכת - "
+                        "בדיקת פרופילים חזקים לא בוצעה."
+                    )
+                strong_profile_detail_rows = list(
+                    self.ma717_strong_profile_details_by_control.get(control_id, [])
+                )
+                strong_profile_note = self.ma717_strong_profile_notes_by_control.get(control_id)
+                privilege_rows = list(self.joiners_auth_rows_by_control.get(control_id, []))
+                privilege_sheet_name = "הרשאות משתמשים פעילים"
+                privilege_scope_note = (
+                    "גיליון זה כולל משתמשים פעילים ללא פרופילים חזקים בלבד."
+                )
+                agr_note = self.joiners_auth_notes_by_control.get(control_id)
+                if agr_note:
+                    privilege_note = f"{privilege_scope_note} {agr_note}"
+                else:
+                    privilege_note = privilege_scope_note
+                if not privilege_rows and not agr_note:
+                    privilege_note = (
+                        f"{privilege_scope_note} "
+                        "לא נבנו שורות הרשאה למשתמשים פעילים ללא פרופיל חזק "
+                        "(חסרים AGR_USERS/AGR_1251, אין שיוכי רול, או כל הפעילים בעלי פרופיל חזק)."
                     )
             write_control_working_paper(
                 control_id=control_id,
@@ -8169,6 +8428,10 @@ class ValidationDesktopApp(QMainWindow):
                 raw_population_note=raw_population_note,
                 privilege_rows=privilege_rows,
                 privilege_note=privilege_note,
+                privilege_sheet_name=privilege_sheet_name,
+                strong_profile_detail_rows=strong_profile_detail_rows,
+                strong_profile_note=strong_profile_note,
+                strong_profile_sheet_name=strong_profile_sheet_name,
             )
         except Exception as exc:
             QMessageBox.critical(
@@ -8332,6 +8595,8 @@ class ValidationDesktopApp(QMainWindow):
         self.control_to_slot_key = {}
         self.joiners_auth_rows_by_control = {}
         self.joiners_auth_notes_by_control = {}
+        self.ma717_strong_profile_details_by_control = {}
+        self.ma717_strong_profile_notes_by_control = {}
         self.audit_summary_table.setRowCount(0)
         self.audit_detail_table.setRowCount(0)
         self.permissions_summary_table.setRowCount(0)
