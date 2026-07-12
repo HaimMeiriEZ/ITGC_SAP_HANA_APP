@@ -1,0 +1,59 @@
+---
+description: חוקי פיתוח וסקירה לפרויקט ITGC SAP HANA Desktop App
+alwaysApply: true
+---
+
+# חוקי פיתוח — ITGC SAP HANA APP
+
+אתה סוכן AI המלווה פיתוח של כלי Desktop (Python/PySide6) לבחינה ותיעוד בקרות ITGC על יצואי SAP HANA APP. כתוב וסקור קוד לפי סטנדרטי הפרויקט והארכיטקטורה הקיימת.
+
+## שפה ותקשורת
+
+- ענה בעברית מקצועית, מנומקת וברורה.
+- השתמש במונחים טכנולוגיים באנגלית בתוך משפטים בעברית כשזה מדויק יותר (pipeline, slot, validator, working paper וכו').
+
+## ארכיטקטורה
+
+הפרויקט קורא **קבצי יצוא** (TXT/CSV/XLSX), לא חיבור SQL חי ל־HANA.
+
+העדף שינויים בשכבות הנקיות לפני הרחבת ה־UI המונולית:
+
+- `src/pipeline.py` — אורקסטרציה
+- `src/readers/` — קריאת קבצים
+- `src/validators/` — כללי ולידציה ובקרות
+- `src/reporting/` — דוחות Excel / Working Papers
+- `src/services/` — לוגיקה עסקית (audit, user review)
+- `src/persistence/` — state / catalog
+- `src/ui/desktop_app.py` — רק כשנדרש שינוי UI או orchestration שכבר שם
+
+## דומיין ITGC
+
+- הפרד תמיד בין **intake** (שגיאות קליטה/מבנה) לבין **audit findings** (ממצאי בקרה).
+- `slot_key` = שם פרופיל = `source_name_override` ב־pipeline.
+- בקרות ומטא־דאטה: `AUDIT_CONTROL_DEFINITIONS` ב־`src/validators/spec_rules.py` ו־`data/knowledge_base/controls_catalog.json`.
+- דומיינים: MA (גישה), MC (שינויים), MO (תפעול — בפיתוח).
+
+## UI (PySide6)
+
+- שמור על RTL מלא וטקסטים בעברית במסכים חדשים/מעודכנים.
+- אל תשבור דפוסי layout קיימים בלי סיבה.
+
+## ביצועים ונתונים גדולים
+
+- קבצים גדולים (למשל AGR_1251): העדף batches / דגימה / הגבלת אוכלוסיה בנייר עבודה — לא לטעון הכל לזיכרון בלי צורך.
+- שמור על דפוסי cross-join הקיימים (AGR_1251 × AGR_USERS) וסף גודל אוכלוסיה.
+
+## אבטחה וקבצים רגישים
+
+- אל תכלול ב־commit: `.env`, credentials, `.venv/`, `data/output/`, `output/`, לוגים מקומיים.
+- אם בעתיד תתווסף גישת DB ישירה ל־HANA: חובה Parameterized Queries בלבד, ו־LIMIT / הגבלת תוצאות למניעת עומס.
+
+## בדיקות
+
+- אחרי שינוי פונקציונלי: הרץ smoke רלוונטי מ־`tests/test_smoke.py` (או לפחות את הטסטים שנוגעים לשינוי).
+- העדף בדיקות ממוקדות על pipeline/validators/reporting לפני בדיקות UI כבדות.
+
+## Git
+
+- צור commit או push רק כשהמשתמש מבקש זאת במפורש.
+- הודעות commit קצרות וממוקדות ב־"למה", בסגנון הריפו.
