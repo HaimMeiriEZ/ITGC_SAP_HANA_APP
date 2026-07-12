@@ -13,6 +13,8 @@ from src.validators.intake_rules import has_intake_issues
 MULTI_FILE_SAMPLE_LIMIT = 12000
 AGR_1251_BATCH_SIZE = 20000
 
+_TRANSPORT_READER_SLOTS = {"STMS", "E070"}
+
 
 def process_file(
     file_path: str | Path | Iterable[str | Path] | None = None,
@@ -23,7 +25,25 @@ def process_file(
     authorized_users: list[str] | None = None,
     strong_profiles: list[str] | None = None,
 ) -> ValidationResult:
-    # Prefer input_files when provided and non-empty
+    """Load SAP export file(s), run validation, and optionally write an intake report.
+
+    Prefers ``input_files`` (slot_key → paths) when provided and non-empty.
+    Otherwise uses the legacy ``file_path`` argument and wraps it as a one-key
+    source map before processing.
+
+    Args:
+        file_path: Single path or iterable of paths (legacy entry point).
+        required_columns: Optional required column names for validation.
+        output_dir: When set, writes an Excel intake-errors report if needed.
+        source_name_override: Slot/profile name override (e.g. ``AGR_1251``).
+        input_files: Mapping of source/slot key to input paths.
+        authorized_users: STMS authorized users for control checks.
+        strong_profiles: Strong profile names for UST04/USH04 checks.
+
+    Returns:
+        ValidationResult with rows (or sample for large AGR_1251), issues,
+        data_map, and optional report_path.
+    """
     if input_files:
         resolved_source_map: dict[str, list[Path]] = {
             key: _normalize_paths(paths)
@@ -40,36 +60,16 @@ def process_file(
                 strong_profiles,
             )
 
-    # Legacy path: file_path
     paths = _normalize_paths(file_path)  # type: ignore[arg-type]
-    engine = ValidationEngine(required_columns=required_columns or [])
-    if authorized_users:
-        engine.set_authorized_users(authorized_users)
-    if strong_profiles is not None:
-        engine.set_strong_profiles(strong_profiles)
     source_name = source_name_override or paths[0].name
-
-    if source_name_override == "AGR_1251":
-        result = _process_agr1251_in_batches(paths, engine, source_name)
-        result.data_map = {source_name: result.rows}
-    else:
-        rows: list[dict] = []
-        file_row_counts: dict[str, int] = {}
-        for path in paths:
-            file_rows = _read_rows(path)
-            file_row_counts[path.name] = len(file_rows)
-            rows.extend(_attach_source(file_rows, path))
-        result = engine.run_all({source_name: rows}, source_name=source_name)
-        result.source_files = [path.name for path in paths]
-        result.file_row_counts = file_row_counts
-        result.total_rows_override = len(rows)
-        result.data_map = {source_name: rows}
-
-    if output_dir is not None and has_intake_issues(result.issues):
-        report_writer = ExcelReportWriter()
-        result.report_path = report_writer.write(result, paths[0], Path(output_dir))
-
-    return result
+    return _process_source_map(
+        {source_name: paths},
+        required_columns,
+        output_dir,
+        source_name_override,
+        authorized_users,
+        strong_profiles,
+    )
 
 
 def _process_source_map(
@@ -80,19 +80,14 @@ def _process_source_map(
     authorized_users: list[str] | None = None,
     strong_profiles: list[str] | None = None,
 ) -> ValidationResult:
-    """Process a source_key → paths mapping, populating data_map per key."""
+    """Process a source_key → paths mapping and populate ``data_map`` per key."""
     first_key = next(iter(source_map))
     source_name = source_name_override or first_key
     all_paths = [p for paths in source_map.values() for p in paths]
-    engine = ValidationEngine(required_columns=required_columns or [])
-    if authorized_users:
-        engine.set_authorized_users(authorized_users)
-    if strong_profiles is not None:
-        engine.set_strong_profiles(strong_profiles)
+    engine = _configure_engine(required_columns, authorized_users, strong_profiles)
 
     if source_name == "AGR_1251":
         result = _process_agr1251_in_batches(all_paths, engine, source_name)
-        # Populate data_map with sample rows grouped by source_key
         data_map: dict[str, list[dict]] = {}
         for key, paths in source_map.items():
             names = {p.name for p in paths}
@@ -114,17 +109,45 @@ def _process_source_map(
         result = engine.run_all(data_map, source_name=source_name)
         result.source_files = [p.name for p in all_paths]
         result.file_row_counts = file_row_counts
-        result.total_rows_override = len(rows)
+        result.total_processed_rows = len(rows)
         result.data_map = data_map
 
-    if output_dir is not None and has_intake_issues(result.issues):
-        report_writer = ExcelReportWriter()
-        result.report_path = report_writer.write(result, all_paths[0], Path(output_dir))
-
+    _write_intake_report_if_needed(result, all_paths[0], output_dir)
     return result
 
 
+def _configure_engine(
+    required_columns: list[str] | None,
+    authorized_users: list[str] | None,
+    strong_profiles: list[str] | None,
+) -> ValidationEngine:
+    """Create and configure a ValidationEngine for this run."""
+    engine = ValidationEngine(required_columns=required_columns or [])
+    if authorized_users:
+        engine.set_authorized_users(authorized_users)
+    if strong_profiles is not None:
+        engine.set_strong_profiles(strong_profiles)
+    return engine
+
+
+def _write_intake_report_if_needed(
+    result: ValidationResult,
+    report_base_path: Path,
+    output_dir: str | Path | None,
+) -> None:
+    """Write an Excel intake-errors report when output_dir is set and issues exist."""
+    if output_dir is None or not has_intake_issues(result.issues):
+        return
+    report_writer = ExcelReportWriter()
+    result.report_path = report_writer.write(result, report_base_path, Path(output_dir))
+
+
 def _normalize_paths(file_path: str | Path | Iterable[str | Path]) -> list[Path]:
+    """Normalize input path(s) to existing ``Path`` objects.
+
+    Raises:
+        FileNotFoundError: If any path does not exist on disk.
+    """
     raw_paths = list(file_path) if isinstance(file_path, (list, tuple, set)) else [file_path]
     paths = [Path(item) for item in raw_paths]
     for path in paths:
@@ -133,10 +156,12 @@ def _normalize_paths(file_path: str | Path | Iterable[str | Path]) -> list[Path]
     return paths
 
 
-_TRANSPORT_READER_SLOTS = {"STMS", "E070"}
-
-
 def _read_rows(path: Path, source_hint: str | None = None) -> list[dict]:
+    """Read rows from a supported export file, choosing the reader by type/slot.
+
+    Raises:
+        ValueError: If the file suffix is not supported.
+    """
     suffix = path.suffix.lower()
     if source_hint in _TRANSPORT_READER_SLOTS and suffix in {".txt", ".csv"}:
         return SapTransportReader().read(path)
@@ -148,10 +173,16 @@ def _read_rows(path: Path, source_hint: str | None = None) -> list[dict]:
 
 
 def _attach_source(rows: list[dict], path: Path) -> list[dict]:
+    """Annotate each row with ``__source_file`` set to the file name."""
     return [{**row, "__source_file": path.name} for row in rows]
 
 
-def _process_agr1251_in_batches(paths: list[Path], engine: ValidationEngine, source_name: str) -> ValidationResult:
+def _process_agr1251_in_batches(
+    paths: list[Path],
+    engine: ValidationEngine,
+    source_name: str,
+) -> ValidationResult:
+    """Validate large AGR_1251 files in batches; keep only a sample of rows in memory."""
     sample_rows: list[dict] = []
     issues: list[ValidationIssue] = []
     total_rows = 0
@@ -213,5 +244,5 @@ def _process_agr1251_in_batches(paths: list[Path], engine: ValidationEngine, sou
         detected_profile=detected_profile,
         source_files=[path.name for path in paths],
         file_row_counts=file_row_counts,
-        total_rows_override=total_rows,
+        total_processed_rows=total_rows,
     )

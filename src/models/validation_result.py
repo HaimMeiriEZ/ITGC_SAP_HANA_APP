@@ -36,12 +36,14 @@ class ValidationResult:
     detected_profile: str | None = None
     source_files: list[str] = field(default_factory=list)
     file_row_counts: dict[str, int] = field(default_factory=dict)
-    total_rows_override: int | None = None
+    total_processed_rows: int | None = None
     data_map: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     @property
     def summary(self) -> ValidationSummary:
-        total_rows = self.total_rows_override if self.total_rows_override is not None else len(self.rows)
+        total_rows = (
+            self.total_processed_rows if self.total_processed_rows is not None else len(self.rows)
+        )
         row_level_issues = {issue.row_number for issue in self.issues if issue.row_number > 0}
         invalid_rows = len(row_level_issues)
 

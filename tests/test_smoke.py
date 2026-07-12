@@ -9,7 +9,12 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog, QHeaderView, QPlainTextEdit, QScrollArea, QSizePolicy, QTableWidgetItem
 
 from src.models.validation_result import ValidationIssue, ValidationResult
-from src.pipeline import process_file
+from src.pipeline import (
+    _attach_source,
+    _normalize_paths,
+    _read_rows,
+    process_file,
+)
 from src.reporting.working_paper_report import write_control_working_paper
 from src.ui.desktop_app import ValidationDesktopApp, get_qt_app
 from src.validators.engine import ValidationEngine
@@ -2713,6 +2718,32 @@ class TestSmoke(unittest.TestCase):
 
             self.assertEqual(result.summary.total_rows, 1)
             self.assertTrue(result.summary.is_valid)
+
+    def test_normalize_paths_missing_file_raises(self) -> None:
+        with self.assertRaises(FileNotFoundError):
+            _normalize_paths(Path("definitely_missing_file_xyz.txt"))
+
+    def test_attach_source_adds_source_file(self) -> None:
+        rows = [{"A": "1"}, {"A": "2"}]
+        annotated = _attach_source(rows, Path("USR02_100.txt"))
+        self.assertEqual(len(annotated), 2)
+        self.assertTrue(all(r.get("__source_file") == "USR02_100.txt" for r in annotated))
+        self.assertEqual(annotated[0]["A"], "1")
+
+    def test_read_rows_unsupported_suffix_raises(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "data.bin"
+            path.write_bytes(b"not-a-supported-export")
+            with self.assertRaises(ValueError):
+                _read_rows(path)
+
+    def test_process_file_sets_total_processed_rows(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "users.txt"
+            path.write_text("user_id;name\n1;Dana\n2;Noam\n", encoding="utf-8")
+            result = process_file(path, required_columns=["user_id", "name"])
+            self.assertEqual(result.total_processed_rows, 2)
+            self.assertEqual(result.summary.total_rows, 2)
 
 
 if __name__ == "__main__":

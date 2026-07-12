@@ -5351,7 +5351,7 @@ class ValidationDesktopApp(QMainWindow):
                 else:
                     slot_rows.append(r)
             self.slot_to_row_count[slot_key] = (
-                getattr(result, "total_rows_override", None) or len(slot_rows)
+                getattr(result, "total_processed_rows", None) or len(slot_rows)
             )
             expected_controls = get_profile_audit_controls(getattr(result, "detected_profile", slot_key))
             control_ids = sorted(set([iss.control_id for iss in audit_issues if iss.control_id] + expected_controls))
