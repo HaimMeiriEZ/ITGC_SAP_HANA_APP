@@ -28,6 +28,11 @@ from src.validators.spec_rules import (
     build_test_steps_for_control,
 )
 
+try:
+    from src.reporting.excel_ole_embedder import embed_file_in_worksheet
+except ImportError:  # pragma: no cover
+    embed_file_in_worksheet = None
+
 
 _HEADER_FILL = PatternFill(start_color="FF305496", end_color="FF305496", fill_type="solid")
 _HEADER_FONT = Font(bold=True, color="FFFFFFFF", size=11)
@@ -88,6 +93,7 @@ def write_control_working_paper(
     strong_profile_detail_rows: list[dict[str, Any]] | None = None,
     strong_profile_note: str | None = None,
     strong_profile_sheet_name: str = "משתמשים עם פרופילים חזקים",
+    compensating_control_entry: dict[str, Any] | None = None,
 ) -> Path:
     """Build the working-paper workbook and save to *output_path*.
 
@@ -188,7 +194,27 @@ def write_control_working_paper(
             title=privilege_sheet_name,
         )
 
+    if compensating_control_entry:
+        compensating_sheet = workbook.create_sheet("בקרה מפצה")
+        embed_pending = _write_compensating_control_sheet(
+            compensating_sheet,
+            compensating_control_entry,
+            control_id=control_id,
+        )
+
     workbook.save(output_path)
+
+    if compensating_control_entry and embed_pending and embed_file_in_worksheet is not None:
+        stored_path = Path(str(compensating_control_entry.get("stored_path", "")))
+        if stored_path.exists():
+            embedded = embed_file_in_worksheet(
+                output_path,
+                "בקרה מפצה",
+                stored_path,
+            )
+            if not embedded:
+                _append_compensating_embed_failure_note(output_path, compensating_control_entry)
+
     return output_path
 
 
@@ -403,6 +429,109 @@ def _write_ipe_sheet(sheet, ipe_entries: list[dict[str, Any]]) -> None:
 
         sheet.row_dimensions[current_row].height = image_row_height
         current_row += 1
+
+
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp"}
+
+
+def _write_compensating_control_sheet(
+    sheet,
+    entry: dict[str, Any],
+    *,
+    control_id: str,
+) -> bool:
+    """Write compensating-control metadata. Returns True when OLE embed is needed after save."""
+    _set_rtl(sheet)
+    sheet.column_dimensions[get_column_letter(1)].width = 28
+    sheet.column_dimensions[get_column_letter(2)].width = 70
+    sheet.column_dimensions[get_column_letter(3)].width = 55
+
+    title_cell = sheet.cell(row=1, column=1, value="תיעוד בקרה מפצה")
+    title_cell.font = _SECTION_FONT
+    title_cell.fill = _SECTION_FILL
+    title_cell.alignment = _CENTER
+    sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=3)
+
+    original_filename = str(entry.get("original_filename", "-") or "-")
+    added_at = str(entry.get("added_at", "-") or "-")
+    stored_path = Path(str(entry.get("stored_path", "")))
+
+    metadata_rows = [
+        ("שם קובץ מקורי", original_filename),
+        ("תאריך העלאה", added_at),
+    ]
+
+    current_row = 3
+    for label, value in metadata_rows:
+        key_cell = sheet.cell(row=current_row, column=1, value=label)
+        _apply_value_cell(key_cell, fill=_KEY_FILL, font=_KEY_FONT)
+        value_cell = sheet.cell(row=current_row, column=2, value=value)
+        _apply_value_cell(value_cell)
+        sheet.merge_cells(start_row=current_row, start_column=2, end_row=current_row, end_column=3)
+        current_row += 1
+
+    current_row += 1
+    if not stored_path.exists():
+        missing_cell = sheet.cell(row=current_row, column=1, value="קובץ התיעוד לא נמצא בנתיב השמור.")
+        sheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=3)
+        _apply_value_cell(missing_cell)
+        return False
+
+    suffix = stored_path.suffix.lower()
+    if suffix in _IMAGE_SUFFIXES:
+        preview_header = sheet.cell(row=current_row, column=1, value="תצוגה")
+        _apply_value_cell(preview_header, fill=_KEY_FILL, font=_KEY_FONT)
+        current_row += 1
+        try:
+            img = XLImage(str(stored_path))
+            max_w, max_h = 520, 360
+            scale = min(max_w / max(img.width, 1), max_h / max(img.height, 1), 1.0)
+            img.width = int(img.width * scale)
+            img.height = int(img.height * scale)
+            sheet.add_image(img, f"A{current_row}")
+            sheet.row_dimensions[current_row].height = max(22, img.height * 0.75 + 8)
+        except Exception as exc:
+            error_cell = sheet.cell(row=current_row, column=1, value=f"נכשלה טעינת תמונה: {exc}")
+            sheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=3)
+            _apply_value_cell(error_cell)
+        return False
+
+    embed_label = sheet.cell(row=current_row, column=1, value="קובץ מוטמע")
+    _apply_value_cell(embed_label, fill=_KEY_FILL, font=_KEY_FONT)
+    pending_cell = sheet.cell(
+        row=current_row,
+        column=2,
+        value="הקובץ יוטמע בתוך נייר העבודה לאחר השמירה.",
+    )
+    _apply_value_cell(pending_cell)
+    sheet.merge_cells(start_row=current_row, start_column=2, end_row=current_row, end_column=3)
+    sheet.row_dimensions[current_row + 1].height = 280
+    return True
+
+
+def _append_compensating_embed_failure_note(output_path: Path, entry: dict[str, Any]) -> None:
+    """Best-effort note when OLE embedding could not be completed."""
+    try:
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(output_path)
+        if "בקרה מפצה" not in workbook.sheetnames:
+            return
+        sheet = workbook["בקרה מפצה"]
+        filename = str(entry.get("original_filename", "") or "")
+        note_cell = sheet.cell(
+            row=7,
+            column=1,
+            value=(
+                f"לא ניתן היה להטמיע את הקובץ {filename} בתוך Excel. "
+                f"הקובץ המקורי נשמר בנתיב: {entry.get('stored_path', '-')}"
+            ),
+        )
+        sheet.merge_cells(start_row=7, start_column=1, end_row=7, end_column=3)
+        _apply_value_cell(note_cell)
+        workbook.save(output_path)
+    except Exception as exc:
+        _logger.warning("Failed to append compensating embed failure note: %s", exc)
 
 
 # ---------------------------------------------------------------------------

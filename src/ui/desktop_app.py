@@ -54,6 +54,7 @@ from src.models.validation_result import ValidationIssue
 from src.pipeline import process_file
 from src.persistence.audit_activity_logger import UserReviewActivityLogger
 from src.persistence.ui_state_repository import IpeEvidenceRepository, UiStateRepository
+from src.persistence.compensating_control_repository import CompensatingControlRepository
 from src.persistence.controls_catalog_loader import (
     apply_catalog_to_definitions,
     export_catalog_to_excel,
@@ -72,6 +73,11 @@ from src.services.audit_service import (
     sorted_audit_summary_rows,
     sync_user_review_completion_finding,
     upsert_audit_control_data,
+)
+from src.services.compensating_control_service import (
+    DEFAULT_COMPENSATING_COLUMN_WIDTHS,
+    DEFAULT_COMPENSATING_ROW_HEIGHT,
+    build_compensating_control_rows,
 )
 from src.services.user_preview_service import (
     build_user_preview_rows,
@@ -126,6 +132,18 @@ class _RightAlignDelegate(QStyledItemDelegate):
             Qt.AlignmentFlag.AlignAbsolute
             | Qt.AlignmentFlag.AlignRight
             | Qt.AlignmentFlag.AlignVCenter
+        )
+
+
+class _RightAlignTopDelegate(QStyledItemDelegate):
+    """Physical-right + top alignment for word-wrapped RTL table cells."""
+
+    def initStyleOption(self, option: Any, index: Any) -> None:  # type: ignore[override]
+        super().initStyleOption(option, index)
+        option.displayAlignment = (
+            Qt.AlignmentFlag.AlignAbsolute
+            | Qt.AlignmentFlag.AlignRight
+            | Qt.AlignmentFlag.AlignTop
         )
 
 
@@ -694,7 +712,14 @@ class ValidationDesktopApp(QMainWindow):
         self.ipe_repository = IpeEvidenceRepository(
             self.config.output_dir, base_dir or Path.cwd()
         )
+        self.compensating_control_repository = CompensatingControlRepository(
+            self.config.output_dir, base_dir or Path.cwd()
+        )
         self.ipe_evidence_data: dict[str, list[dict[str, Any]]] = {}
+        self.compensating_controls_data: dict[str, dict[str, Any]] = (
+            self.compensating_control_repository.load()
+        )
+        self._compensating_layout_save_blocked = False
         self.config.input_dir.mkdir(parents=True, exist_ok=True)
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         self.user_review_activity_logger = UserReviewActivityLogger(
@@ -764,6 +789,9 @@ class ValidationDesktopApp(QMainWindow):
         self.validation_thread: QThread | None = None
         self.validation_worker: SlotValidationWorker | None = None
         self._allow_user_preview_persistence = base_dir is not None or "unittest" not in sys.modules
+        self._compensating_controls_table_layout: dict[str, Any] = (
+            self._load_compensating_controls_table_layout()
+        )
         self.last_file_dialog_directory = self._load_last_file_dialog_directory()
         self._refreshing_user_preview = False
         self.user_preview_export_path: Path | None = None
@@ -1246,6 +1274,7 @@ class ValidationDesktopApp(QMainWindow):
         self.tabs.addTab(self.review_tab, self.format_rtl_text("סקירת דוח משתמשים"))
         self.tabs.addTab(self.permissions_review_tab, self.format_rtl_text("סקירת הרשאות"))
         self.tabs.addTab(self.analysis_tab, self.format_rtl_text("ביצוע ניתוח לביקורת"))
+        self.tabs.addTab(self._build_compensating_controls_tab(), self.format_rtl_text("בקרות מפצות"))
         main_layout.addWidget(self.tabs)
 
         # ── Activity console ──────────────────────────────────────────────
@@ -1946,6 +1975,282 @@ class ValidationDesktopApp(QMainWindow):
     @staticmethod
     def _default_extraction_date() -> str:
         return datetime.now().strftime("%Y-%m-%d")
+
+    # ------------------------------------------------------------------
+    # Compensating Controls Tab
+    # ------------------------------------------------------------------
+
+    def _build_compensating_controls_tab(self) -> QWidget:
+        page = QWidget()
+        page.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        hint = QLabel(
+            self.format_ui_rtl_text(
+                "בקרות עם ליקויים (כולל סטטוס \"לסקירה\"). "
+                "ניתן להעלות קובץ תיעוד אחד לכל בקרה; התיעוד יתווסף לגיליון \"בקרה מפצה\" בייצוא נייר העבודה הבא."
+            )
+        )
+        hint.setWordWrap(True)
+        hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        hint.setStyleSheet("color: #444; font-size: 11px; padding: 4px 0;")
+        layout.addWidget(hint)
+
+        self.compensating_controls_table = QTableWidget()
+        self.compensating_controls_table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.compensating_controls_table.setItemDelegate(
+            _RightAlignTopDelegate(self.compensating_controls_table)
+        )
+        headers = [
+            "מספר בקרה",
+            "תיאור הסיכון",
+            "תיאור הבקרה",
+            "סיכום ממצאים",
+            "תיעוד בקרה מפצה",
+        ]
+        self.compensating_controls_table.setColumnCount(len(headers))
+        for col_idx, header in enumerate(headers):
+            header_item = QTableWidgetItem(self.format_rtl_text(header))
+            header_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.compensating_controls_table.setHorizontalHeaderItem(col_idx, header_item)
+        self.compensating_controls_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.compensating_controls_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.compensating_controls_table.setAlternatingRowColors(True)
+        self.compensating_controls_table.setWordWrap(True)
+        self.compensating_controls_table.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.compensating_controls_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.compensating_controls_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        comp_hdr = self.compensating_controls_table.horizontalHeader()
+        comp_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        comp_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        comp_hdr.setStretchLastSection(True)
+        comp_hdr.setMinimumSectionSize(80)
+        comp_hdr.sectionResized.connect(self._on_compensating_controls_table_layout_changed)
+
+        comp_vhdr = self.compensating_controls_table.verticalHeader()
+        comp_vhdr.setVisible(True)
+        comp_vhdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        comp_vhdr.setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        comp_vhdr.setDefaultSectionSize(DEFAULT_COMPENSATING_ROW_HEIGHT)
+        comp_vhdr.setMinimumSectionSize(32)
+        comp_vhdr.sectionResized.connect(self._on_compensating_controls_table_layout_changed)
+
+        self._apply_compensating_controls_table_layout()
+        layout.addWidget(self.compensating_controls_table, 1)
+
+        refresh_btn = QPushButton(self.format_ui_rtl_text("רענון רשימה"))
+        refresh_btn.clicked.connect(self._refresh_compensating_controls_table)
+        layout.addWidget(refresh_btn, 0, Qt.AlignmentFlag.AlignRight)
+
+        self._refresh_compensating_controls_table()
+        return page
+
+    def _load_compensating_controls_table_layout(self) -> dict[str, Any]:
+        return self.ui_state_repository.load_compensating_controls_table_layout(
+            self._allow_user_preview_persistence
+        )
+
+    def _save_compensating_controls_table_layout(self) -> None:
+        if not hasattr(self, "compensating_controls_table"):
+            return
+        table = self.compensating_controls_table
+        column_widths = {
+            str(col): table.columnWidth(col)
+            for col in range(table.columnCount())
+        }
+        row_heights: dict[str, int] = {}
+        for row in range(table.rowCount()):
+            control_item = table.item(row, 0)
+            if control_item is None:
+                continue
+            control_id = str(control_item.data(Qt.ItemDataRole.UserRole) or control_item.text()).strip()
+            if control_id:
+                row_heights[control_id] = table.rowHeight(row)
+
+        self._compensating_controls_table_layout = {
+            "column_widths": column_widths,
+            "row_heights": row_heights,
+        }
+        self.ui_state_repository.save_compensating_controls_table_layout(
+            self._allow_user_preview_persistence,
+            self._compensating_controls_table_layout,
+        )
+
+    def _apply_compensating_controls_table_layout(self) -> None:
+        if not hasattr(self, "compensating_controls_table"):
+            return
+        table = self.compensating_controls_table
+        layout = self._compensating_controls_table_layout or {}
+        column_widths = dict(DEFAULT_COMPENSATING_COLUMN_WIDTHS)
+        saved_columns = layout.get("column_widths") or {}
+        if isinstance(saved_columns, dict):
+            column_widths.update({str(key): value for key, value in saved_columns.items()})
+        for col_key, width in column_widths.items():
+            try:
+                col_index = int(col_key)
+                table.setColumnWidth(
+                    col_index,
+                    max(int(width), table.horizontalHeader().minimumSectionSize()),
+                )
+            except (TypeError, ValueError):
+                continue
+
+        row_heights = layout.get("row_heights") or {}
+        if isinstance(row_heights, dict):
+            for row in range(table.rowCount()):
+                control_item = table.item(row, 0)
+                if control_item is None:
+                    continue
+                control_id = str(control_item.data(Qt.ItemDataRole.UserRole) or "").strip()
+                saved_height = row_heights.get(control_id)
+                if saved_height:
+                    table.setRowHeight(
+                        row,
+                        max(int(saved_height), table.verticalHeader().minimumSectionSize()),
+                    )
+
+    def _on_compensating_controls_table_layout_changed(self, *_args) -> None:
+        if self._compensating_layout_save_blocked:
+            return
+        self._save_compensating_controls_table_layout()
+
+    def _refresh_compensating_controls_table(self) -> None:
+        if not hasattr(self, "compensating_controls_table"):
+            return
+
+        self._save_compensating_controls_table_layout()
+
+        rows = build_compensating_control_rows(
+            self.audit_summary_records,
+            self.audit_details_by_control,
+            self.compensating_controls_data,
+            get_audit_control_definition,
+            self._is_control_in_scope,
+        )
+
+        self._compensating_layout_save_blocked = True
+        try:
+            self.compensating_controls_table.setRowCount(0)
+
+            if not rows:
+                self.compensating_controls_table.setRowCount(1)
+                empty_item = QTableWidgetItem(
+                    self.format_ui_rtl_text("אין בקרות עם ליקויים — הרץ ניתוח תחילה.")
+                )
+                empty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.compensating_controls_table.setItem(0, 0, empty_item)
+                self.compensating_controls_table.setSpan(0, 0, 1, self.compensating_controls_table.columnCount())
+                self.compensating_controls_table.setRowHeight(0, DEFAULT_COMPENSATING_ROW_HEIGHT)
+                return
+
+            saved_row_heights = (self._compensating_controls_table_layout or {}).get("row_heights") or {}
+
+            for row_data in rows:
+                row_index = self.compensating_controls_table.rowCount()
+                self.compensating_controls_table.insertRow(row_index)
+                control_id = str(row_data.get("control_id", ""))
+
+                values = [
+                    control_id,
+                    str(row_data.get("risk_description", "-")),
+                    str(row_data.get("description", "-")),
+                    str(row_data.get("findings_brief", "-")),
+                ]
+                for col_idx, value in enumerate(values):
+                    item = QTableWidgetItem(self.format_ui_rtl_text(value))
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+                    if col_idx == 0:
+                        item.setData(Qt.ItemDataRole.UserRole, control_id)
+                    self.compensating_controls_table.setItem(row_index, col_idx, item)
+
+                attachment = row_data.get("attachment") or {}
+                attachment_widget = QWidget()
+                attachment_widget.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                attachment_layout = QHBoxLayout(attachment_widget)
+                attachment_layout.setContentsMargins(4, 2, 4, 2)
+                attachment_layout.setSpacing(6)
+
+                filename = str(attachment.get("original_filename", "") or "").strip()
+
+                upload_btn = QPushButton(
+                    self.format_ui_rtl_text("החלף קובץ" if filename else "העלה קובץ")
+                )
+                upload_btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                upload_btn.clicked.connect(
+                    lambda _checked=False, cid=control_id: self._upload_compensating_control(cid)
+                )
+                attachment_layout.addWidget(upload_btn)
+
+                if filename:
+                    remove_btn = QPushButton(self.format_ui_rtl_text("הסר"))
+                    remove_btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                    remove_btn.clicked.connect(
+                        lambda _checked=False, cid=control_id: self._remove_compensating_control(cid)
+                    )
+                    attachment_layout.addWidget(remove_btn)
+                    file_label = QLabel(self.format_ui_rtl_text(filename))
+                    file_label.setWordWrap(True)
+                    file_label.setToolTip(self.format_ui_rtl_text(filename))
+                    attachment_layout.addWidget(file_label)
+
+                attachment_layout.addStretch(1)
+                self.compensating_controls_table.setCellWidget(row_index, 4, attachment_widget)
+
+                saved_height = saved_row_heights.get(control_id)
+                row_height = int(saved_height) if saved_height else DEFAULT_COMPENSATING_ROW_HEIGHT
+                self.compensating_controls_table.setRowHeight(
+                    row_index,
+                    max(row_height, self.compensating_controls_table.verticalHeader().minimumSectionSize()),
+                )
+
+            self._apply_compensating_controls_table_layout()
+        finally:
+            self._compensating_layout_save_blocked = False
+
+    def _upload_compensating_control(self, control_id: str) -> None:
+        if not control_id:
+            return
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.format_ui_rtl_text("בחר קובץ תיעוד לבקרה מפצה"),
+            str(self._get_last_file_dialog_directory()),
+            self.format_ui_rtl_text("כל הקבצים (*.*)"),
+        )
+        if not file_path:
+            return
+
+        source = Path(file_path)
+        try:
+            self.compensating_control_repository.attach_file(
+                control_id,
+                source,
+                self.compensating_controls_data,
+            )
+            self._save_last_file_dialog_directory(source.parent)
+            self._refresh_compensating_controls_table()
+            QMessageBox.information(
+                self,
+                self.format_ui_rtl_text("הקובץ נקלט"),
+                self.format_ui_rtl_text(
+                    f"תיעוד הבקרה המפצה נשמר עבור {control_id}.\n"
+                    "הגיליון \"בקרה מפצה\" יתווסף בייצוא נייר העבודה הבא."
+                ),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                self.format_ui_rtl_text("שגיאה"),
+                self.format_ui_rtl_text(f"לא ניתן לשמור את הקובץ:\n{exc}"),
+            )
+
+    def _remove_compensating_control(self, control_id: str) -> None:
+        if not control_id:
+            return
+        self.compensating_control_repository.remove_file(control_id, self.compensating_controls_data)
+        self._refresh_compensating_controls_table()
 
     # ------------------------------------------------------------------
     # Controls Catalog Tab (Phase 2)
@@ -8166,6 +8471,7 @@ class ValidationDesktopApp(QMainWindow):
             self.audit_summary_table.selectRow(0)
             self._refresh_selected_audit_detail()
         self.audit_summary_table.resizeColumnsToContents()
+        self._refresh_compensating_controls_table()
 
     def _refresh_selected_audit_detail(self) -> None:
         selected_items = self.audit_summary_table.selectedItems()
@@ -8432,6 +8738,7 @@ class ValidationDesktopApp(QMainWindow):
                 strong_profile_detail_rows=strong_profile_detail_rows,
                 strong_profile_note=strong_profile_note,
                 strong_profile_sheet_name=strong_profile_sheet_name,
+                compensating_control_entry=self.compensating_controls_data.get(control_id),
             )
         except Exception as exc:
             QMessageBox.critical(

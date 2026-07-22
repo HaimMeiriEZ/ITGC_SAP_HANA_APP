@@ -228,6 +228,32 @@ class UiStateRepository:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def compensating_controls_table_layout_path(self) -> Path:
+        return self._output_dir / "compensating_controls_table_layout.json"
+
+    def load_compensating_controls_table_layout(self, allow_persistence: bool) -> dict[str, Any]:
+        if not allow_persistence:
+            return {}
+        path = self.compensating_controls_table_layout_path()
+        if not path.exists():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return raw if isinstance(raw, dict) else {}
+
+    def save_compensating_controls_table_layout(
+        self,
+        allow_persistence: bool,
+        layout: dict[str, Any],
+    ) -> None:
+        if not allow_persistence:
+            return
+        path = self.compensating_controls_table_layout_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(layout, ensure_ascii=False, indent=2), encoding="utf-8")
+
 
 class IpeEvidenceRepository:
     """Persists IPE (Information Produced by Entity) screenshot metadata and manages stored image files."""
