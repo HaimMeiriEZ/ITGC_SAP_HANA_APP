@@ -49,7 +49,15 @@ from PySide6.QtWidgets import (
     QHeaderView,
 )
 
-from src.config import AppConfig, CONTROL_GROUPS, CONTROL_LABELS, SLOT_DEFAULT_CONTROLS
+from src.config import (
+    AppConfig,
+    CONTROL_GROUPS,
+    CONTROL_LABELS,
+    SLOT_DEFAULT_CONTROLS,
+    ensure_runtime_data,
+    get_install_root,
+    resource_path,
+)
 from src.models.validation_result import ValidationIssue
 from src.pipeline import process_file
 from src.persistence.audit_activity_logger import UserReviewActivityLogger
@@ -707,13 +715,15 @@ class ValidationDesktopApp(QMainWindow):
 
     def __init__(self, base_dir: Path | None = None) -> None:
         super().__init__()
-        self.config = AppConfig.default(base_dir or Path.cwd())
+        resolved_base = ensure_runtime_data(base_dir or get_install_root())
+        self.base_dir = resolved_base
+        self.config = AppConfig.default(resolved_base)
         self.ui_state_repository = UiStateRepository(self.config.output_dir, self.config.input_dir)
         self.ipe_repository = IpeEvidenceRepository(
-            self.config.output_dir, base_dir or Path.cwd()
+            self.config.output_dir, resolved_base
         )
         self.compensating_control_repository = CompensatingControlRepository(
-            self.config.output_dir, base_dir or Path.cwd()
+            self.config.output_dir, resolved_base
         )
         self.ipe_evidence_data: dict[str, list[dict[str, Any]]] = {}
         self.compensating_controls_data: dict[str, dict[str, Any]] = (
@@ -885,7 +895,9 @@ class ValidationDesktopApp(QMainWindow):
         _title_row.setSpacing(12)
 
         # ── Company logo (left-aligned) ────────────────────────────────────
-        _logo_path = Path(__file__).parent / "assets" / "ayalon_logo.png"
+        _logo_path = resource_path("src", "ui", "assets", "ayalon_logo.png")
+        if not _logo_path.exists():
+            _logo_path = Path(__file__).parent / "assets" / "ayalon_logo.png"
         if _logo_path.exists():
             _logo_pixmap = QPixmap(str(_logo_path))
             if not _logo_pixmap.isNull():
@@ -9766,7 +9778,8 @@ class ValidationDesktopApp(QMainWindow):
 
 
 def launch_desktop_app() -> None:
+    install_root = ensure_runtime_data(get_install_root())
     app = get_qt_app()
-    window = ValidationDesktopApp()
+    window = ValidationDesktopApp(base_dir=install_root)
     window.show()
     app.exec()

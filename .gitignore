@@ -38,6 +38,7 @@ var/
 *.egg
 *.manifest
 *.spec
+!ITGC_SAP_APP.spec
 
 # Unit test / coverage reports
 coverage.xml
@@ -73,6 +74,7 @@ Icon?
 # Application outputs
 /data/output/
 /data/evidence/
+/data/compensating_controls/
 /output/
 /data/input/20*.txt
 
