@@ -1,12 +1,13 @@
 import argparse
 from pathlib import Path
 
-from src.config import AppConfig
+from src.config import AppConfig, ensure_runtime_data, get_install_root
 from src.pipeline import process_file
 from src.ui.desktop_app import launch_desktop_app
 
 
 def run() -> None:
+    ensure_runtime_data(get_install_root())
     parser = argparse.ArgumentParser(
         description="טעינת קבצי TXT/CSV/XLSX והרצת בדיקות תקינות.",
     )

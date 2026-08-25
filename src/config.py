@@ -1,5 +1,70 @@
+from __future__ import annotations
+
+import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def is_frozen() -> bool:
+    """True when running from a PyInstaller (or similar) bundled executable."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def get_install_root() -> Path:
+    """Writable application root: folder of the EXE when frozen, else project root."""
+    if is_frozen():
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+def get_bundle_root() -> Path:
+    """Read-only bundled resources (_MEIPASS when frozen, else project root)."""
+    if is_frozen():
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+def resource_path(*parts: str | Path) -> Path:
+    """Path to a bundled resource file (logo, seed JSON, etc.)."""
+    return get_bundle_root().joinpath(*parts)
+
+
+def knowledge_base_dir(install_root: Path | None = None) -> Path:
+    """Writable knowledge_base under the install root (after seed)."""
+    root = install_root or get_install_root()
+    return root / "data" / "knowledge_base"
+
+
+def ensure_runtime_data(install_root: Path | None = None) -> Path:
+    """Create writable data dirs and seed knowledge_base from the bundle if missing.
+
+    Does not overwrite existing files (e.g. client ``system_settings.json`` or
+    an already-edited catalog).
+    """
+    root = install_root or get_install_root()
+    data_dir = root / "data"
+    for sub in (
+        "input",
+        "output",
+        "evidence",
+        "compensating_controls",
+        "knowledge_base",
+    ):
+        (data_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    bundle_kb = get_bundle_root() / "data" / "knowledge_base"
+    dest_kb = data_dir / "knowledge_base"
+    if bundle_kb.is_dir():
+        for name in ("controls_catalog.json", "field_labels.json"):
+            src = bundle_kb / name
+            dest = dest_kb / name
+            if src.is_file() and not dest.exists():
+                shutil.copy2(src, dest)
+    return root
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +151,7 @@ class AppConfig:
 
     @classmethod
     def default(cls, base_dir: Path | None = None) -> "AppConfig":
-        root_dir = base_dir or Path.cwd()
+        root_dir = base_dir or get_install_root()
         data_dir = root_dir / "data"
         return cls(
             input_dir=data_dir / "input",

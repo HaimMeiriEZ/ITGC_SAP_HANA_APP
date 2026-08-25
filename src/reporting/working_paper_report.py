@@ -562,10 +562,22 @@ def _ordered_keys(
 # Field-label helpers
 # ---------------------------------------------------------------------------
 
-_FIELD_LABELS_PATH = (
-    Path(__file__).parent.parent.parent / "data" / "knowledge_base" / "field_labels.json"
-)
 _field_labels_cache: dict[str, dict[str, str]] | None = None
+
+
+def _field_labels_path() -> Path:
+    """Prefer install-root knowledge_base (seeded); fall back to bundled copy."""
+    from src.config import get_bundle_root, knowledge_base_dir
+
+    candidates = [
+        knowledge_base_dir() / "field_labels.json",
+        get_bundle_root() / "data" / "knowledge_base" / "field_labels.json",
+        Path(__file__).parent.parent.parent / "data" / "knowledge_base" / "field_labels.json",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
 
 
 def _load_field_labels(table_name: str) -> dict[str, str]:
@@ -577,9 +589,10 @@ def _load_field_labels(table_name: str) -> dict[str, str]:
     """
     global _field_labels_cache
     if _field_labels_cache is None:
-        if _FIELD_LABELS_PATH.exists():
+        labels_path = _field_labels_path()
+        if labels_path.exists():
             try:
-                raw = json.loads(_FIELD_LABELS_PATH.read_text(encoding="utf-8"))
+                raw = json.loads(labels_path.read_text(encoding="utf-8"))
                 _field_labels_cache = {
                     k.upper(): {fk.upper(): fv for fk, fv in v.items()}
                     for k, v in raw.items()
